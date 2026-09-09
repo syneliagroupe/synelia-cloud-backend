@@ -105,7 +105,14 @@ async def executer_un(travail_id: str) -> None:
         # Reproduit le contexte RLS qu'une requête HTTP hérite via contextvars — `create_task`
         # en bénéficiait gratuitement (même boucle asyncio) ; ce worker tourne dans une tâche
         # neuve, il faut le poser explicitement avant la première requête de `_executer`.
+        # `session.get(Travail, travail_id)` juste au-dessus a déjà exécuté la première requête
+        # de cette transaction (pour connaître `travail.org_id`, ce qu'on ne peut pas savoir
+        # avant de lire la ligne) — l'écouteur `begin` de `rls.py` a donc déjà posé `app.org_id`
+        # à `''` avant qu'on sache quoi y mettre. `org_id_transaction.set()` seul ne suffit pas
+        # sur une transaction déjà ouverte (même bug que `deps/contexte.py::contexte`) : il faut
+        # aussi `rls.poser()` pour appliquer la valeur directement.
         rls.org_id_transaction.set(travail.org_id or "")
+        await rls.poser(session, travail.org_id or "")
         ctx = worker_ctx.contexte_travail(session, travail)
         taches = travail.taches or []
         # Couvre les trois origines d'un `executer_un` : travail neuf (aucune tâche `ok`) → 0 ;

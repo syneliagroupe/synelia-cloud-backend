@@ -37,6 +37,34 @@ def brancher(engine: AsyncEngine) -> None:
         conn.execute(text("SELECT set_config('app.org_id', :org, true)"), {"org": org or ""})
 
 
+async def poser(session: AsyncSession, org_id: str | None) -> None:
+    """Pose `app.org_id` directement sur la transaction déjà ouverte de `session`, sans
+    attendre l'écouteur `begin` (`_poser_org` ci-dessus), qui ne s'exécute qu'une seule fois,
+    à l'ouverture de la transaction Postgres.
+
+    Nécessaire partout où l'`org_id` définitif d'une requête n'est connu qu'*après* la
+    première requête SQL de sa transaction — ce qui est le cas courant, pas l'exception :
+    résoudre le principal d'une requête HTTP authentifiée exige de lire `sessions_auth`/
+    `utilisateurs`/`memberships` (voir `deps/contexte.py::contexte`), et un travail de fond
+    doit lire sa propre ligne `travaux` pour connaître son `org_id` (voir
+    `travaux/local.py::executer_un`) — dans les deux cas, ces lectures ouvrent déjà la
+    transaction, avec `org_id_transaction` encore à sa valeur par défaut (`None`), avant que
+    l'appelant sache quoi y mettre. Sans cet appel explicite après coup, `app.org_id` reste
+    figé à `''` pour le reste de la transaction (toutes les lignes visibles, RLS no-op) même
+    si `org_id_transaction.set(...)` est appelé ensuite : l'écouteur `begin` ne se redéclenche
+    pas sur une transaction déjà ouverte.
+
+    No-op hors Postgres (SQLite n'a pas `set_config`, et `TABLES_TENANT` n'y est de toute
+    façon filtré que par la couche applicative)."""
+    from synelia_kernel.config import reglages
+
+    if not reglages().est_postgres:
+        return
+    await session.execute(
+        text("SELECT set_config('app.org_id', :org, true)"), {"org": org_id or ""}
+    )
+
+
 @asynccontextmanager
 async def sans_org(session: AsyncSession) -> AsyncIterator[None]:
     """Lève temporairement le filtre RLS par organisation sur la transaction déjà ouverte de
@@ -47,22 +75,16 @@ async def sans_org(session: AsyncSession) -> AsyncIterator[None]:
     multi-organisation ne voyait jamais ses autres organisations dans le sélecteur (constaté
     en direct : `admin@synelia.cloud`, `org_admin` sur deux organisations, n'en voyait qu'une).
 
-    `_poser_org` (l'écouteur `begin` ci-dessus) ne pose `app.org_id` qu'à l'ouverture de la
-    transaction Postgres : changer `org_id_transaction` en cours de route, sur une transaction
-    déjà commencée, ne le repose pas. On manipule donc directement le paramètre de session
-    Postgres, restauré à la sortie — no-op hors Postgres (SQLite n'a pas `set_config`, et
-    `TABLES_TENANT` n'y est de toute façon filtré que par la couche applicative)."""
-    from synelia_kernel.config import reglages
-
-    if not reglages().est_postgres:
-        yield
-        return
+    S'appuie sur `poser()` ci-dessus (même mécanisme direct, pas l'écouteur `begin`), restauré
+    à la sortie. Reste nécessaire même après la correction du bug général de `poser()` en
+    aval de `contexte()` : cette fonction lève *volontairement* le filtre pour une portée plus
+    large que l'organisation active du principal, ce n'est pas le même besoin."""
     org = org_id_transaction.get() or ""
-    await session.execute(text("SELECT set_config('app.org_id', '', true)"))
+    await poser(session, "")
     try:
         yield
     finally:
-        await session.execute(text("SELECT set_config('app.org_id', :org, true)"), {"org": org})
+        await poser(session, org)
 
 
 def _sql_politique(table: str) -> str:

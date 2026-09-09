@@ -275,6 +275,16 @@ async def contexte(
     rls.org_id_transaction.set(principal.org_id)
     org_id_courant.set(principal.org_id)
     utilisateur_id_courant.set(principal.utilisateur_id)
+    # La résolution du principal ci-dessus (`_principal_depuis_jeton`/`_principal_depuis_cle`)
+    # a déjà exécuté des requêtes (lecture de `sessions_auth`/`utilisateurs`/`memberships`/
+    # `cles_api`) avant que `org_id` soit connu — la transaction Postgres est donc déjà ouverte,
+    # avec `app.org_id` posé à `''` par l'écouteur `begin` (RLS no-op le temps de cette
+    # résolution, nécessaire : on ne sait pas encore à quelle organisation restreindre). Poser
+    # `org_id_transaction.set(...)` seul ne suffit plus à corriger `app.org_id` sur cette
+    # transaction déjà commencée (l'écouteur ne se redéclenche pas) : `rls.poser()` l'applique
+    # directement, pour que toutes les requêtes métier qui suivent dans cette même transaction
+    # soient bien filtrées par la RLS Postgres, pas seulement par les filtres applicatifs.
+    await rls.poser(session, principal.org_id)
     if principal.org_id:
         await _verifier_restriction_ip(session, request, principal)
     request.state.principal = principal
