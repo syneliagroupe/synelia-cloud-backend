@@ -256,6 +256,13 @@ async def modifier_boite_mail(
         raise erreurs.introuvable("Boîte mail", adresse)
     changement = corps.model_dump(mode="json", exclude_unset=True)
     changement = {k: v for k, v in changement.items() if v is not None}
+    # `motDePasse` ne fait pas partie du modèle `BoiteMail` (le portail ne le stocke jamais) :
+    # il part vers Zimbra en direct, pas dans le dépôt applicatif.
+    mot_de_passe = changement.pop("motDePasse", None)
+    if mot_de_passe:
+        await asyncio.to_thread(
+            service.amont().definir_mot_de_passe, mess.domaine, adresse, mot_de_passe
+        )
     nouvelle = boite.model_copy(update=changement)
     boites = [nouvelle if b.adresse == adresse else b for b in mess.boites]
     await depot.modifier(ctx, messagerieId, {"boites": [b.model_dump(mode="json") for b in boites]})

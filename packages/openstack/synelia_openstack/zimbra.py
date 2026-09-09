@@ -39,6 +39,9 @@ class ZimbraSimule:
     def maj_boite(self, domaine: str, adresse: str, **champs: Any) -> None:
         return None
 
+    def definir_mot_de_passe(self, domaine: str, adresse: str, mot_de_passe: str) -> None:
+        return None
+
     def supprimer_boite(self, domaine: str, adresse: str) -> None:
         return None
 
@@ -183,6 +186,21 @@ class ZimbraReel(ZimbraSimule):
         corps = (
             f'<ModifyAccountRequest xmlns="{_NS_ADMIN}"><id>{escape(id_)}</id>{attributs}'
             "</ModifyAccountRequest>"
+        )
+        self._admin(corps)
+
+    def definir_mot_de_passe(self, domaine: str, adresse: str, mot_de_passe: str) -> None:
+        # `SetPasswordRequest`, pas `ModifyAccountRequest` sur l'attribut `userPassword` :
+        # c'est l'appel documenté par Zimbra pour poser un mot de passe en clair, il se
+        # charge du hachage LDAP. `ModifyAccountRequest` accepte des attributs déjà hachés,
+        # pas un mot de passe en clair.
+        nom = self._boite(domaine, adresse)
+        id_ = self._compte_id(nom)
+        if not id_:
+            raise erreurs.introuvable("Boîte mail", nom)
+        corps = (
+            f'<SetPasswordRequest xmlns="{_NS_ADMIN}"><id>{escape(id_)}</id>'
+            f"<newPassword>{escape(mot_de_passe)}</newPassword></SetPasswordRequest>"
         )
         self._admin(corps)
 
