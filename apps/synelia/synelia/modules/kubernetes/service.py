@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 from synelia_contract import modeles as m
 from synelia_db.modeles import Travail
 from synelia_kernel.ids import nouvel_id
 from synelia_openstack import fournisseur
+from synelia_openstack.compute import ComputeOpenStack, ComputeSimule
 from synelia_openstack.magnum import MagnumOpenStack, MagnumSimule
 
 from synelia.depot import Depot
@@ -26,6 +28,82 @@ MODULES = {
 
 def amont() -> MagnumSimule:
     return fournisseur(MagnumSimule, MagnumOpenStack)
+
+
+def _compute_amont() -> ComputeSimule:
+    """Même bascule globale que `amont()` (un seul mode `openstack`/simulé pour toute la
+    plateforme, cf. `synelia_openstack.fabrique.fournisseur`) : les VM Nova d'un cluster
+    Magnum réel sont toujours lues par le même connecteur Compute que le module `vms`."""
+    return fournisseur(ComputeSimule, ComputeOpenStack)
+
+
+# Même écart que `vms.service._DELTA_DIAGNOSTICS_S` : deux relevés `diagnostics` espacés de
+# cette durée sont nécessaires pour dériver un %CPU/débit réseau depuis des compteurs cumulés
+# (cf. `vms.service._diagnostics_vers_valeurs`, réutilisée ici nœud par nœud).
+_DELTA_DIAGNOSTICS_S = 0.6
+
+
+async def metriques_instantanees(ctx: Contexte, cluster: m.ClusterK8s) -> dict[str, Any] | None:
+    """CPU/RAM/réseau instantanés du cluster, agrégés depuis les diagnostics Nova/libvirt réels
+    (mêmes deux relevés espacés que `vms.service.diagnostics_instantanes`) de chacune des VM
+    masters/workers réellement derrière ce cluster (`MagnumOpenStack.cluster_nodes`, retrouvées
+    par la stack Heat du cluster Magnum — pas des nœuds Kubernetes fabriqués).
+
+    `None` en simulation, si le cluster n'a pas (encore) de `magnum_cluster_id`, ou si Magnum ne
+    connaît encore aucune VM pour ce cluster (juste soumis, stack Heat pas encore posée) :
+    l'appelant retombe alors sur un état vide plutôt qu'une valeur inventée — même politique que
+    `vms.service.diagnostics_instantanes`. Un dict avec `noeuds` toujours rempli et `agrege` à
+    `None` si aucun nœud n'est `ACTIVE` (cluster provisionné mais éteint, ou en train de
+    basculer d'état) : la liste des nœuds reste utile même sans agrégat CPU/RAM."""
+    if not isinstance(amont(), MagnumOpenStack):
+        return None
+    secrets = await depot_cluster.secrets(ctx, cluster.id)
+    mid = secrets.get("magnum_cluster_id")
+    if not mid:
+        return None
+    noeuds = await asyncio.to_thread(amont().cluster_nodes, mid)
+    if not noeuds:
+        return None
+
+    from synelia.modules.vms.service import _diagnostics_vers_valeurs
+
+    compute = _compute_amont()
+    actifs = [n for n in noeuds if n["statut"].upper() == "ACTIVE"]
+    avants: dict[str, dict[str, Any] | None] = {}
+    for n in actifs:
+        avants[n["id"]] = await asyncio.to_thread(compute.diagnostics, n["id"])
+    if actifs:
+        await asyncio.sleep(_DELTA_DIAGNOSTICS_S)
+
+    resultat_noeuds: list[dict[str, Any]] = []
+    cpu_vals: list[float] = []
+    ram_vals: list[float] = []
+    reseau_total = 0.0
+    for n in noeuds:
+        avant = avants.get(n["id"])
+        if n["statut"].upper() != "ACTIVE" or avant is None:
+            resultat_noeuds.append(dict(n))
+            continue
+        apres = await asyncio.to_thread(compute.diagnostics, n["id"])
+        if apres is None:
+            resultat_noeuds.append(dict(n))
+            continue
+        valeurs = _diagnostics_vers_valeurs(avant, apres, _DELTA_DIAGNOSTICS_S, n["vcpu"] or 1)
+        resultat_noeuds.append({**n, "cpu": valeurs["cpu"], "ram": valeurs["ram"]})
+        cpu_vals.append(valeurs["cpu"])
+        ram_vals.append(valeurs["ram"])
+        reseau_total += valeurs["reseau_entrant"]
+
+    agrege = (
+        {
+            "cpu": sum(cpu_vals) / len(cpu_vals),
+            "ram": sum(ram_vals) / len(ram_vals),
+            "reseau_entrant": reseau_total,
+        }
+        if cpu_vals
+        else None
+    )
+    return {"agrege": agrege, "noeuds": resultat_noeuds}
 
 
 # États non terminaux : un cluster dans l'un de ces statuts peut avoir évolué côté Magnum

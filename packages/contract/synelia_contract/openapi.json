@@ -5973,6 +5973,87 @@
         }
       }
     },
+    "/audit/integrite": {
+      "get": {
+        "tags": [
+          "Audit"
+        ],
+        "operationId": "verifierIntegriteAudit",
+        "summary": "Vérifier l’intégrité de la chaîne d’audit",
+        "description": "Rejoue la chaîne de hachage de l’organisation active et recalcule chaque empreinte à partir des champs enregistrés : signale `intacte: false` et la première ligne en rupture dès qu’une entrée a été insérée, modifiée ou supprimée hors séquence.",
+        "x-rbac": "compliance.export",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Organisation"
+          },
+          {
+            "$ref": "#/components/parameters/Langue"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Succès.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "intacte": {
+                      "type": "boolean"
+                    },
+                    "entreesVerifiees": {
+                      "type": "integer",
+                      "format": "int32"
+                    },
+                    "totalEntrees": {
+                      "type": "integer",
+                      "format": "int32"
+                    },
+                    "ruptureId": {
+                      "type": "string",
+                      "description": "Identifiant de la première entrée en rupture. Absent si la chaîne est intacte."
+                    },
+                    "ruptureDate": {
+                      "type": "string",
+                      "format": "date-time",
+                      "description": "Absente si la chaîne est intacte."
+                    },
+                    "raison": {
+                      "type": "string",
+                      "description": "Absente si la chaîne est intacte."
+                    },
+                    "empreinteFinale": {
+                      "type": "string",
+                      "description": "Empreinte de la dernière entrée. Présente seulement si la chaîne est intacte."
+                    }
+                  },
+                  "required": [
+                    "intacte",
+                    "entreesVerifiees",
+                    "totalEntrees"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Invalide"
+          },
+          "401": {
+            "$ref": "#/components/responses/NonAuthentifie"
+          },
+          "403": {
+            "$ref": "#/components/responses/Interdit"
+          },
+          "429": {
+            "$ref": "#/components/responses/TropDeRequetes"
+          },
+          "500": {
+            "$ref": "#/components/responses/Serveur"
+          }
+        }
+      }
+    },
     "/auth/connexion": {
       "post": {
         "tags": [
@@ -17162,6 +17243,108 @@
           },
           "404": {
             "$ref": "#/components/responses/Introuvable"
+          },
+          "429": {
+            "$ref": "#/components/responses/TropDeRequetes"
+          },
+          "500": {
+            "$ref": "#/components/responses/Serveur"
+          }
+        }
+      }
+    },
+    "/kubernetes/{clusterId}/metriques": {
+      "get": {
+        "tags": [
+          "Kubernetes"
+        ],
+        "operationId": "obtenirMetriquesK8s",
+        "summary": "Obtenir les métriques d’un cluster",
+        "description": "Agrège les diagnostics Nova/libvirt des VM réelles derrière le cluster (masters et workers, retrouvées via la stack Heat du cluster Magnum) — un instantané réel, pas un historique, même mécanique que `GET /vms/{vmId}/metriques`.",
+        "x-rbac": "org.dashboard.view",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Organisation"
+          },
+          {
+            "$ref": "#/components/parameters/Langue"
+          },
+          {
+            "name": "clusterId",
+            "in": "path",
+            "required": true,
+            "description": "Identifiant du cluster.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "k8s-prod"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Succès.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "series": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Serie"
+                      }
+                    },
+                    "noeuds": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "statut": {
+                            "type": "string"
+                          },
+                          "vcpu": {
+                            "type": "integer",
+                            "format": "int32"
+                          },
+                          "cpu": {
+                            "type": "number"
+                          },
+                          "ram": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "statut"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "series",
+                    "noeuds"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Invalide"
+          },
+          "401": {
+            "$ref": "#/components/responses/NonAuthentifie"
+          },
+          "403": {
+            "$ref": "#/components/responses/Interdit"
+          },
+          "404": {
+            "$ref": "#/components/responses/Introuvable"
+          },
+          "424": {
+            "$ref": "#/components/responses/Degrade"
           },
           "429": {
             "$ref": "#/components/responses/TropDeRequetes"
@@ -35173,6 +35356,72 @@
             "$ref": "#/components/responses/Serveur"
           }
         }
+      },
+      "delete": {
+        "tags": [
+          "Web Cloud — drive"
+        ],
+        "operationId": "desactiverDrive",
+        "summary": "Désactiver le drive d’un domaine",
+        "description": "Action destructive : le serveur Nextcloud est détruit ; le nom exact de la ressource est exigé en confirmation.",
+        "x-rbac": "service.admin",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Organisation"
+          },
+          {
+            "$ref": "#/components/parameters/Langue"
+          },
+          {
+            "$ref": "#/components/parameters/Confirmation"
+          },
+          {
+            "name": "driveId",
+            "in": "path",
+            "required": true,
+            "description": "Identifiant du drive.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "drive-dba-africa"
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Accepté — travail de provisioning créé.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TravailProvisioning"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Invalide"
+          },
+          "401": {
+            "$ref": "#/components/responses/NonAuthentifie"
+          },
+          "403": {
+            "$ref": "#/components/responses/Interdit"
+          },
+          "404": {
+            "$ref": "#/components/responses/Introuvable"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflit"
+          },
+          "422": {
+            "$ref": "#/components/responses/Invalidee"
+          },
+          "429": {
+            "$ref": "#/components/responses/TropDeRequetes"
+          },
+          "500": {
+            "$ref": "#/components/responses/Serveur"
+          }
+        }
       }
     },
     "/web/drive/{driveId}/ouverture": {
@@ -50934,6 +51183,17 @@
               "type": "string"
             }
           },
+          "etiquettes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Ventilation de la dépense et recherche — pas de rôle fonctionnel."
+          },
+          "clusterId": {
+            "type": "string",
+            "description": "Le cluster Kubernetes qui héberge les services du projet — dédié ou partagé avec d'autres projets du même Espace."
+          },
           "cible": {
             "type": "string",
             "enum": [
@@ -50988,6 +51248,8 @@
           "espaceId",
           "cree",
           "environnements",
+          "etiquettes",
+          "clusterId",
           "variables"
         ]
       },
@@ -51009,6 +51271,17 @@
               "type": "string"
             },
             "description": "Par défaut `production`."
+          },
+          "etiquettes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Ventilation de la dépense et recherche."
+          },
+          "clusterId": {
+            "type": "string",
+            "description": "Cluster Kubernetes à rattacher, existant ou en cours de provisioning."
           },
           "cible": {
             "type": "string",
@@ -52588,6 +52861,10 @@
           },
           "nom": {
             "type": "string"
+          },
+          "description": {
+            "type": "string",
+            "description": "Saisie à la création, à côté du nom — pas de rôle fonctionnel."
           },
           "type": {
             "type": "string",
@@ -54906,6 +55183,10 @@
           },
           "cleSsh": {
             "type": "string"
+          },
+          "cloudInit": {
+            "type": "string",
+            "description": "Script d’amorçage, encodé en clair, commun au lot."
           },
           "antiAffinite": {
             "type": "boolean",

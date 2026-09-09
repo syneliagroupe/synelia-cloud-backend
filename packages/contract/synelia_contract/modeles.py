@@ -2886,6 +2886,16 @@ class Projet(BaseModel):
     espaceId: str
     cree: AwareDatetime
     environnements: list[str]
+    etiquettes: Annotated[
+        list[str],
+        Field(description="Ventilation de la dépense et recherche — pas de rôle fonctionnel."),
+    ]
+    clusterId: Annotated[
+        str,
+        Field(
+            description="Le cluster Kubernetes qui héberge les services du projet — dédié ou partagé avec d'autres projets du même Espace."
+        ),
+    ]
     cible: Annotated[
         Literal["vm", "k8s"] | None,
         Field(
@@ -2907,6 +2917,13 @@ class ProjetCreation(BaseModel):
     environnements: Annotated[list[str] | None, Field(description="Par défaut `production`.")] = (
         None
     )
+    etiquettes: Annotated[
+        list[str] | None, Field(description="Ventilation de la dépense et recherche.")
+    ] = None
+    clusterId: Annotated[
+        str | None,
+        Field(description="Cluster Kubernetes à rattacher, existant ou en cours de provisioning."),
+    ] = None
     cible: Annotated[
         Literal["vm", "k8s"] | None,
         Field(
@@ -3509,6 +3526,10 @@ class ServiceProjet(BaseModel):
     id: str
     projetId: str
     nom: str
+    description: Annotated[
+        str | None,
+        Field(description="Saisie à la création, à côté du nom — pas de rôle fonctionnel."),
+    ] = None
     type: Literal["application", "base", "statique", "cron", "worker"]
     environnement: str
     statut: Literal["running", "building", "stopped", "degraded", "failed"]
@@ -4550,6 +4571,28 @@ class AuditExportPostResponse(BaseModel):
     expire: AwareDatetime | None = None
 
 
+class AuditIntegriteGetResponse(BaseModel):
+    intacte: bool
+    entreesVerifiees: int
+    totalEntrees: int
+    ruptureId: Annotated[
+        str | None,
+        Field(
+            description="Identifiant de la première entrée en rupture. Absent si la chaîne est intacte."
+        ),
+    ] = None
+    ruptureDate: Annotated[
+        AwareDatetime | None, Field(description="Absente si la chaîne est intacte.")
+    ] = None
+    raison: Annotated[str | None, Field(description="Absente si la chaîne est intacte.")] = None
+    empreinteFinale: Annotated[
+        str | None,
+        Field(
+            description="Empreinte de la dernière entrée. Présente seulement si la chaîne est intacte."
+        ),
+    ] = None
+
+
 class AuthDeconnexionPostResponse(BaseModel):
     ferme: bool
 
@@ -4899,6 +4942,19 @@ class IpsGetResponse(BaseModel):
 class IpsIpIdAttachementPutRequest(BaseModel):
     cibleId: Annotated[str, Field(description="VM, load balancer ou passerelle.")]
     ptr: str | None = None
+
+
+class Noeud(BaseModel):
+    id: str
+    statut: str
+    vcpu: int | None = None
+    cpu: float | None = None
+    ram: float | None = None
+
+
+class KubernetesClusterIdMetriquesGetResponse(BaseModel):
+    series: list[Serie]
+    noeuds: list[Noeud]
 
 
 class KubernetesClusterIdMiseAJourPostRequest(BaseModel):

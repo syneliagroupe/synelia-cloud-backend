@@ -5,6 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, status
 from synelia_contract import modeles as m
+from synelia_kernel.dates import maintenant
 from synelia_kernel.ids import nouvel_id
 
 from synelia.audit import journaliser
@@ -14,6 +15,7 @@ from synelia.modules.kubernetes.service import (
     depot_cluster,
     depot_pool,
     kubeconfig_reel,
+    metriques_instantanees,
     reconcilier_statut,
 )
 from synelia.travaux import demarrer_travail
@@ -21,6 +23,10 @@ from synelia.travaux import demarrer_travail
 router = APIRouter(prefix="/kubernetes", tags=["Kubernetes"])
 
 VERSIONS = ["1.31.4", "1.32.2", "1.33.0"]
+
+# Même triplet que `vms.router._SERIES` (module VM) : un instantané réel, pas un historique
+# persisté — cf. `metriques_instantanees`.
+_SERIES_K8S = [("cpu", "%"), ("ram", "%"), ("reseau_entrant", "Mo/s")]
 
 
 def _version_detail(version: str, recommandee: bool = False) -> m.VersionK8s:
@@ -160,6 +166,36 @@ async def obtenir_cluster(
 ) -> Any:  # noqa: N803
     cluster = await depot_cluster.obtenir(ctx, clusterId)
     return await reconcilier_statut(ctx, cluster)
+
+
+@router.get(
+    "/{clusterId}/metriques",
+    response_model=m.KubernetesClusterIdMetriquesGetResponse,
+    response_model_exclude_none=True,
+)
+async def obtenir_metriques_k8s(
+    clusterId: str, ctx: Contexte = Depends(exige("org.dashboard.view", lecture=True))
+) -> Any:  # noqa: N803
+    cluster = await depot_cluster.obtenir(ctx, clusterId)
+    # Agrégat réel (diagnostics Nova/libvirt des VM masters/workers du cluster) : `None` en
+    # simulation ou tant que Magnum n'a créé aucune VM identifiable — cf. `metriques_instantanees`.
+    # Pas de valeur inventée pour meubler la page en attendant.
+    resultat = await metriques_instantanees(ctx, cluster)
+    ts = maintenant()
+    agrege = (resultat or {}).get("agrege")
+    series = [
+        m.Serie(
+            metrique=metrique,
+            unite=unite,
+            fenetre="24h",
+            points=[m.PointSerie(ts=ts, valeur=agrege[metrique])]
+            if agrege and metrique in agrege
+            else [],
+        )
+        for metrique, unite in _SERIES_K8S
+    ]
+    noeuds = [m.Noeud.model_validate(n) for n in (resultat or {}).get("noeuds", [])]
+    return m.KubernetesClusterIdMetriquesGetResponse(series=series, noeuds=noeuds)
 
 
 @router.delete(

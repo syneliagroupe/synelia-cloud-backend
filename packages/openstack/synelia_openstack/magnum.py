@@ -35,6 +35,9 @@ class MagnumSimule:
     def cluster_statut(self, cluster_id: str) -> str:
         return "CREATE_COMPLETE"
 
+    def cluster_nodes(self, cluster_id: str) -> list[dict[str, Any]]:
+        return []
+
 
 class MagnumOpenStack(MagnumSimule):
     def _c(self):
@@ -97,3 +100,28 @@ class MagnumOpenStack(MagnumSimule):
         c = self._c()
         cl = c.container_infra.find_cluster(cluster_id, ignore_missing=True)
         return str(cl.status) if cl else "DELETE_COMPLETE"
+
+    def cluster_nodes(self, cluster_id: str) -> list[dict[str, Any]]:
+        """VM Nova réelles (masters + workers) derrière un cluster — retrouvées par la
+        convention de nommage du driver CAPI (`<stack_id>-...`), pas par
+        `node_addresses`/`master_addresses` : ces deux champs restent vides tant que la tâche
+        périodique de synchronisation Magnum n'a pas abouti, y compris pour un cluster dont les
+        VM tournent déjà réellement (même contournement que `_adresse_api_repli` dans
+        `k8s_workload.py`, vérifié en direct sur ce lab). `[]` si le cluster est introuvable ou
+        n'a pas encore de stack Heat (cluster tout juste soumis, avant que Magnum n'ait
+        provisionné la moindre VM)."""
+        c = self._c()
+        cl = c.container_infra.find_cluster(cluster_id, ignore_missing=True)
+        if cl is None or not cl.stack_id:
+            return []
+        prefixe = f"{cl.stack_id}-"
+        noeuds = []
+        for s in c.compute.servers(details=True):
+            if not s.name or not s.name.startswith(prefixe):
+                continue
+            flavor = s.flavor
+            vcpu = getattr(flavor, "vcpus", None)
+            if vcpu is None and isinstance(flavor, dict):
+                vcpu = flavor.get("vcpus")
+            noeuds.append({"id": s.id, "vcpu": int(vcpu or 0), "statut": str(s.status)})
+        return noeuds
