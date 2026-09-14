@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from synelia_contract import modeles as m
-from synelia_db.modeles import Ressource, Travail, Utilisateur
+from synelia_db.modeles import Audit, Ressource, Travail, Utilisateur
 from synelia_kernel import erreurs
 from synelia_kernel.dates import depuis_iso, maintenant
 from synelia_kernel.ids import nouvel_id
@@ -199,6 +199,28 @@ async def sante_integrations(ctx: Contexte) -> list[dict[str, Any]]:
         ligne("OpenStack", statut_os),
         ligne("Temporal", statut_temporal),
     ]
+
+
+async def acces_refuses_24h(ctx: Contexte) -> int:
+    """Actions RBAC refusées sur les dernières 24 h, journalisées par `journaliser()`
+    comme n'importe quelle autre entrée d'audit — utilisé par `/admin/sante` et
+    `/admin/tableau-de-bord`, qui renvoyaient `0` en dur jusqu'ici."""
+    seuil = utc(maintenant()) - timedelta(hours=24)
+    q = select(func.count()).select_from(Audit).where(
+        Audit.resultat.in_(("refus", "refuse")), Audit.date >= seuil
+    )
+    return int((await ctx.session.execute(q)).scalar_one())
+
+
+async def tickets_sla_risque(ctx: Contexte) -> int:
+    """Tickets plateforme dont le SLA restant tombe sous 30 min — même seuil que le
+    filtre `slaRisque` de `GET /admin/tickets`."""
+    n = 0
+    for r in await lignes_type(ctx, "ticket"):
+        sla = (r.donnees or {}).get("slaRestantMin")
+        if sla is not None and sla <= 30:
+            n += 1
+    return n
 
 
 async def usage_plateforme(ctx: Contexte) -> dict[str, float]:

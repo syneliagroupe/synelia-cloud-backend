@@ -99,7 +99,7 @@ async def lister_audit_plateforme(  # noqa: PLR0913,PLR0917
     if orgId:
         q = q.where(Audit.org_id == orgId)
     if depuis:
-        q = q.where(Audit.date >= service.utc(maintenant()))
+        q = q.where(Audit.date >= service.utc(depuis_iso(depuis)))
     if action:
         q = q.where(Audit.action.ilike(f"%{action}%"))
     if acteur:
@@ -111,7 +111,7 @@ async def lister_audit_plateforme(  # noqa: PLR0913,PLR0917
             )
         )
     if jusqua:
-        q = q.where(Audit.date <= service.utc(maintenant()))
+        q = q.where(Audit.date <= service.utc(depuis_iso(jusqua)))
     lignes = list((await ctx.session.execute(q.order_by(Audit.date.desc()))).scalars().all())
     ids = {a.acteur_id for a in lignes if a.acteur_id}
     noms: dict[str, str] = {}
@@ -1095,8 +1095,8 @@ async def obtenir_sante_plateforme(ctx: Contexte = Depends(exige_admin("capacity
         "filesProvisioning": {"enAttente": en_attente, "enCours": en_cours, "enEchec24h": en_echec},
         "integrations": await service.sante_integrations(ctx),
         "alertes": [],
-        "accesRefuses24h": 0,
-        "ticketsSlaRisque": 0,
+        "accesRefuses24h": await service.acces_refuses_24h(ctx),
+        "ticketsSlaRisque": await service.tickets_sla_risque(ctx),
     }
 
 
@@ -1265,9 +1265,11 @@ async def obtenir_tableau_de_bord_plateforme(
         "projetsTotal": projets,
         "backendsEnLigne": en_ligne,
         "backendsTotal": len(backends),
-        "accesRefuses24h": 0,
+        "accesRefuses24h": await service.acces_refuses_24h(ctx),
         "jobsEnEchec": jobs_echec,
-        "ticketsSlaRisque": 0,
+        "ticketsSlaRisque": await service.tickets_sla_risque(ctx),
+        # `caMensuel` reste à 0 : la facturation (module `facturation`) n'agrège pas encore
+        # de revenu récurrent plateforme calculé — hors périmètre de ce module.
         "caMensuel": 0,
     }
 
