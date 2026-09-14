@@ -465,17 +465,41 @@ async def obtenir_ventilation(
 ) -> Any:
     vms = await Depot("vm", m.Vm).tous(ctx)
     lignes: dict[str, int] = {}
-    for v in vms:
-        if axe == "application":
-            label = v.applicationNom or v.applicationId or "Général"
-        elif axe == "site":
-            label = v.site or "Général"
-        else:
-            label = v.espaceId or "Général"
-        prix = tarification._prix_ressource(
-            "vm", {"vcpu": v.vcpu, "ramGo": v.ramGo, "diskGo": v.diskGo}, 1
-        )
-        lignes[label] = lignes.get(label, 0) + prix
+
+    def ajouter(label: str, montant: int) -> None:
+        lignes[label] = lignes.get(label, 0) + montant
+
+    if axe == "famille":
+        # `Famille` = catégorie de coût (Calcul/Stockage/Réseau), pas le champ `famille`
+        # d'un gabarit VM (generique/calcul/memoire/gpu/economique) : le contrat documente
+        # les deux sous le même mot mais ce showback répond à « où part la dépense »,
+        # même découpage que la métrologie (`metrologie.consommation`).
+        for v in vms:
+            ajouter(
+                "Calcul",
+                tarification._prix_ressource("vm", {"vcpu": v.vcpu, "ramGo": v.ramGo, "diskGo": 0}, 1),
+            )
+            ajouter("Stockage", tarification._prix_ressource("volume", {"tailleGo": v.diskGo}, 1))
+        volumes = await Depot("volume", m.Volume).tous(ctx)
+        for vol in volumes:
+            ajouter("Stockage", tarification._prix_ressource("volume", {"tailleGo": vol.tailleGo}, 1))
+        lbs = await Depot("load_balancer", m.LoadBalancer).tous(ctx)
+        ajouter("Réseau", metrologie.PRIX["lb_jour"] * 30 * len(lbs))
+        ips_publiques = sum(1 for v in vms for ip in v.ips if ip.type == "publique")
+        ajouter("Réseau", metrologie.PRIX["ip_publique_jour"] * 30 * ips_publiques)
+    else:
+        for v in vms:
+            if axe == "application":
+                label = v.applicationNom or v.applicationId or "Général"
+            elif axe == "site":
+                label = v.site or "Général"
+            else:
+                label = v.espaceId or "Général"
+            prix = tarification._prix_ressource(
+                "vm", {"vcpu": v.vcpu, "ramGo": v.ramGo, "diskGo": v.diskGo}, 1
+            )
+            ajouter(label, prix)
+
     total = sum(lignes.values())
     if not lignes:
         lignes["Général"] = 0
