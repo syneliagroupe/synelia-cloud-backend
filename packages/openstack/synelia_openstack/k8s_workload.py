@@ -160,39 +160,44 @@ class K8sWorkloadReel(K8sWorkloadSimule):
         from cryptography.hazmat.primitives.asymmetric import rsa
         from cryptography.x509.oid import NameOID
 
+        from synelia_openstack.erreurs import traduire
         from synelia_openstack.fabrique import connexion
 
         c = connexion()
         cim = c.container_infrastructure_management
-        cluster = cim.get_cluster(cluster_id)
-        # Le certificat CA et la signature de CSR passent par une RPC magnum-api ->
-        # magnum-conductor puis par Barbican : sur ce lab, ce chemin échoue par intermittence
-        # (504/502 après ~60s, y compris en direct sur l'hôte, hors de tout problème réseau côté
-        # appelant) — quelques tentatives suffisent presque toujours à obtenir une réponse rapide.
-        ca = _avec_reprises(lambda: cim.get_cluster_certificate(cluster_id))
-        adresse_api = cluster.api_address or self._adresse_api_repli(c, cluster)
+        try:
+            cluster = cim.get_cluster(cluster_id)
+            # Le certificat CA et la signature de CSR passent par une RPC magnum-api ->
+            # magnum-conductor puis par Barbican : sur ce lab, ce chemin échoue par
+            # intermittence (504/502 après ~60s, y compris en direct sur l'hôte, hors de tout
+            # problème réseau côté appelant) — quelques tentatives suffisent presque toujours
+            # à obtenir une réponse rapide.
+            ca = _avec_reprises(lambda: cim.get_cluster_certificate(cluster_id))
+            adresse_api = cluster.api_address or self._adresse_api_repli(c, cluster)
 
-        cle = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-        csr = (
-            x509.CertificateSigningRequestBuilder()
-            .subject_name(
-                x509.Name(
-                    [
-                        x509.NameAttribute(NameOID.COMMON_NAME, "synelia-paas"),
-                        # Requis pour que kubeadm/le CA Kubernetes autorise ce certificat
-                        # client en tant qu'admin (groupe RBAC `system:masters`).
-                        x509.NameAttribute(NameOID.ORGANIZATION_NAME, "system:masters"),
-                    ]
+            cle = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+            csr = (
+                x509.CertificateSigningRequestBuilder()
+                .subject_name(
+                    x509.Name(
+                        [
+                            x509.NameAttribute(NameOID.COMMON_NAME, "synelia-paas"),
+                            # Requis pour que kubeadm/le CA Kubernetes autorise ce certificat
+                            # client en tant qu'admin (groupe RBAC `system:masters`).
+                            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "system:masters"),
+                        ]
+                    )
+                )
+                .sign(cle, hashes.SHA256())
+            )
+            signe = _avec_reprises(
+                lambda: cim.create_cluster_certificate(
+                    cluster_uuid=cluster_id,
+                    csr=csr.public_bytes(serialization.Encoding.PEM).decode(),
                 )
             )
-            .sign(cle, hashes.SHA256())
-        )
-        signe = _avec_reprises(
-            lambda: cim.create_cluster_certificate(
-                cluster_uuid=cluster_id,
-                csr=csr.public_bytes(serialization.Encoding.PEM).decode(),
-            )
-        )
+        except Exception as exc:  # noqa: BLE001 — relayé en `424`, pas un `500` opaque
+            raise traduire(exc, "cluster PaaS") from None
         cle_pem = cle.private_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PrivateFormat.TraditionalOpenSSL,
