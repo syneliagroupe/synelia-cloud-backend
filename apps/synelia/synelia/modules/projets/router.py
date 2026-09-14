@@ -95,6 +95,8 @@ async def creer_projet(
         espaceId=corps.espaceId,
         cree=maintenant(),
         environnements=corps.environnements or ["production"],
+        etiquettes=corps.etiquettes or [],
+        clusterId=corps.clusterId or "",
         variables=[],
         cible=corps.cible or "k8s",
     )
