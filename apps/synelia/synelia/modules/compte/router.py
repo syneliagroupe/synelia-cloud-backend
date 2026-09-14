@@ -8,7 +8,7 @@ from fastapi import APIRouter, Response, status
 from sqlalchemy import select
 from synelia_contract import modeles as m
 from synelia_contract.rbac import permissions_effectives
-from synelia_db.modeles import SessionAuth, Utilisateur
+from synelia_db.modeles import Organisation, SessionAuth, Utilisateur
 from synelia_kernel import erreurs
 from synelia_kernel.chiffrement import chiffrer
 from synelia_kernel.dates import maintenant
@@ -87,6 +87,11 @@ async def choisir_organisation_active(ctx: Ctx, corps: m.MoiOrganisationActivePu
         raise erreurs.validation(
             "Vous n'appartenez pas à cette organisation.", {"orgId": "inconnue"}
         )
+    if p.est_admin_plateforme and await ctx.session.get(Organisation, corps.orgId) is None:
+        # L'équipe Synelia n'est pas bornée à `roles_par_org` (elle peut ouvrir n'importe
+        # quelle organisation cliente), mais un identifiant inexistant filait quand même
+        # jusqu'à l'insertion de la session, où la RLS Postgres le refusait en 500 brut.
+        raise erreurs.validation("Organisation introuvable.", {"orgId": "inconnue"})
     if corps.memoriser:
         u.org_active_id = corps.orgId
     rep = await auth.ouvrir_session(
