@@ -5,6 +5,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, status
 from sqlalchemy import select
 from synelia_contract import modeles as m
+from synelia_db import rls
 from synelia_db.modeles import Membership, Organisation, Utilisateur
 from synelia_kernel import erreurs
 
@@ -84,10 +85,17 @@ async def creer_organisation(
             )
             ctx.session.add(u)
             await ctx.session.flush()
-        ctx.session.add(
-            Membership(utilisateur_id=u.id, org_id=org.id, role="org_admin", scope_type="org")
-        )
-        await ctx.session.flush()
+        # RLS de `memberships` vérifie `org_id = current_setting('app.org_id')` : celui de la
+        # transaction reste l'organisation active de l'appelant (l'admin plateforme qui crée
+        # cette organisation), jamais `org.id` qui vient tout juste d'être créé — sans lever le
+        # filtre le temps de cet insert, Postgres refuse la ligne (« new row violates row-level
+        # security policy », constaté en direct : toute création d'organisation avec un
+        # administrateur échouait en 500). Même parade que `auth/service.py::appartenances`.
+        async with rls.sans_org(ctx.session):
+            ctx.session.add(
+                Membership(utilisateur_id=u.id, org_id=org.id, role="org_admin", scope_type="org")
+            )
+            await ctx.session.flush()
         details["administrateur"] = email
     await journaliser(
         ctx,
