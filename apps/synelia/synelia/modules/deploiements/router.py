@@ -78,6 +78,7 @@ async def lancer_deploiement(
         appId=env.appId,
         version=version,
         commit=corps.commit,
+        commitMessage=corps.message,
         branche=corps.branche,
         auteur=ctx.principal.email if ctx.principal else "systeme",
         statut="queued",
