@@ -113,10 +113,28 @@ async def valider_mfa(ctx: CtxPublic, corps: m.AuthMfaPostRequest) -> Any:
     u = await ctx.session.get(Utilisateur, s.utilisateur_id)
     assert u is not None
     secret = dechiffrer(u.mfa_secret_chiffre) if u.mfa_secret_chiffre else None
-    if secret is None or not verifier_totp(secret, corps.code):
+    totp_valide = secret is not None and verifier_totp(secret, corps.code)
+    code_secours_utilise = None
+    if not totp_valide:
+        # `POST /moi/mfa` génère et présente huit codes de secours à usage unique
+        # (hachés dans `preferences.codes_secours_hash`), mais jusqu'ici rien ne les
+        # vérifiait jamais ici : un compte qui perd l'accès à son application TOTP
+        # n'avait donc aucun moyen réel de se reconnecter malgré la promesse de l'UI
+        # (« codes de secours, utilisables une fois chacun »). Chaque code haché est
+        # comparé, puis retiré de la liste (nouveau dict réassigné, pas de mutation
+        # en place, pour que SQLAlchemy détecte le changement sur la colonne JSON).
+        hachages = (u.preferences or {}).get("codes_secours_hash") or []
+        for hachage in hachages:
+            if verifier_mot_de_passe(corps.code, hachage):
+                code_secours_utilise = hachage
+                break
+    if not totp_valide and code_secours_utilise is None:
         raise erreurs.validation(
             "Code invalide.", {"code": "Le code à six chiffres ne correspond pas."}
         )
+    if code_secours_utilise is not None:
+        restants = [h for h in u.preferences["codes_secours_hash"] if h != code_secours_utilise]
+        u.preferences = {**u.preferences, "codes_secours_hash": restants}
     s.mfa_validee = True
     s.mfa_defi = None
     await ctx.session.flush()
@@ -128,6 +146,7 @@ async def valider_mfa(ctx: CtxPublic, corps: m.AuthMfaPostRequest) -> Any:
         cible_id=u.id,
         cible=u.email,
         org_id=s.org_id,
+        details={"codeSecoursUtilise": code_secours_utilise is not None},
     )
     return {
         "accessToken": acces,
