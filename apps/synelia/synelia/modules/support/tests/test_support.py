@@ -91,5 +91,7 @@ async def test_cycle_ticket(client):
 
 
 async def test_verification_sans_auth_interdite(client):
-    r = await client.get("/v1/support/tickets")
-    assert r.status_code == 200
+    # `/support/tickets` liste les tickets d'une organisation : sans jeton, l'API doit
+    # refuser plutôt que renvoyer une liste vide (silence indiscernable d'une fuite).
+    r = await client.get("/v1/support/tickets", headers=PUB)
+    assert r.status_code == 401
