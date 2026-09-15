@@ -57,14 +57,18 @@ async def client_zone_vps() -> AsyncIterator[httpx.AsyncClient]:
         try:
             async with db.fabrique()() as session:
                 from synelia_db.modeles import Ressource
+                from synelia_kernel.chiffrement import dechiffrer
                 from synelia_openstack import fournisseur
                 from synelia_openstack.identite import IdentiteOpenStack, IdentiteSimule
 
                 ligne = await session.get(Ressource, ESPACE_ID_TEST)
-                if ligne is not None and ligne.type == "espace":
-                    reseau_id = ligne.secrets.get("reseau_id")
-                    routeur_id = ligne.secrets.get("routeur_id")
-                    projet_id = ligne.secrets.get("projet_id")
+                if ligne is not None and ligne.type == "espace" and ligne.secrets:
+                    # `Ressource.secrets` est chiffré en base (AES-256-GCM) — jamais lisible
+                    # en clair directement, il faut déchiffrer chaque valeur individuellement.
+                    secrets_clairs = {k: dechiffrer(v) for k, v in ligne.secrets.items()}
+                    reseau_id = secrets_clairs.get("reseau_id")
+                    routeur_id = secrets_clairs.get("routeur_id")
+                    projet_id = secrets_clairs.get("projet_id")
                     amont = fournisseur(IdentiteSimule, IdentiteOpenStack)
                     if isinstance(amont, IdentiteOpenStack):
                         # Suppression réelle : on tourne contre OpenStack
