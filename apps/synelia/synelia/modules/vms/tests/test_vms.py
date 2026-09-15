@@ -9,8 +9,15 @@ async def _espace_demo(client) -> str:
     return demo["id"]
 
 
+async def _gabarit_id(client, nom: str = "medium") -> str:
+    r = await client.get("/v1/catalogue/gabarits")
+    assert r.status_code == 200
+    return next(g["id"] for g in r.json() if g["nom"] == nom)
+
+
 async def _creer_vm(client, espace_id: str, nom: str = "vm-test") -> str:
-    corps = {"espaceId": espace_id, "nom": nom, "imageId": "ubuntu-24.04", "gabarit": "medium"}
+    gabarit = await _gabarit_id(client)
+    corps = {"espaceId": espace_id, "nom": nom, "imageId": "ubuntu-24.04", "gabarit": gabarit}
     r = await client.post("/v1/vms", json=corps)
     assert r.status_code == 202, r.text
     assert r.json()["statut"] == "done"
@@ -68,13 +75,14 @@ async def test_creer_vm_explicite_et_image_inconnue(client):
 async def test_creer_vm_nom_deja_pris(client):
     espace_id = await _espace_demo(client)
     await _creer_vm(client, espace_id, "dup")
+    gabarit = await _gabarit_id(client)
     r = await client.post(
         "/v1/vms",
         json={
             "espaceId": espace_id,
             "nom": "dup",
             "imageId": "ubuntu-24.04",
-            "gabarit": "medium",
+            "gabarit": gabarit,
         },
     )
     assert r.status_code == 409 and r.json()["erreur"]["code"] == "nom_deja_pris"
