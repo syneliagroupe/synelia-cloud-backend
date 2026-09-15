@@ -15,9 +15,18 @@ async def _gabarit_id(client, nom: str = "medium") -> str:
     return next(g["id"] for g in r.json() if g["nom"] == nom)
 
 
+async def _image_id(client) -> str:
+    r = await client.get("/v1/catalogue/images")
+    assert r.status_code == 200
+    images = r.json()["donnees"]
+    assert images, "No images available in catalogue"
+    return images[0]["id"]
+
+
 async def _creer_vm(client, espace_id: str, nom: str = "vm-test") -> str:
     gabarit = await _gabarit_id(client)
-    corps = {"espaceId": espace_id, "nom": nom, "imageId": "ubuntu-24.04", "gabarit": gabarit}
+    image_id = await _image_id(client)
+    corps = {"espaceId": espace_id, "nom": nom, "imageId": image_id, "gabarit": gabarit}
     r = await client.post("/v1/vms", json=corps)
     assert r.status_code == 202, r.text
     assert r.json()["statut"] == "done"
@@ -42,12 +51,13 @@ async def test_creer_et_lister_vm(client):
 
 async def test_creer_vm_explicite_et_image_inconnue(client):
     espace_id = await _espace_demo(client)
+    image_id = await _image_id(client)
     r = await client.post(
         "/v1/vms",
         json={
             "espaceId": espace_id,
             "nom": "vm-specs",
-            "imageId": "debian-12",
+            "imageId": image_id,
             "vcpu": 1,
             "ramGo": 2,
             "diskGo": 20,
@@ -76,12 +86,13 @@ async def test_creer_vm_nom_deja_pris(client):
     espace_id = await _espace_demo(client)
     await _creer_vm(client, espace_id, "dup")
     gabarit = await _gabarit_id(client)
+    image_id = await _image_id(client)
     r = await client.post(
         "/v1/vms",
         json={
             "espaceId": espace_id,
             "nom": "dup",
-            "imageId": "ubuntu-24.04",
+            "imageId": image_id,
             "gabarit": gabarit,
         },
     )
@@ -215,11 +226,12 @@ async def test_redimensionner_sans_gabarit_echoue_franchement(client):
 
 async def test_lot_vms(client):
     espace_id = await _espace_demo(client)
+    image_id = await _image_id(client)
     machines = [
         {
             "nom": "compose-web",
             "quantite": 2,
-            "imageId": "ubuntu-24.04",
+            "imageId": image_id,
             "vcpu": 1,
             "ramGo": 2,
             "diskGo": 20,
