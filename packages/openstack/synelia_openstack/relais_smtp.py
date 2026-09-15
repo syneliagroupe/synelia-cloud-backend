@@ -95,6 +95,22 @@ class RelaisSmtpReel(RelaisSmtpSimule):
                 "code": "250",
                 "detail": f"Relayé réellement via {self.hote}:{self.port}.",
             }
+        except smtplib.SMTPRecipientsRefused as exc:
+            # Le relais a répondu, il a juste refusé : ce n'est pas une panne d'amont.
+            return {"envoye": False, "code": "550", "detail": str(exc.recipients)}
+        except smtplib.SMTPResponseException as exc:
+            # Bug réel trouvé en testant en direct : un refus explicite du relais (quota
+            # journalier dépassé, identifiants invalides — code 552/535...) remontait comme
+            # `amont_indisponible` (424, « le relais ne répond pas »), alors que le relais a
+            # bien répondu. Le relais a *répondu*, avec un code métier : ce n'est pas une panne
+            # d'intégration amont, ne pas le classer comme telle.
+            return {
+                "envoye": False,
+                "code": str(exc.smtp_code),
+                "detail": exc.smtp_error.decode(errors="replace")
+                if isinstance(exc.smtp_error, bytes)
+                else str(exc.smtp_error),
+            }
         except (OSError, smtplib.SMTPException) as exc:
             raise erreurs.amont_indisponible(
                 "relais_smtp", f"{self.hote}:{self.port} indisponible : {exc}"

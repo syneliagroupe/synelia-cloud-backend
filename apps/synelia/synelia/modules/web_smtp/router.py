@@ -104,6 +104,19 @@ async def modifier_relais_smtp(
     modifs = {
         k: v for k, v in corps.model_dump(mode="json", exclude_unset=True).items() if v is not None
     }
+    # Bug réel trouvé en vérifiant en direct : `quotaJour` est un champ plat du contrat
+    # (`WebSmtpPatchRequest`) mais `RelaisSmtp.quota` est un objet imbriqué — `Depot.modifier`
+    # ne fait qu'une fusion superficielle, donc la clé `quotaJour` atterrissait à côté de
+    # `quota` sans jamais le modifier. Le `PATCH` répondait `200` avec le nouveau quota, mais
+    # `GET /web/smtp` (et le relais réel, qui applique `quota.parJour`) continuaient de
+    # montrer l'ancien : un réglage qui ne se réglait pas, silencieusement.
+    if "quotaJour" in modifs:
+        quota_jour = modifs.pop("quotaJour")
+        modifs["quota"] = {
+            **relais.quota.model_dump(),
+            "parJour": quota_jour,
+            "parHeure": max(100, quota_jour // 24),
+        }
     await depot.modifier(ctx, relais.id, modifs)
     await journaliser(
         ctx,
