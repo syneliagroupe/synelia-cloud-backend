@@ -55,8 +55,16 @@ async def test_commander_cycle(client):
     r = await client.post(f"/v1/web/domaines/{did}/code-auth")
     assert r.status_code == 200 and r.json()["code"]
 
+    r = await client.get(f"/v1/web/domaines/{did}")
+    expiration_avant = r.json()["domaine"]["expiration"]
+
     r = await client.post(f"/v1/web/domaines/{did}/renouvellement", json={"dureeAnnees": 2})
     assert r.status_code == 202 and r.json()["type"] == "domaine.renouveler"
+
+    # Le renouvellement prolonge depuis l'échéance existante, pas depuis aujourd'hui.
+    r = await client.get(f"/v1/web/domaines/{did}")
+    expiration_apres = r.json()["domaine"]["expiration"]
+    assert expiration_apres[:4] == str(int(expiration_avant[:4]) + 2)
 
 
 async def test_transfert(client):
