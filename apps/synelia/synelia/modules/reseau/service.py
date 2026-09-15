@@ -373,6 +373,23 @@ class ExecuteurLbCreate(Executeur):
                     loadbalancer_id=res["id"],
                 )
                 await depot_lb.definir_secrets(ctx, lb.id, {"octavia_moniteur_id": mon["id"]})
+                # Si des cibles ont été fournies à la création, les ajouter au pool maintenant
+                # que le pool Octavia existe (sinon elles seraient ignorées).
+                cibles_entree = entree.get("cibles")
+                if cibles_entree:
+                    # Convertir les Cible en Cible2 (ajouter le champ drain par défaut)
+                    cibles = [
+                        m.Cible2(
+                            targetId=c.get("targetId"),
+                            poids=c.get("poids"),
+                            drain=False,
+                        )
+                        for c in cibles_entree
+                    ]
+                    # Actualiser le LB en base avec le pool synchronisé
+                    lb = await depot_lb.obtenir(ctx, travail.cible_id or "")
+                    pool = await synchroniser_pool_amont(ctx, lb, cibles)
+                    await depot_lb.modifier(ctx, lb.id, {"pool": [p.model_dump() for p in pool]})
             c = dict(travail.contexte)
             c["vip"] = res["vip"]
             travail.contexte = c
