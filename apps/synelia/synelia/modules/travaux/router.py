@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Response, status
 from sqlalchemy import select
 from synelia_contract import modeles as m
 from synelia_db.modeles import Travail
@@ -10,10 +10,12 @@ from synelia_kernel import erreurs
 from synelia_kernel.dates import depuis_iso
 
 from synelia.audit import journaliser
-from synelia.deps import Ctx, Page
+from synelia.deps import Ctx, Page, exiger_confirmation
 from synelia.deps.contexte import Contexte
 from synelia.deps.pagination import filtrer_trier_paginer
 from synelia.travaux import moteur, vers_contrat
+
+STATUTS_TERMINAUX = {"done", "failed", "rolled_back"}
 
 router = APIRouter(prefix="/travaux", tags=["Travaux de provisioning"])
 
@@ -78,3 +80,23 @@ async def annuler_travail(ctx: Ctx, travailId: str) -> Any:  # noqa: N803
         ctx, action="travail.annulation", cible_type="travail", cible_id=t.id, cible=t.label
     )
     return vers_contrat(t)
+
+
+@router.delete("/{travailId}", status_code=status.HTTP_204_NO_CONTENT)
+async def purger_travail(
+    ctx: Ctx, travailId: str, confirmation: str | None = None
+) -> Response:  # noqa: N803
+    """Retire une tâche terminée du centre de tâches — le journal d'audit garde la trace."""
+    t = await _travail(ctx, travailId)
+    exiger_confirmation(t.id, confirmation)
+    if t.statut not in STATUTS_TERMINAUX:
+        raise erreurs.conflit(
+            "Seule une tâche terminée, en échec ou annulée peut être purgée.",
+            code="travail_non_termine",
+        )
+    await ctx.session.delete(t)
+    await ctx.session.flush()
+    await journaliser(
+        ctx, action="travail.purge", cible_type="travail", cible_id=t.id, cible=t.label
+    )
+    return Response(status_code=204)
