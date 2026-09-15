@@ -18,7 +18,7 @@ async def _gabarit_id(client, nom: str = "medium") -> str:
 async def _image_id(client) -> str:
     r = await client.get("/v1/catalogue/images")
     assert r.status_code == 200
-    images = r.json()["donnees"]
+    images = r.json()
     assert images, "No images available in catalogue"
     return images[0]["id"]
 
