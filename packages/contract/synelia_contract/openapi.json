@@ -39735,6 +39735,75 @@
         }
       }
     },
+    "/web/smtp/webhooks/{webhookId}/test": {
+      "post": {
+        "tags": [
+          "Web Cloud — relais SMTP"
+        ],
+        "operationId": "testerWebhookSmtp",
+        "summary": "Envoyer un appel de test au webhook",
+        "x-rbac": "service.admin",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Organisation"
+          },
+          {
+            "$ref": "#/components/parameters/Langue"
+          },
+          {
+            "name": "webhookId",
+            "in": "path",
+            "required": true,
+            "description": "Identifiant du webhook.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Succès.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "envoye": {
+                      "type": "boolean"
+                    },
+                    "code": {
+                      "type": "integer",
+                      "format": "int32"
+                    }
+                  },
+                  "required": [
+                    "envoye"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Invalide"
+          },
+          "401": {
+            "$ref": "#/components/responses/NonAuthentifie"
+          },
+          "403": {
+            "$ref": "#/components/responses/Interdit"
+          },
+          "404": {
+            "$ref": "#/components/responses/Introuvable"
+          },
+          "429": {
+            "$ref": "#/components/responses/TropDeRequetes"
+          },
+          "500": {
+            "$ref": "#/components/responses/Serveur"
+          }
+        }
+      }
+    },
     "/web/ssl": {
       "get": {
         "tags": [

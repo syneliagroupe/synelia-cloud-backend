@@ -4108,6 +4108,7 @@ class VmModification(BaseModel):
     tags: list[str] | None = None
     backupPlanId: str | None = None
     applicationId: str | None = None
+    applicationNom: str | None = None
 
 
 class VmRedimensionnement(BaseModel):
@@ -5944,6 +5945,11 @@ class WebSmtpTestPostResponse(BaseModel):
 
 class WebSmtpWebhooksGetResponse(RootModel[list[WebhookSmtp]]):
     root: list[WebhookSmtp]
+
+
+class WebSmtpWebhooksWebhookIdTestPostResponse(BaseModel):
+    envoye: bool
+    code: int | None = None
 
 
 class WebSslGetResponse(BaseModel):
