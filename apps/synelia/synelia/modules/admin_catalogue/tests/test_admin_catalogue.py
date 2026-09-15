@@ -183,10 +183,14 @@ async def test_impayes(client):
     r = await client.get("/v1/admin/facturation/impayes")
     assert r.status_code == 200
 
+    # Test relances with non-existent facture: should return echecs=1, envoyees=0
+    # (the new behavior after commit 499f5c0 only counts factures that actually exist)
     r = await client.post(
         "/v1/admin/facturation/impayes/relances", json={"factures": ["x"], "niveau": "rappel"}
     )
-    assert r.status_code == 200 and r.json()["envoyees"] == 1
+    assert r.status_code == 200
+    assert r.json()["envoyees"] == 0
+    assert r.json()["echecs"] == 1
 
 
 async def test_marges(client):
