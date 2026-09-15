@@ -286,6 +286,11 @@ async def ouvrir_console_vm(vmId: str, ctx: Contexte = Depends(exige("vm.power")
     except erreurs.AppError:
         raise
     except Exception as exc:  # noqa: BLE001
+        exc_str = str(exc)
+        if "Guest does not have a console available" in exc_str:
+            raise erreurs.non_porte(
+                "Console indisponible : la machine virtuelle doit être démarrée avec un accès console pris en charge par l'hyperviseur."
+            ) from None
         raise traduire(exc, "Machine virtuelle") from None
     await journaliser(
         ctx, action="vm.console_ouverte", cible_type="vm", cible_id=vmId, cible=vm.nom
