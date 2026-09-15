@@ -162,7 +162,15 @@ async def payer_facture(
     if facture.statut == "payee":
         raise erreurs.conflit("Cette facture est déjà payée.", code="facture_deja_payee")
     await crediter(ctx, ctx.org_id, f"Paiement facture {facture.numero}", facture.total)
-    facture = await depot.definir_statut(ctx, factureId, "payee")
+    # `corps.moyenId` pointe un `moyen_paiement` (id opaque) : la facture ne stocke que le
+    # `type` (`Literal` affiché en colonne « Règlement »), résolu ici plutôt que laissé de
+    # côté — sans ça `facture.moyen` restait `None` après tout règlement, quel que soit le
+    # moyen choisi côté écran.
+    moyen_type = None
+    if corps.moyenId:
+        m_paiement = await Depot("moyen_paiement", m.MoyenPaiement).trouver(ctx, corps.moyenId)
+        moyen_type = m_paiement.type if m_paiement else None
+    facture = await depot.definir_statut(ctx, factureId, "payee", moyen=moyen_type)
     await journaliser(ctx, action="facture.paiement", cible_type="facture", cible_id=factureId)
     if ctx.principal and ctx.principal.utilisateur_id:
         u = await ctx.session.get(Utilisateur, ctx.principal.utilisateur_id)
@@ -488,13 +496,20 @@ async def obtenir_ventilation(
         ips_publiques = sum(1 for v in vms for ip in v.ips if ip.type == "publique")
         ajouter("Réseau", metrologie.PRIX["ip_publique_jour"] * 30 * ips_publiques)
     else:
+        # `v.espaceId` seul est un identifiant technique (UUID) : sans résolution, la
+        # répartition interne « Par Espace Cloud » affichait cet UUID brut à la place du
+        # code lisible de l'Espace (constaté en direct via `/facturation/ventilation?axe=
+        # espace`) — même bug que si `application` était resté sur `applicationId` seul.
+        codes_espace = {
+            e.id: e.code for e in await Depot("espace", m.EspaceCloud).tous(ctx)
+        }
         for v in vms:
             if axe == "application":
                 label = v.applicationNom or v.applicationId or "Général"
             elif axe == "site":
                 label = v.site or "Général"
             else:
-                label = v.espaceId or "Général"
+                label = codes_espace.get(v.espaceId, v.espaceId) or "Général"
             prix = tarification._prix_ressource(
                 "vm", {"vcpu": v.vcpu, "ramGo": v.ramGo, "diskGo": v.diskGo}, 1
             )

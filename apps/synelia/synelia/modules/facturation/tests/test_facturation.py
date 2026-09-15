@@ -205,3 +205,31 @@ async def test_ventilation(client):
     assert r.status_code == 200, r.text
     body = r.json()
     assert "lignes" in body and body["total"] >= 0
+
+
+async def test_ventilation_par_espace_affiche_le_code_pas_luuid(client):
+    """Régression : la répartition « Par Espace Cloud » affichait l'UUID technique de
+    l'Espace comme libellé au lieu de son code lisible (`espace-abj`, par exemple)."""
+    espace_id = await _espace(client)
+    # Pas d'id de maquette (`debian-12`) : ce dépôt exécute ses tests contre le vrai
+    # catalogue Glance (`SYNELIA_FOURNISSEUR=openstack` dans `.env`), dont le seul système
+    # actuellement publié sur dev01 est `ubuntu-24.04-v1.33.12` — voir `catalogue/router.py`.
+    images = (await client.get("/v1/catalogue/images")).json()
+    image_id = images[0]["id"]
+    r = await client.post(
+        "/v1/vms",
+        json={
+            "espaceId": espace_id,
+            "nom": "vm-vent",
+            "imageId": image_id,
+            "vcpu": 1,
+            "ramGo": 2,
+            "diskGo": 20,
+        },
+    )
+    assert r.status_code == 202, r.text
+    r = await client.get("/v1/facturation/ventilation?axe=espace")
+    assert r.status_code == 200, r.text
+    labels = [ligne["label"] for ligne in r.json()["lignes"]]
+    assert "demo-abj" in labels, labels
+    assert espace_id not in labels, labels
