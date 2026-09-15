@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import unicodedata
 from typing import Any
 
 from fastapi import APIRouter, Depends
@@ -132,9 +133,16 @@ SUGGESTIONS = [
 ]
 
 
+def _sans_accents(texte: str) -> str:
+    return "".join(c for c in unicodedata.normalize("NFKD", texte) if not unicodedata.combining(c))
+
+
 @router_copilote.post("", response_model=m.ReponseCopilote, response_model_exclude_none=True)
 async def interroger_copilote(corps: m.QuestionCopilote, ctx: Ctx) -> Any:
-    q = (corps.question or "").lower()
+    # Les mots-clés ci-dessous sont sans accent ; une question posée avec les accents
+    # français usuels (« dépense », « coût ») ne matchait plus rien et retombait
+    # toujours sur la réponse générique.
+    q = _sans_accents((corps.question or "").lower())
     syn = await _synthese(ctx)
     if "vm" in q or "machine" in q:
         reponse = f"Votre organisation compte actuellement {syn['vms']} machine(s) virtuelle(s) sur {syn['espaces']} espace(s)."
