@@ -365,6 +365,7 @@ async def creer_bucket(
     bucket = m.Bucket(
         id=nouvel_id(),
         orgId=ctx.org_id,
+        espaceId=corps.espaceId,
         nom=corps.nom,
         region=corps.region,
         classe=corps.classe,
