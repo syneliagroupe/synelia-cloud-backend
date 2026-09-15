@@ -89,6 +89,36 @@ async def test_sessions(client):
     assert r.status_code == 422
 
 
+async def test_sessions_recente_en_tete_sans_tri_explicite(client):
+    """`GET /securite/sessions` sans `tri`/`ordre` (ce que fait `useCollection` côté
+    front) doit rester triée par récence décroissante, sinon la session courante — la
+    plus récente — disparaît derrière d'anciennes sessions dès que leur nombre dépasse
+    une page."""
+    infos = lire_acces(client.jeton)
+    async with fabrique()() as s:
+        for i in range(5):
+            s.add(
+                SessionAuth(
+                    id=f"01test-ancienne-{i:04d}",
+                    org_id=infos["org"],
+                    utilisateur_id=infos["sub"],
+                    famille=f"01test-famille-{i:04d}",
+                    rafraichissement_hash=f"hash-ancienne-{i:04d}",
+                    cree_le=maintenant() - timedelta(days=30 + i),
+                    derniere_activite_le=maintenant() - timedelta(days=30 + i),
+                    expire_le=maintenant() + timedelta(days=1),
+                )
+            )
+        await s.commit()
+
+    r = await client.get("/v1/securite/sessions", params={"parPage": 3})
+    assert r.status_code == 200
+    donnees = r.json()["donnees"]
+    assert any(s["courante"] for s in donnees), (
+        "la session courante doit rester en tête par défaut, pas enterrée par le tri"
+    )
+
+
 async def test_sso(client):
     r = await client.get("/v1/securite/sso")
     assert r.status_code == 200

@@ -59,8 +59,17 @@ def filtrer_trier_paginer(
     *,
     champs_recherche: tuple[str, ...] = ("nom",),
     tri_defaut: str | None = None,
+    ordre_defaut: Literal["asc", "desc"] = "asc",
 ) -> dict[str, Any]:
-    """Recherche `q` (insensible à la casse), tri, pagination en mémoire sur une liste déjà scellée à l'org."""
+    """Recherche `q` (insensible à la casse), tri, pagination en mémoire sur une liste déjà scellée à l'org.
+
+    `ordre_defaut` ne joue que quand `p.tri` n'est pas fourni (on trie alors sur
+    `tri_defaut`) : un client qui précise `tri` garde la main sur `ordre`. Sans ça, une
+    liste triée par défaut sur un champ de récence (`derniereActivite`…) retombait
+    silencieusement en ordre croissant — la session courante, la plus récente,
+    disparaissait derrière des centaines de sessions expirées plus anciennes dès que le
+    total dépassait une page.
+    """
     if p.q:
         q = p.q.lower()
 
@@ -74,10 +83,9 @@ def filtrer_trier_paginer(
         elements = [x for x in elements if _correspond(x)]
     cle = p.tri or tri_defaut
     if cle:
+        ordre = p.ordre if p.tri else ordre_defaut
         try:
-            elements = sorted(
-                elements, key=lambda x: _valeur_tri(x, cle), reverse=(p.ordre == "desc")
-            )
+            elements = sorted(elements, key=lambda x: _valeur_tri(x, cle), reverse=(ordre == "desc"))
         except TypeError:
             pass
     total = len(elements)

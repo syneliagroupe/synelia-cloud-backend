@@ -300,7 +300,11 @@ async def lister_sessions_actives(
     courante = ctx.principal.session_id if ctx.principal else None
     sessions = [_session_contrat(s, u, courante) for s, u in lignes]
     return filtrer_trier_paginer(
-        sessions, page, champs_recherche=("utilisateurNom", "email"), tri_defaut="derniereActivite"
+        sessions,
+        page,
+        champs_recherche=("utilisateurNom", "email"),
+        tri_defaut="derniereActivite",
+        ordre_defaut="desc",
     )
 
 
