@@ -15,7 +15,7 @@ def _corps_cluster(espace_id: str, nom: str = "k8s-test") -> dict:
         "version": "1.32.2",
         "site": "ABJ",
         "controlPlane": {"mode": "single"},
-        "pools": [{"nom": "workers", "nodes": 2, "flavor": "m1.medium", "type": "standard"}],
+        "pools": [{"nom": "workers", "nodes": 2, "flavor": "k8s.worker", "type": "standard"}],
         "modules": ["ingress-nginx", "cert-manager"],
     }
 
@@ -80,7 +80,7 @@ async def test_pools_cycle(client):
     espace_id = await _espace_demo(client)
     cid = await _creer_cluster(client, espace_id, "k8s-pools")
 
-    corps = {"nom": "gpu", "nodes": 1, "flavor": "g1.large", "type": "gpu"}
+    corps = {"nom": "gpu", "nodes": 1, "flavor": "large", "type": "gpu"}
     r = await client.post(f"/v1/kubernetes/{cid}/pools", json=corps)
     assert r.status_code == 202 and r.json()["statut"] == "done"
     r = await client.get(f"/v1/kubernetes/{cid}/pools")
@@ -273,7 +273,7 @@ async def test_pools_depot_unique(client):
     assert workers["nodes"] == 5
 
     # 2. Pool ajouté après : doit survivre un rechargement
-    corps_gpu = {"nom": "gpu", "nodes": 1, "flavor": "g1.large", "type": "gpu"}
+    corps_gpu = {"nom": "gpu", "nodes": 1, "flavor": "large", "type": "gpu"}
     r = await client.post(f"/v1/kubernetes/{cid}/pools", json=corps_gpu)
     assert r.status_code == 202 and r.json()["statut"] == "done"
 

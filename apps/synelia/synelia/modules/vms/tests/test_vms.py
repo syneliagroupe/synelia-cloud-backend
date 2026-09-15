@@ -10,7 +10,7 @@ async def _espace_demo(client) -> str:
 
 
 async def _creer_vm(client, espace_id: str, nom: str = "vm-test") -> str:
-    corps = {"espaceId": espace_id, "nom": nom, "imageId": "ubuntu-24.04", "gabarit": "g1.medium"}
+    corps = {"espaceId": espace_id, "nom": nom, "imageId": "ubuntu-24.04", "gabarit": "medium"}
     r = await client.post("/v1/vms", json=corps)
     assert r.status_code == 202, r.text
     assert r.json()["statut"] == "done"
@@ -74,7 +74,7 @@ async def test_creer_vm_nom_deja_pris(client):
             "espaceId": espace_id,
             "nom": "dup",
             "imageId": "ubuntu-24.04",
-            "gabarit": "g1.medium",
+            "gabarit": "medium",
         },
     )
     assert r.status_code == 409 and r.json()["erreur"]["code"] == "nom_deja_pris"
