@@ -397,6 +397,17 @@ async def lancer_relances(
     corps: m.AdminFacturationImpayesRelancesPostRequest,
     ctx: Contexte = Depends(exige_admin("invoice.view")),
 ) -> Any:
+    depot_f = Depot("facture", m.Facture, plateforme=True)
+    envoyees = 0
+    for facture_id in corps.factures:
+        try:
+            facture = await depot_f.obtenir(ctx, facture_id)
+            # Increment relances counter
+            await depot_f.modifier(ctx, facture_id, {"relances": facture.relances + 1})
+            envoyees += 1
+        except Exception:  # noqa: BLE001, S112
+            # Silently skip factures that fail to update
+            continue
     await journaliser(
         ctx,
         action="facturation.relances",
@@ -404,7 +415,7 @@ async def lancer_relances(
         cible_id="impayes",
         details=corps.model_dump(mode="json"),
     )
-    return {"envoyees": len(corps.factures), "echecs": 0}
+    return {"envoyees": envoyees, "echecs": len(corps.factures) - envoyees}
 
 
 @router.get("/facturation/marges", response_model=list[m.MargeBackend])

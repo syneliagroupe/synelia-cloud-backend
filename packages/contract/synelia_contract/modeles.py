@@ -402,6 +402,7 @@ class Replication(BaseModel):
 class Bucket(BaseModel):
     id: str
     orgId: str
+    espaceId: str
     nom: str
     region: Literal["ABJ", "GBM"]
     classe: Literal["chaud", "froid"]
@@ -424,6 +425,7 @@ class Replication1(BaseModel):
 
 
 class BucketCreation(BaseModel):
+    espaceId: str
     nom: str
     region: Literal["ABJ", "GBM"]
     classe: Literal["chaud", "froid"]
@@ -1616,6 +1618,7 @@ class Facture(BaseModel):
     moyen: Literal["carte", "virement", "orange_money", "mtn_momo", "wave", "prepaye"] | None = None
     pdfUrl: str
     echeance: date_aliased | None = None
+    relances: int = 0
 
 
 class FenetrePatching(BaseModel):
