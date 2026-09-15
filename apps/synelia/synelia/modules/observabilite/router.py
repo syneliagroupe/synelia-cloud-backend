@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from typing import Any
 
@@ -157,8 +158,15 @@ async def obtenir_journaux(
     recherche: str | None = None,
     ctx: Contexte = Depends(exige(None)),
 ) -> Any:  # noqa: N803
-    lignes = _victoria().extrait_logs(
-        ressourceId, niveau, depuis.isoformat() if depuis else None, recherche
+    # `extrait_logs` (httpx synchrone) est déchargé via `asyncio.to_thread` : même garde que
+    # `bases.service.gabarit_pour_palier`, sans quoi un VictoriaLogs injoignable gèlerait la
+    # boucle asyncio le temps du délai d'expiration — donc l'API entière, tous tenants confondus.
+    lignes = await asyncio.to_thread(
+        _victoria().extrait_logs,
+        ressourceId,
+        niveau,
+        depuis.isoformat() if depuis else None,
+        recherche,
     )
     return {
         "lignes": [m.LigneLog(**l) for l in lignes][:20],
@@ -178,4 +186,11 @@ async def obtenir_metriques(
     fenetre: str = "24h",
     ctx: Contexte = Depends(exige(None)),
 ) -> Any:  # noqa: N803
-    return service.metriques(fenetre, metriques.split(",") if metriques else None)
+    # `service.metriques` enchaîne jusqu'à huit appels httpx synchrones vers VictoriaMetrics
+    # (un par série + un par tuile) : même garde `asyncio.to_thread` que `obtenir_journaux`
+    # ci-dessus — un VictoriaMetrics injoignable prenait jusqu'à 8 × 5 s pour échouer et
+    # gelait la boucle asyncio pendant tout ce temps, donc l'API entière (vérifié en direct
+    # sur dev01 : ~40 s avant ce correctif).
+    return await asyncio.to_thread(
+        service.metriques, fenetre, metriques.split(",") if metriques else None
+    )
