@@ -215,6 +215,15 @@ class ExecuteurK8sCreate(Executeur):
         statut_amont = str(travail.contexte.get("statut_amont", ""))
         statut = "running" if statut_amont.endswith("COMPLETE") else "provisioning"
         await depot_cluster.definir_statut(ctx, travail.cible_id or "", statut)
+        # Migrer les pools initiaux du ClusterK8s vers depot_pool pour une source de vérité
+        # unique (tous les pools, qu'ils soient créés avec le cluster ou après, vivent dans
+        # depot_pool — cf. bug fixé : pools initiaux inaccessibles via PATCH/DELETE).
+        cluster = await depot_cluster.obtenir(ctx, travail.cible_id or "")
+        for pool in cluster.pools or []:
+            await depot_pool.creer(ctx, pool, parent_id=travail.cible_id, id_=nouvel_id())
+        # Vider ClusterK8s.pools puisque la lecture assemble désormais les pools depuis depot_pool.
+        cluster_sans_pools = cluster.model_copy(update={"pools": []})
+        await depot_cluster.remplacer(ctx, travail.cible_id or "", cluster_sans_pools)
 
     async def compenser(self, ctx: Contexte, travail: Travail, index_echoue: int) -> None:
         secrets = await depot_cluster.secrets(ctx, travail.cible_id or "")

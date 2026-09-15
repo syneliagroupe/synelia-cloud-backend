@@ -33,6 +33,15 @@ def _version_detail(version: str, recommandee: bool = False) -> m.VersionK8s:
     return m.VersionK8s(version=version, statut="recommandee" if recommandee else "supportee")
 
 
+async def _assembler_pools_cluster(ctx: Contexte, cluster: m.ClusterK8s) -> m.ClusterK8s:
+    """Assemble les pools d'un cluster depuis depot_pool pour une source de vérité unique.
+
+    Tous les pools (créés avec le cluster ou ajoutés après) vivent maintenant dans depot_pool ;
+    cette fonction remplace le champ `pools` vide du ClusterK8s stocké par les pools réels."""
+    pools = await depot_pool.tous(ctx, parent_id=cluster.id)
+    return cluster.model_copy(update={"pools": pools})
+
+
 @router.get("", response_model=m.KubernetesGetResponse, response_model_exclude_none=True)
 async def lister_clusters(
     page: Page,
@@ -53,7 +62,9 @@ async def lister_clusters(
     )
     # Reconcile-on-read : sans ça un cluster resterait affiché `provisioning` indéfiniment
     # dans la liste, même après achèvement réel côté Magnum (cf. `reconcilier_statut`).
-    resultat["donnees"] = [await reconcilier_statut(ctx, c) for c in resultat["donnees"]]
+    # Assembler aussi les pools depuis depot_pool pour chaque cluster (source de vérité unique).
+    clusters_reconcilies = [await reconcilier_statut(ctx, c) for c in resultat["donnees"]]
+    resultat["donnees"] = [await _assembler_pools_cluster(ctx, c) for c in clusters_reconcilies]
     return resultat
 
 
@@ -165,7 +176,9 @@ async def obtenir_cluster(
     clusterId: str, ctx: Contexte = Depends(exige("org.dashboard.view", lecture=True))
 ) -> Any:  # noqa: N803
     cluster = await depot_cluster.obtenir(ctx, clusterId)
-    return await reconcilier_statut(ctx, cluster)
+    cluster_reconcilie = await reconcilier_statut(ctx, cluster)
+    # Assembler les pools depuis depot_pool pour une source de vérité unique.
+    return await _assembler_pools_cluster(ctx, cluster_reconcilie)
 
 
 @router.get(

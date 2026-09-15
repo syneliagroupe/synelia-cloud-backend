@@ -243,3 +243,54 @@ async def test_lister_filtres(client):
     r = await client.get("/v1/kubernetes", params={"espaceId": espace_id, "statut": "running"})
     assert r.status_code == 200
     assert any(c["nom"] == "k8s-filtre" for c in r.json()["donnees"])
+
+
+async def test_pools_depot_unique(client):
+    """Régression : tous les pools (créés avec le cluster ou après) vivent dans depot_pool.
+
+    Bug fixé : pools initiaux vivaient uniquement dans ClusterK8s.pools, pas accessibles via
+    PATCH/DELETE. Pools ajoutés après vivaient dans depot_pool mais ne survivaient pas à un
+    rechargement. Désormais tous passent par depot_pool (source de vérité unique)."""
+    espace_id = await _espace_demo(client)
+    cid = await _creer_cluster(client, espace_id, "k8s-pool-depot")
+
+    # 1. Pools initiaux doivent être visibles et modifiables
+    r = await client.get(f"/v1/kubernetes/{cid}/pools")
+    assert r.status_code == 200
+    pools_initiales = r.json()
+    assert len(pools_initiales) == 1
+    assert pools_initiales[0]["nom"] == "workers"
+
+    # PATCH un pool créé avec le cluster : avant le fix, cela retournait 404 parce que
+    # _pool() ne cherchait que dans depot_pool
+    r = await client.patch(
+        f"/v1/kubernetes/{cid}/pools/workers",
+        json={**pools_initiales[0], "nodes": 5},
+    )
+    assert r.status_code == 202 and r.json()["statut"] == "done"
+    r = await client.get(f"/v1/kubernetes/{cid}/pools")
+    workers = next(p for p in r.json() if p["nom"] == "workers")
+    assert workers["nodes"] == 5
+
+    # 2. Pool ajouté après : doit survivre un rechargement
+    corps_gpu = {"nom": "gpu", "nodes": 1, "flavor": "g1.large", "type": "gpu"}
+    r = await client.post(f"/v1/kubernetes/{cid}/pools", json=corps_gpu)
+    assert r.status_code == 202 and r.json()["statut"] == "done"
+
+    r = await client.get(f"/v1/kubernetes/{cid}/pools")
+    pools_apres_ajout = r.json()
+    assert len(pools_apres_ajout) == 2
+    assert any(p["nom"] == "gpu" for p in pools_apres_ajout)
+
+    # Recharger le cluster entier : le pool "gpu" doit toujours être là (ne pas disparaître)
+    r = await client.get(f"/v1/kubernetes/{cid}")
+    cluster = r.json()
+    assert len(cluster["pools"]) == 2
+    assert any(p["nom"] == "gpu" for p in cluster["pools"])
+
+    # 3. DELETE un pool créé initialement : avant le fix, peut-être n'aurait-il pas marché
+    r = await client.delete(f"/v1/kubernetes/{cid}/pools/workers", params={"confirmation": "workers"})
+    assert r.status_code == 202 and r.json()["statut"] == "done"
+    r = await client.get(f"/v1/kubernetes/{cid}/pools")
+    assert len(r.json()) == 1
+    assert all(p["nom"] != "workers" for p in r.json())
