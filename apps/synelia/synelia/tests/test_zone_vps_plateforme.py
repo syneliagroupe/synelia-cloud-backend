@@ -24,6 +24,8 @@ ORG_ID_TEST = "test-org-vps-zone"
 
 @pytest.fixture
 async def client_zone_vps() -> AsyncIterator[httpx.AsyncClient]:
+    import asyncio
+
     from synelia_kernel import config
     from synelia_testing import ClientApi, configurer_env
 
@@ -49,6 +51,30 @@ async def client_zone_vps() -> AsyncIterator[httpx.AsyncClient]:
                 yield c
         await db.fermer()
     finally:
+        # Nettoyage du réseau Neutron réel si on tourne contre OpenStack réel
+        # (pas de fuite en test, qui évite sinon la création cumulée de milliers
+        # de réseaux orphelins « vps-zone-net » jamais supprimés).
+        try:
+            async with db.fabrique()() as session:
+                from synelia_db.modeles import Ressource
+                from synelia_openstack import fournisseur
+                from synelia_openstack.identite import IdentiteOpenStack, IdentiteSimule
+
+                ligne = await session.get(Ressource, ESPACE_ID_TEST)
+                if ligne is not None and ligne.type == "espace":
+                    reseau_id = ligne.secrets.get("reseau_id")
+                    routeur_id = ligne.secrets.get("routeur_id")
+                    projet_id = ligne.secrets.get("projet_id")
+                    amont = fournisseur(IdentiteSimule, IdentiteOpenStack)
+                    if isinstance(amont, IdentiteOpenStack):
+                        # Suppression réelle : on tourne contre OpenStack
+                        if reseau_id and routeur_id:
+                            await asyncio.to_thread(amont.supprimer_reseau, reseau_id, routeur_id)
+                        if projet_id:
+                            await asyncio.to_thread(amont.supprimer_projet, projet_id)
+        except Exception:
+            # L'échec du nettoyage ne doit pas faire échouer le test
+            pass
         os.environ.pop("SYNELIA_VPS_ZONE_ESPACE_ID", None)
         os.environ.pop("SYNELIA_VPS_ZONE_ORG_ID", None)
         config.reglages.cache_clear()
