@@ -277,9 +277,7 @@ class K8sWorkloadReel(K8sWorkloadSimule):
 
         api = k8s_client.CoreV1Api(self._api_client())
         try:
-            api.create_namespace(
-                k8s_client.V1Namespace(metadata=k8s_client.V1ObjectMeta(name=nom))
-            )
+            api.create_namespace(k8s_client.V1Namespace(metadata=k8s_client.V1ObjectMeta(name=nom)))
         except k8s_client.exceptions.ApiException as exc:
             if exc.status != 409:  # déjà présent : idempotent
                 raise erreurs.amont_indisponible("kubernetes", str(exc)) from exc
@@ -355,8 +353,7 @@ class K8sWorkloadReel(K8sWorkloadSimule):
                 selector={"app": nom},
                 type="ClusterIP",
                 ports=[
-                    k8s_client.V1ServicePort(port=p, target_port=p, name=f"port-{p}")
-                    for p in ports
+                    k8s_client.V1ServicePort(port=p, target_port=p, name=f"port-{p}") for p in ports
                 ],
             ),
         )

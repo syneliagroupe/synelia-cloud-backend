@@ -106,7 +106,9 @@ class ExecuteurSauvegarde(Executeur):
         if index == 1:
             volumes = await _volumes_du_scope(ctx, plan)
             if not volumes:
-                a = await asyncio.to_thread(amont().executer_plan, plan.nom, plan.ressourcesProtegees)
+                a = await asyncio.to_thread(
+                    amont().executer_plan, plan.nom, plan.ressourcesProtegees
+                )
                 travail.contexte = {**dict(travail.contexte), "taille_go": a["taille_go"]}
                 return f"Snapshot créé ({a['taille_go']} Go)."
             snapshot_ids: list[str] = []
@@ -175,8 +177,10 @@ async def supprimer_snapshots_reels(ctx: Contexte, point_id: str) -> None:
     identifiants = await identifiants_espace(ctx, vol.espaceId)
     for sid in snapshot_ids:
         try:
-            await asyncio.to_thread(amont_cinder().supprimer_snapshot, sid, identifiants=identifiants)
-        except Exception:  # noqa: BLE001
+            await asyncio.to_thread(
+                amont_cinder().supprimer_snapshot, sid, identifiants=identifiants
+            )
+        except Exception:  # noqa: BLE001, S112
             continue
 
 

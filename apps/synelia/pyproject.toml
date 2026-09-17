@@ -32,6 +32,7 @@ dependencies = [
 
 [project.optional-dependencies]
 temporal = ["temporalio>=1.8"]
+openstack = ["openstacksdk>=4.0"]
 pdf = ["weasyprint>=63"]
 paiements = ["stripe>=11"]
 

@@ -299,7 +299,9 @@ async def _executer(ctx: Contexte, travail: Travail, depuis: int) -> None:
         if message:
             taches[i]["message"] = message
         travail.taches = copy.deepcopy(taches)
-        await ctx.session.commit()  # même motif que ci-dessus : rend l'étape « ok » visible tout de suite.
+        await (
+            ctx.session.commit()
+        )  # même motif que ci-dessus : rend l'étape « ok » visible tout de suite.
     try:
         await ex.terminer(ctx, travail)
     except Exception as exc:  # noqa: BLE001
@@ -308,7 +310,9 @@ async def _executer(ctx: Contexte, travail: Travail, depuis: int) -> None:
         # supprimer un namespace) : une erreur ici ne doit jamais être avalée en un simple log
         # pendant que le travail se déclare quand même « done » — l'appelant croirait l'opération
         # effectuée alors qu'elle a échoué. Même traitement que l'échec d'une étape.
-        message = exc.message if isinstance(exc, erreurs.AppError) else str(exc) or type(exc).__name__
+        message = (
+            exc.message if isinstance(exc, erreurs.AppError) else str(exc) or type(exc).__name__
+        )
         log.error("travail.terminaison_echouee", travail=travail.id, erreur=message)
         travail.statut = "failed"
         travail.erreur = {

@@ -32,7 +32,9 @@ def api(
     import uvicorn
 
     if rechargement and travailleurs > 1:
-        raise typer.BadParameter("--rechargement et plusieurs travailleurs sont incompatibles (uvicorn).")
+        raise typer.BadParameter(
+            "--rechargement et plusieurs travailleurs sont incompatibles (uvicorn)."
+        )
     uvicorn.run(
         "synelia.asgi:app",
         host=hote,

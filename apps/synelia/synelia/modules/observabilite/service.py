@@ -179,7 +179,10 @@ def metriques(fenetre: str, metriques_req: list[str] | None) -> dict[str, Any]:
     tuiles = [
         m.Tuile(cle="cpu.moyen", libelle="CPU moyen", valeur=v.valeur(_PROMQL["cpu"]), unite="%"),
         m.Tuile(
-            cle="ram.utilisation", libelle="RAM utilisée", valeur=v.valeur(_PROMQL["ram"]), unite="%"
+            cle="ram.utilisation",
+            libelle="RAM utilisée",
+            valeur=v.valeur(_PROMQL["ram"]),
+            unite="%",
         ),
         m.Tuile(
             cle="disque.occupation",

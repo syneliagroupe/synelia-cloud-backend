@@ -56,7 +56,11 @@ async def test_creer_agent_ia_modele_inconnu(client):
 async def test_lister_puis_modifier_puis_supprimer_agent_ia(client):
     r = await client.post(
         "/v1/ia/agents",
-        json={"nom": "Agent jetable", "consigne": "x", "modele": "meta-llama/llama-3.3-70b-instruct"},
+        json={
+            "nom": "Agent jetable",
+            "consigne": "x",
+            "modele": "meta-llama/llama-3.3-70b-instruct",
+        },
     )
     agent_id = r.json()["id"]
 

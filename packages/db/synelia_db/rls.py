@@ -122,18 +122,22 @@ async def politiques_manquantes(conn: AsyncConnection) -> list[str]:
     de chaque processus (API, worker, relais SMTP) sous le verrou consultatif de
     `session.py::initialiser_schema`."""
     lignes = (
-        await conn.execute(
-            text(
-                "SELECT c.relname AS table, c.relrowsecurity, c.relforcerowsecurity,"
-                "       EXISTS(SELECT 1 FROM pg_policies p"
-                "              WHERE p.tablename = c.relname AND p.policyname = c.relname || '_org')"
-                "         AS a_politique"
-                "  FROM pg_class c"
-                " WHERE c.relname = ANY(:tables)"
-            ),
-            {"tables": list(TABLES_TENANT)},
+        (
+            await conn.execute(
+                text(
+                    "SELECT c.relname AS table, c.relrowsecurity, c.relforcerowsecurity,"
+                    "       EXISTS(SELECT 1 FROM pg_policies p"
+                    "              WHERE p.tablename = c.relname AND p.policyname = c.relname || '_org')"
+                    "         AS a_politique"
+                    "  FROM pg_class c"
+                    " WHERE c.relname = ANY(:tables)"
+                ),
+                {"tables": list(TABLES_TENANT)},
+            )
         )
-    ).mappings().all()
+        .mappings()
+        .all()
+    )
     ddl: list[str] = []
     for ligne in lignes:
         table = ligne["table"]

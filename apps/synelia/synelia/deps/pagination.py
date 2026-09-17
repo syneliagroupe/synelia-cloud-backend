@@ -85,7 +85,9 @@ def filtrer_trier_paginer(
     if cle:
         ordre = p.ordre if p.tri else ordre_defaut
         try:
-            elements = sorted(elements, key=lambda x: _valeur_tri(x, cle), reverse=(ordre == "desc"))
+            elements = sorted(
+                elements, key=lambda x: _valeur_tri(x, cle), reverse=(ordre == "desc")
+            )
         except TypeError:
             pass
     total = len(elements)

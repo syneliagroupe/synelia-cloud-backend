@@ -63,7 +63,9 @@ async def test_recherche_sans_resultat_pertinent(client):
         },
     )
     kb_id = r.json()["id"]
-    await client.post(f"/v1/ia/connaissances/{kb_id}/documents", json={"nom": "x.md", "texte": TEXTE})
+    await client.post(
+        f"/v1/ia/connaissances/{kb_id}/documents", json={"nom": "x.md", "texte": TEXTE}
+    )
 
     r = await client.post(
         f"/v1/ia/connaissances/{kb_id}/rechercher", json={"query": "météo à Abidjan demain"}
@@ -98,9 +100,7 @@ async def test_suppression_connaissance(client):
     kb_id = r.json()["id"]
     r = await client.delete(f"/v1/ia/connaissances/{kb_id}")
     assert r.status_code == 422, "sans confirmation, la suppression doit être refusée"
-    r = await client.delete(
-        f"/v1/ia/connaissances/{kb_id}", params={"confirmation": "À supprimer"}
-    )
+    r = await client.delete(f"/v1/ia/connaissances/{kb_id}", params={"confirmation": "À supprimer"})
     assert r.status_code == 204
     r = await client.get(f"/v1/ia/connaissances/{kb_id}")
     assert r.status_code == 404

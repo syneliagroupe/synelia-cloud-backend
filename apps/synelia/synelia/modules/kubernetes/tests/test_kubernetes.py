@@ -289,7 +289,9 @@ async def test_pools_depot_unique(client):
     assert any(p["nom"] == "gpu" for p in cluster["pools"])
 
     # 3. DELETE un pool créé initialement : avant le fix, peut-être n'aurait-il pas marché
-    r = await client.delete(f"/v1/kubernetes/{cid}/pools/workers", params={"confirmation": "workers"})
+    r = await client.delete(
+        f"/v1/kubernetes/{cid}/pools/workers", params={"confirmation": "workers"}
+    )
     assert r.status_code == 202 and r.json()["statut"] == "done"
     r = await client.get(f"/v1/kubernetes/{cid}/pools")
     assert len(r.json()) == 1

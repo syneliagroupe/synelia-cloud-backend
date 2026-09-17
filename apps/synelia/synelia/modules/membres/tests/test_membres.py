@@ -136,7 +136,9 @@ async def test_role_change_effet_immediat_sans_relogin(client):
     assert r.status_code == 201, r.text
 
     # L'équipe plateforme rétrograde le membre — via la base, pas via son jeton.
-    r = await client.patch(f"/v1/membres/{memId}", json={"role": "read_only"}, headers=_headers(oid))
+    r = await client.patch(
+        f"/v1/membres/{memId}", json={"role": "read_only"}, headers=_headers(oid)
+    )
     assert r.status_code == 200 and r.json()["role"] == "read_only"
 
     # Même jeton qu'avant (jamais raffraîchi/relogué) : l'action réservée aux admins doit

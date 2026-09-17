@@ -95,9 +95,7 @@ async def test_zone_vps_provisionnee_et_masquee(client_zone_vps):
     assert r.status_code == 200
     assert all(e["code"] != "vps-zone" for e in r.json()["donnees"])
 
-    r = await client.get(
-        f"{DES}/espaces", headers={"X-Organisation-Id": ORG_ID_TEST}
-    )
+    r = await client.get(f"{DES}/espaces", headers={"X-Organisation-Id": ORG_ID_TEST})
     assert r.status_code == 200, r.text
     assert all(e["code"] != "vps-zone" for e in r.json()["donnees"])
 

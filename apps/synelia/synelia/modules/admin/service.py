@@ -30,6 +30,7 @@ BACKEND_REEL_ID = "backend-abj"  # seul backend réellement adossé au lab OpenS
 def amont() -> ComputeSimule:
     return fournisseur(ComputeSimule, ComputeOpenStack)
 
+
 depot_backend = Depot("backend", m.Backend, plateforme=True, libelle="Backend", champ_nom="code")
 depot_placement = Depot("placement", m.Placement, plateforme=True, libelle="Placement")
 depot_fenetre = Depot(
@@ -123,7 +124,9 @@ async def amacer_backends(ctx: Contexte) -> list[m.Backend]:
         cap = m.Quota(vcpu=reel["vcpu"], ramGo=reel["ramGo"], stockageTo=reel["stockageTo"])
         if actuel is not None and (actuel.hosts != reel["hosts"] or actuel.capacite != cap):
             await depot_backend.modifier(
-                ctx, BACKEND_REEL_ID, {"hosts": reel["hosts"], "capacite": cap.model_dump(mode="json")}
+                ctx,
+                BACKEND_REEL_ID,
+                {"hosts": reel["hosts"], "capacite": cap.model_dump(mode="json")},
             )
             existants = await depot_backend.tous(ctx)
     return existants
@@ -206,8 +209,10 @@ async def acces_refuses_24h(ctx: Contexte) -> int:
     comme n'importe quelle autre entrée d'audit — utilisé par `/admin/sante` et
     `/admin/tableau-de-bord`, qui renvoyaient `0` en dur jusqu'ici."""
     seuil = utc(maintenant()) - timedelta(hours=24)
-    q = select(func.count()).select_from(Audit).where(
-        Audit.resultat.in_(("refus", "refuse")), Audit.date >= seuil
+    q = (
+        select(func.count())
+        .select_from(Audit)
+        .where(Audit.resultat.in_(("refus", "refuse")), Audit.date >= seuil)
     )
     return int((await ctx.session.execute(q)).scalar_one())
 

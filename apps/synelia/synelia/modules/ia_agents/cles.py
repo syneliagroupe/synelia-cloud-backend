@@ -168,7 +168,8 @@ async def verifier_et_appliquer(
 
     if not _modele_autorise(cle, slug_modele):
         raise erreurs.interdit(
-            f"Cette clé IA n'autorise pas le modèle « {slug_modele} ».", code="ia_modele_non_autorise"
+            f"Cette clé IA n'autorise pas le modèle « {slug_modele} ».",
+            code="ia_modele_non_autorise",
         )
     if not _residence_ok(cle, hebergement_modele):
         raise erreurs.interdit(
@@ -185,7 +186,9 @@ async def verifier_et_appliquer(
     )
     if depasse:
         if cle.auDepassement == "bloquer":
-            raise erreurs.quota_depasse("Quota de jetons ou budget mensuel de cette clé IA dépassé.")
+            raise erreurs.quota_depasse(
+                "Quota de jetons ou budget mensuel de cette clé IA dépassé."
+            )
         await journaliser(
             ctx,
             action="ia.cle_depassement_alerte",

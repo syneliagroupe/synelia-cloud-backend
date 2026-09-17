@@ -112,7 +112,9 @@ def nouveau_mot_de_passe() -> str:
     return jeton_opaque(16)
 
 
-def construire_cloud_init(moteur: str, version: str, port: int, mot_de_passe: str, nom_base: str) -> str:
+def construire_cloud_init(
+    moteur: str, version: str, port: int, mot_de_passe: str, nom_base: str
+) -> str:
     """`#cloud-config` minimal : Docker + le moteur demandé, exposé sur toutes les interfaces
     de la VM. La VM ne reçoit volontairement aucune IP flottante (cf. `BaseManageeCreation.
     sourcesAutorisees`, un filtrage par CIDR côté réseau privé, pas un accès public) : le port

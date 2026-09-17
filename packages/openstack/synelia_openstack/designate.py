@@ -63,9 +63,7 @@ class DesignateOpenStack(DesignateSimule):
     def creer_enregistrement(
         self, zone_id: str, nom: str, type_: str, valeurs: list[str], ttl: int
     ) -> dict[str, Any]:
-        rs = self._c().dns.create_recordset(
-            zone_id, name=nom, type=type_, records=valeurs, ttl=ttl
-        )
+        rs = self._c().dns.create_recordset(zone_id, name=nom, type=type_, records=valeurs, ttl=ttl)
         return {"id": rs.id}
 
     def modifier_enregistrement(

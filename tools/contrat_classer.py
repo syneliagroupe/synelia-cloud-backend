@@ -100,7 +100,14 @@ def main() -> int:
         print(f"\n== {typ} ({len(liste)}) ==")
         ops = Counter((e["operation"], e["code"]) for e in liste)
         for (op, code), n in ops.most_common():
-            detail = next((e["detail"].splitlines()[0] for e in liste if e["operation"] == op and e["detail"]), "")
+            detail = next(
+                (
+                    e["detail"].splitlines()[0]
+                    for e in liste
+                    if e["operation"] == op and e["detail"]
+                ),
+                "",
+            )
             print(f"  {op:<60} -> {code}  x{n}  {detail[:90]}")
     return 0
 

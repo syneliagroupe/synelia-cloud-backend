@@ -182,7 +182,7 @@ Without `SYNELIA_DATABASE_URL`: SQLite file `./synelia.sqlite3`. Seed: `SYNELIA_
 
 ### 2.3 Docker / Dokploy / Kubernetes (production near the lab)
 
-Single `Dockerfile`: `python:3.13-slim`, `uv sync --frozen --no-dev --extra temporal`, non-root `synelia`, `ENTRYPOINT ["synelia"]`, `CMD ["api"]`. Worker: `command: ["worker"]`.
+Single `Dockerfile`: `python:3.13-slim` plus MinIO `mc`, `uv sync --frozen --no-dev --extra temporal --extra openstack`, non-root `synelia`, `ENTRYPOINT ["synelia"]`, `CMD ["api"]`. Worker: `command: ["worker"]`.
 
 ### 2.4 CI (`.github/workflows/ci.yml`)
 
@@ -243,7 +243,7 @@ Intentional or current deltas (not a commitment to fix in this PR):
 | Contract tests | Schemathesis + oasdiff in CI | schemathesis in **dev deps only**; coverage is path presence, not response property tests |
 | Types | pyright strict in CI | pyright in pyproject, **not** a CI step; mode `basic` |
 | Lint | ruff green | **green after this briefing land** (`PLR0917` ignored like `PLR0913`; remaining UP/E/S/RUF issues fixed) |
-| Docker extra | temporal in image | Root `optional-dependencies` forward `temporal` to `synelia[temporal]` so `uv sync --extra temporal` in the Dockerfile works; openstacksdk **not** in the image |
+| Docker extra | temporal + openstack in image | Root `optional-dependencies` forward `temporal`/`openstack` to `synelia[...]` so `uv sync --extra temporal --extra openstack` in the Dockerfile installs `temporalio` and `openstacksdk` |
 | IA domain | last phase, needs frontend contract | 9 `ia.*` RBAC actions, zero paths |
 | Tests | testcontainers Postgres/Temporal | SQLite per test + inline jobs; no live OpenStack |
 | CI branch | `main` | clone default **`master`**; `main` also exists on origin |

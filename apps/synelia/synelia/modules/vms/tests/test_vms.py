@@ -12,7 +12,15 @@ async def _espace_demo(client) -> str:
 async def _gabarit_id(client, nom: str = "medium") -> str:
     r = await client.get("/v1/catalogue/gabarits")
     assert r.status_code == 200
-    return next(g["id"] for g in r.json() if g["nom"] == nom)
+    gabarits = r.json()
+    cible = nom.lower()
+    for g in gabarits:
+        if g["id"].lower() in {cible, f"g1.{cible}"} or g["nom"].lower() == cible:
+            return g["id"]
+    for g in gabarits:
+        if cible in g["nom"].lower() or cible in g["id"].lower():
+            return g["id"]
+    raise AssertionError(f"gabarit {nom!r} introuvable: {[(g['id'], g['nom']) for g in gabarits]}")
 
 
 async def _image_id(client) -> str:

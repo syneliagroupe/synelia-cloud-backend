@@ -33,7 +33,5 @@ async def test_organisation_active_inexistante_rejetee(client):
     assert r.status_code == 422, r.text
 
     org = (await client.get("/v1/moi")).json()["organisationActive"]
-    r = await client.put(
-        "/v1/moi/organisation-active", json={"orgId": org, "memoriser": False}
-    )
+    r = await client.put("/v1/moi/organisation-active", json={"orgId": org, "memoriser": False})
     assert r.status_code == 200, r.text

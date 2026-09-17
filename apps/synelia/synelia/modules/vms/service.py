@@ -377,7 +377,8 @@ class ExecuteurVmCompose(Executeur):
                             "ramGo": mac["ramGo"],
                             "diskGo": mac["diskGo"],
                             "nics": mac.get("nics") or 1,
-                            "ip_privee": srv.get("ip_privee") or ip_privee_mac(machine_nom, mac["imageId"]),
+                            "ip_privee": srv.get("ip_privee")
+                            or ip_privee_mac(machine_nom, mac["imageId"]),
                             "backupPlanId": mac.get("backupPlanId"),
                         }
                     )

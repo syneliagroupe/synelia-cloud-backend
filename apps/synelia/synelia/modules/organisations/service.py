@@ -104,8 +104,7 @@ async def impayes(ctx: Contexte, org_id: str) -> list[m.Impaye]:
 async def tickets_organisation(ctx: Contexte, org_id: str) -> list[m.Ticket]:
     q = select(Ressource).where(Ressource.type == "ticket", Ressource.org_id == org_id)
     return [
-        m.Ticket.model_validate(r.donnees)
-        for r in (await ctx.session.execute(q)).scalars().all()
+        m.Ticket.model_validate(r.donnees) for r in (await ctx.session.execute(q)).scalars().all()
     ]
 
 

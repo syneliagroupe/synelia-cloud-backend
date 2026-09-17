@@ -83,7 +83,9 @@ def _comparer(conn: Any) -> list[str]:
             type_modele = _type_normalise(str(col.type.compile(dialect=conn.dialect)))
             type_db = _type_normalise(str(col_db["type"].compile(dialect=conn.dialect)))
             if type_modele != type_db:
-                ecarts.append(f"{nom}.{col.name} : type={type_db} en base, {type_modele} dans le modèle")
+                ecarts.append(
+                    f"{nom}.{col.name} : type={type_db} en base, {type_modele} dans le modèle"
+                )
 
         colonnes_en_trop = set(colonnes_db) - {c.name for c in table.columns}
         for c in sorted(colonnes_en_trop):

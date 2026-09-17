@@ -83,9 +83,7 @@ async def annuler_travail(ctx: Ctx, travailId: str) -> Any:  # noqa: N803
 
 
 @router.delete("/{travailId}", status_code=status.HTTP_204_NO_CONTENT)
-async def purger_travail(
-    ctx: Ctx, travailId: str, confirmation: str | None = None
-) -> Response:  # noqa: N803
+async def purger_travail(ctx: Ctx, travailId: str, confirmation: str | None = None) -> Response:  # noqa: N803
     """Retire une tâche terminée du centre de tâches — le journal d'audit garde la trace."""
     t = await _travail(ctx, travailId)
     exiger_confirmation(t.id, confirmation)

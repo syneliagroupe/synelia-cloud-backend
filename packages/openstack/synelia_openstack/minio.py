@@ -46,9 +46,7 @@ class MinioSimule:
     def supprimer_bucket(self, nom: str) -> None:
         return None
 
-    def definir_policy_bucket(
-        self, nom: str, policy: str, policy_json: str | None = None
-    ) -> None:
+    def definir_policy_bucket(self, nom: str, policy: str, policy_json: str | None = None) -> None:
         return None
 
     def deposer_objet(self, bucket: str, cle: str, contenu: bytes, content_type: str) -> None:
@@ -111,9 +109,7 @@ class MinioReel(MinioSimule):
         except Exception as exc:  # noqa: BLE001
             raise erreurs.amont_indisponible("minio", str(exc)) from exc
 
-    def definir_policy_bucket(
-        self, nom: str, policy: str, policy_json: str | None = None
-    ) -> None:
+    def definir_policy_bucket(self, nom: str, policy: str, policy_json: str | None = None) -> None:
         """Accès anonyme réel sur le bucket (`mc anonymous set`) : sans cet appel, le champ
         `policy` posé par l'API ne vit qu'en base — un bucket marqué "prive" resterait
         téléchargeable anonymement si MinIO n'a jamais reçu l'instruction (constaté en

@@ -141,8 +141,14 @@ async def assurer_cle_ssh_zone(ctx: Contexte) -> dict[str, str]:
         # sont déchargés via `asyncio.to_thread` : même garde que `vms.service`, sans quoi un
         # appel amont lent gèlerait la boucle asyncio — donc l'API entière, tous tenants
         # confondus.
-        await asyncio.to_thread(amont().assurer_keypair, nom, zone["ssh_publique"], identifiants=zone)
-        return {"ssh_prive": zone["ssh_prive"], "ssh_publique": zone["ssh_publique"], "ssh_cle_nom": nom}
+        await asyncio.to_thread(
+            amont().assurer_keypair, nom, zone["ssh_publique"], identifiants=zone
+        )
+        return {
+            "ssh_prive": zone["ssh_prive"],
+            "ssh_publique": zone["ssh_publique"],
+            "ssh_cle_nom": nom,
+        }
     r = reglages()
     if not r.vps_zone_espace_id:
         return {}
@@ -232,7 +238,7 @@ DROP_IN_CONTAINERD = (
     "    content: |\n"
     "      [Service]\n"
     "      ExecStartPre=/bin/sh -c \"sed -i 's/^version = 4/version = 3/' "
-    "/etc/containerd/config.toml || true\"\n"
+    '/etc/containerd/config.toml || true"\n'
 )
 
 
@@ -854,8 +860,7 @@ def construire_site_stack(
 """
     else:  # `php` générique et `laravel` : même patron que le site par défaut de la VM
         fichiers[f"{racine}/www/index.php"] = (
-            "<?php\n"
-            f'echo "<h1>{hote}</h1><p>Synelia Web Cloud -- PHP " . phpversion() . "</p>";\n'
+            f'<?php\necho "<h1>{hote}</h1><p>Synelia Web Cloud -- PHP " . phpversion() . "</p>";\n'
         )
         services = f"""  {app_svc}:
     image: php:{php_version}-apache
@@ -865,7 +870,9 @@ def construire_site_stack(
     networks:
       - synelia
 """
-    compose = f"services:\n{services}\nnetworks:\n  synelia:\n    external: true\n    name: synelia\n"
+    compose = (
+        f"services:\n{services}\nnetworks:\n  synelia:\n    external: true\n    name: synelia\n"
+    )
     routage = f"""http:
   routers:
     {app_svc}:
@@ -975,7 +982,9 @@ class ExecuteurHebergementCreer(Executeur):
             # passe que par le load balancer partagé) : sans elle, `router_sites` ne peut pas
             # joindre cette VM après coup pour y installer une application supplémentaire —
             # le réseau privé de la zone VPS n'est routable que depuis l'intérieur du lab.
-            fip = await asyncio.to_thread(amont_identite().creer_ip_flottante, zone.get("projet_id"))
+            fip = await asyncio.to_thread(
+                amont_identite().creer_ip_flottante, zone.get("projet_id")
+            )
             ip_gestion = await asyncio.to_thread(
                 amont_identite().associer_ip_flottante, fip.get("id"), srv["id"]
             )
@@ -997,7 +1006,9 @@ class ExecuteurHebergementCreer(Executeur):
             zone = await zone_vps_secrets(ctx)
             lb_id = zone.get("lb_id")
             n = amont_network()
-            pool = await asyncio.to_thread(n.creer_pool, loadbalancer_id=lb_id, nom=f"pool-{hid[:8]}")
+            pool = await asyncio.to_thread(
+                n.creer_pool, loadbalancer_id=lb_id, nom=f"pool-{hid[:8]}"
+            )
             await depot.definir_secrets(ctx, hid, {"lb_pool_id": pool["id"]})
             c["lb_pool_id"] = pool["id"]
             # `travail.contexte` est réassigné après chaque effet de bord (pas seulement à la
@@ -1031,7 +1042,9 @@ class ExecuteurHebergementCreer(Executeur):
     async def terminer(self, ctx: Contexte, travail: Travail) -> None:
         h = await depot.obtenir(ctx, travail.cible_id or "")
         ip = travail.contexte.get("ip_privee") or ip_privee(h.id)
-        serveur = h.serveur.model_copy(update={"ip": ip, "statut": "en_ligne", "chargeCpuPct": 12.0})
+        serveur = h.serveur.model_copy(
+            update={"ip": ip, "statut": "en_ligne", "chargeCpuPct": 12.0}
+        )
         await depot.modifier(ctx, h.id, {"serveur": serveur.model_dump(mode="json")})
         base = await depot_bases.creer(
             ctx, construire_serveur_bases(ctx, travail.cible_id or ""), parent_id=travail.cible_id
@@ -1054,9 +1067,7 @@ class ExecuteurHebergementCreer(Executeur):
         pool_id = travail.contexte.get("lb_pool_id")
         membre_id = travail.contexte.get("lb_membre_id")
         if pool_id and membre_id:
-            await asyncio.to_thread(
-                n.supprimer_membre, pool_id, membre_id, loadbalancer_id=lb_id
-            )
+            await asyncio.to_thread(n.supprimer_membre, pool_id, membre_id, loadbalancer_id=lb_id)
         if pool_id:
             await asyncio.to_thread(n.supprimer_pool, pool_id, loadbalancer_id=lb_id)
         await depot.definir_statut(ctx, travail.cible_id or "", "suspendu")
@@ -1089,9 +1100,7 @@ class ExecuteurHebergementSupprimer(Executeur):
         pool_id = secrets.get("lb_pool_id")
         membre_id = secrets.get("lb_membre_id")
         if pool_id and membre_id:
-            await asyncio.to_thread(
-                n.supprimer_membre, pool_id, membre_id, loadbalancer_id=lb_id
-            )
+            await asyncio.to_thread(n.supprimer_membre, pool_id, membre_id, loadbalancer_id=lb_id)
         if pool_id:
             await asyncio.to_thread(n.supprimer_pool, pool_id, loadbalancer_id=lb_id)
         await depot.supprimer(ctx, travail.cible_id or "", logique=True)

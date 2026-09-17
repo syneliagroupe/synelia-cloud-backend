@@ -167,10 +167,7 @@ async def tetes_de_chaine(session: AsyncSession) -> list[dict[str, Any]]:
     for org_id, n in comptes:
         empreinte_tete = (
             await session.execute(
-                select(Audit.hash)
-                .where(Audit.org_id == org_id)
-                .order_by(desc(Audit.date))
-                .limit(1)
+                select(Audit.hash).where(Audit.org_id == org_id).order_by(desc(Audit.date)).limit(1)
             )
         ).scalar_one_or_none()
         tetes.append({"orgId": org_id, "nombreDeLignes": n, "empreinteDeTete": empreinte_tete})

@@ -354,9 +354,7 @@ async def creer_bucket(
     corps: m.BucketCreation, ctx: Contexte = Depends(exige("vm.create_delete"))
 ) -> Any:
     if not corps.nom or not corps.nom.strip():
-        raise erreurs.validation(
-            "Le nom du bucket est requis.", {"nom": "Champ requis."}
-        )
+        raise erreurs.validation("Le nom du bucket est requis.", {"nom": "Champ requis."})
     await depot_bucket.exiger_nom_libre(ctx, corps.nom)
     nom_reel = service.nom_reel_bucket(ctx, corps.nom)
     amont = service.amont_objet()

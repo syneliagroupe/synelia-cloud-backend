@@ -105,7 +105,13 @@ async def test_cycle_bucket(client):
 
     r = await client.patch(
         f"/v1/buckets/{bid}",
-        json={"espaceId": espace_id, "nom": "archives-prod", "region": "ABJ", "classe": "chaud", "policy": "prive"},
+        json={
+            "espaceId": espace_id,
+            "nom": "archives-prod",
+            "region": "ABJ",
+            "classe": "chaud",
+            "policy": "prive",
+        },
     )
     assert r.status_code == 200 and r.json()["classe"] == "chaud"
 

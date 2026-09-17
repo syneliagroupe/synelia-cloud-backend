@@ -25,9 +25,7 @@ class SshSimule:
     ) -> None:
         return None
 
-    def executer(
-        self, hote: str, cle_privee: str, commande: str, utilisateur: str = "root"
-    ) -> str:
+    def executer(self, hote: str, cle_privee: str, commande: str, utilisateur: str = "root") -> str:
         return ""
 
 
@@ -73,9 +71,7 @@ class SshReel(SshSimule):
         finally:
             client.close()
 
-    def executer(
-        self, hote: str, cle_privee: str, commande: str, utilisateur: str = "root"
-    ) -> str:
+    def executer(self, hote: str, cle_privee: str, commande: str, utilisateur: str = "root") -> str:
         from synelia_kernel import erreurs
 
         client = self._client(hote, cle_privee, utilisateur)

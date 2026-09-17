@@ -145,8 +145,8 @@ async def _principal_depuis_jeton(session: AsyncSession, jeton: str) -> Principa
             raise erreurs.non_authentifie("Session révoquée ou expirée.")
         if not s.mfa_validee:
             raise erreurs.non_authentifie("Second facteur requis.")
-        inactivite_min = (await _politiques_org(session, s.org_id)).get("session", {}).get(
-            "inactiviteMin"
+        inactivite_min = (
+            (await _politiques_org(session, s.org_id)).get("session", {}).get("inactiviteMin")
         )
         reference = s.derniere_activite_le or s.cree_le
         if (

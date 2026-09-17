@@ -28,9 +28,7 @@ depot_modeles = Depot(
     libelle="Modèle IA",
     champs_recherche=("nom", "slug", "editeur"),
 )
-depot_agents = Depot(
-    "agent_ia", m.AgentIA, libelle="Agent IA", champs_recherche=("nom", "modele")
-)
+depot_agents = Depot("agent_ia", m.AgentIA, libelle="Agent IA", champs_recherche=("nom", "modele"))
 
 # Taux de change indicatif, l'API OpenRouter facture en USD. Pas d'appel FX en direct pour ce MVP.
 TAUX_USD_XOF = 610
@@ -75,7 +73,11 @@ SEMENCES: list[m.ModeleIA] = [
         prixSortie=120,
         unite="jeton",
         statut="disponible",
-        usages=["Réponses courtes", "Volume élevé", "Secours si le garde-fou OpenRouter bloque les autres modèles"],
+        usages=[
+            "Réponses courtes",
+            "Volume élevé",
+            "Secours si le garde-fou OpenRouter bloque les autres modèles",
+        ],
         description=(
             "Vérifié en direct comme réellement autorisé sous le garde-fou restrictif du "
             "compte OpenRouter partagé (2026-09-07) — appelé réellement via LiteLLM/OpenRouter."
@@ -335,7 +337,9 @@ def _cle() -> str:
     return os.environ.get(ENV_CLE, "")
 
 
-async def _completer(modele: m.ModeleIA, agent: m.AgentIA, messages: list[dict[str, str]]) -> dict[str, Any]:
+async def _completer(
+    modele: m.ModeleIA, agent: m.AgentIA, messages: list[dict[str, str]]
+) -> dict[str, Any]:
     corps = {
         "model": modele.slug,
         "messages": messages,
@@ -356,9 +360,7 @@ async def _completer(modele: m.ModeleIA, agent: m.AgentIA, messages: list[dict[s
     latence_ms = int((time.perf_counter() - debut) * 1000)
 
     if r.status_code >= 400:
-        raise erreurs.amont_indisponible(
-            "litellm", f"HTTP {r.status_code} : {r.text[:200]}"
-        )
+        raise erreurs.amont_indisponible("litellm", f"HTTP {r.status_code} : {r.text[:200]}")
 
     donnees = r.json()
     reponse = donnees["choices"][0]["message"]["content"]
@@ -416,7 +418,9 @@ async def invoquer_messages(
     modele = await obtenir_modele_par_slug(ctx, agent.modele)
     if modele is None or not modele.invocable:
         raise erreurs.non_porte("Ce modèle n'est pas disponible sur cette passerelle.")
-    return await _completer(modele, agent, [{"role": "system", "content": agent.consigne}, *messages])
+    return await _completer(
+        modele, agent, [{"role": "system", "content": agent.consigne}, *messages]
+    )
 
 
 @peupleur

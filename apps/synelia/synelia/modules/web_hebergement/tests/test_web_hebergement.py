@@ -385,5 +385,3 @@ def test_garde_hebergements_proteges():
     assert not _suppression_automatique_interdite(
         hebergement("01a08abc-0000-0000-0000-000000000000", "srv-01a08abc")
     )
-
-

@@ -263,7 +263,10 @@ async def verifier_paiement_paystack(reference: str) -> dict[str, Any]:
     if donnees is None:
         raise erreurs.introuvable("Transaction Paystack", reference)
     confirme = await paystack.traiter_evenement_charge_reussie(donnees)
-    return {"reference": reference, "statut": "payee" if confirme or donnees.get("status") == "success" else "en_attente"}
+    return {
+        "reference": reference,
+        "statut": "payee" if confirme or donnees.get("status") == "success" else "en_attente",
+    }
 
 
 @router.post("/paystack/webhook", status_code=status.HTTP_200_OK)
@@ -485,12 +488,16 @@ async def obtenir_ventilation(
         for v in vms:
             ajouter(
                 "Calcul",
-                tarification._prix_ressource("vm", {"vcpu": v.vcpu, "ramGo": v.ramGo, "diskGo": 0}, 1),
+                tarification._prix_ressource(
+                    "vm", {"vcpu": v.vcpu, "ramGo": v.ramGo, "diskGo": 0}, 1
+                ),
             )
             ajouter("Stockage", tarification._prix_ressource("volume", {"tailleGo": v.diskGo}, 1))
         volumes = await Depot("volume", m.Volume).tous(ctx)
         for vol in volumes:
-            ajouter("Stockage", tarification._prix_ressource("volume", {"tailleGo": vol.tailleGo}, 1))
+            ajouter(
+                "Stockage", tarification._prix_ressource("volume", {"tailleGo": vol.tailleGo}, 1)
+            )
         lbs = await Depot("load_balancer", m.LoadBalancer).tous(ctx)
         ajouter("Réseau", metrologie.PRIX["lb_jour"] * 30 * len(lbs))
         ips_publiques = sum(1 for v in vms for ip in v.ips if ip.type == "publique")
@@ -500,9 +507,7 @@ async def obtenir_ventilation(
         # répartition interne « Par Espace Cloud » affichait cet UUID brut à la place du
         # code lisible de l'Espace (constaté en direct via `/facturation/ventilation?axe=
         # espace`) — même bug que si `application` était resté sur `applicationId` seul.
-        codes_espace = {
-            e.id: e.code for e in await Depot("espace", m.EspaceCloud).tous(ctx)
-        }
+        codes_espace = {e.id: e.code for e in await Depot("espace", m.EspaceCloud).tous(ctx)}
         for v in vms:
             if axe == "application":
                 label = v.applicationNom or v.applicationId or "Général"

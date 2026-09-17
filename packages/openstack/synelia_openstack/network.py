@@ -80,7 +80,9 @@ class NetworkSimule:
     def associer_ip_flottante_lb_existante(self, fip_id: str, lb_id: str) -> str | None:
         return self.allouer_vip()
 
-    def creer_pool(self, *, loadbalancer_id: str | None, nom: str, protocole: str = "http") -> dict[str, Any]:
+    def creer_pool(
+        self, *, loadbalancer_id: str | None, nom: str, protocole: str = "http"
+    ) -> dict[str, Any]:
         return {"id": f"pool-{nouvel_id()[:8]}"}
 
     def supprimer_pool(self, pool_id: str, loadbalancer_id: str | None = None) -> None:
@@ -122,7 +124,9 @@ class NetworkSimule:
     ) -> dict[str, Any]:
         return {"id": f"mon-{nouvel_id()[:8]}"}
 
-    def supprimer_moniteur_sante(self, moniteur_id: str, loadbalancer_id: str | None = None) -> None:
+    def supprimer_moniteur_sante(
+        self, moniteur_id: str, loadbalancer_id: str | None = None
+    ) -> None:
         return None
 
     def supprimer_regle_hote(self, policy_id: str, loadbalancer_id: str | None = None) -> None:
@@ -398,7 +402,9 @@ class NetworkOpenStack(NetworkSimule):
             self._attendre_actif(c, loadbalancer_id)
         return {"id": mon.id}
 
-    def supprimer_moniteur_sante(self, moniteur_id: str, loadbalancer_id: str | None = None) -> None:
+    def supprimer_moniteur_sante(
+        self, moniteur_id: str, loadbalancer_id: str | None = None
+    ) -> None:
         c = self._c()
         c.load_balancer.delete_health_monitor(moniteur_id, ignore_missing=True)
         if loadbalancer_id:

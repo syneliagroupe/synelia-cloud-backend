@@ -176,7 +176,9 @@ def _regle_neutron(regle: m.RegleSecurite) -> dict[str, object]:
     return attrs
 
 
-async def creer_groupe_amont(ctx: Contexte, espace_id: str, nom: str, description: str | None) -> str:
+async def creer_groupe_amont(
+    ctx: Contexte, espace_id: str, nom: str, description: str | None
+) -> str:
     projet_id = await _projet_id(ctx, espace_id)
     return await asyncio.to_thread(amont().creer_groupe, nom, description, projet_id)
 

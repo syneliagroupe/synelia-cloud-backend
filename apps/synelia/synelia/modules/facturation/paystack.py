@@ -138,7 +138,9 @@ async def confirmer_paiement(
                     recu=montant_paye,
                 )
                 return False
-            await crediter(ctx, org_id, f"Paiement Paystack facture {facture.numero}", facture.total)
+            await crediter(
+                ctx, org_id, f"Paiement Paystack facture {facture.numero}", facture.total
+            )
             await depot.definir_statut(ctx, facture_id, "payee", moyen=moyen)
             await journaliser(
                 ctx,
@@ -200,7 +202,12 @@ async def confirmer_prepaiement(
                 action="prepaiement.paystack",
                 cible_type="ecriture",
                 cible_id=id_ecriture,
-                details={"fournisseur": "paystack", "reference": reference, "moyen": moyen, "montant": montant_paye},
+                details={
+                    "fournisseur": "paystack",
+                    "reference": reference,
+                    "moyen": moyen,
+                    "montant": montant_paye,
+                },
             )
             await session.commit()
             log.info("paystack.prepaiement_confirme", reference=reference, montant=montant_paye)

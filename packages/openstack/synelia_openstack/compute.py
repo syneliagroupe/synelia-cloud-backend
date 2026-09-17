@@ -282,7 +282,10 @@ class ComputeOpenStack(ComputeSimule):
             "image_id": kw["image_id"],
             "flavor_id": kw["gabarit_id"],
             "networks": [{"uuid": kw["reseau_id"]}] if kw.get("reseau_id") else "auto",
-            "metadata": {"synelia_org": str(kw.get("org_id") or ""), "synelia_espace": str(kw.get("espace_id") or "")},
+            "metadata": {
+                "synelia_org": str(kw.get("org_id") or ""),
+                "synelia_espace": str(kw.get("espace_id") or ""),
+            },
         }
         if kw.get("cle_ssh"):
             params["key_name"] = kw["cle_ssh"]
@@ -330,7 +333,15 @@ class ComputeOpenStack(ComputeSimule):
             if isinstance(exc, _e.AppError):
                 raise
             raise traduire(exc, "Machine virtuelle") from None
-        ip = next((a["addr"] for nets in (s.addresses or {}).values() for a in nets if a.get("version") == 4), None)
+        ip = next(
+            (
+                a["addr"]
+                for nets in (s.addresses or {}).values()
+                for a in nets
+                if a.get("version") == 4
+            ),
+            None,
+        )
         return {"id": s.id, "statut": s.status, "ip_privee": ip}
 
     def assurer_keypair(

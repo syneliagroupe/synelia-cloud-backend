@@ -8,7 +8,7 @@ COPY pyproject.toml uv.lock ./
 COPY apps ./apps
 COPY packages ./packages
 COPY tools ./tools
-RUN uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev --extra temporal --extra openstack
 RUN useradd -r -u 1001 synelia && chown -R synelia /app
 USER synelia
 ENV PATH="/app/.venv/bin:$PATH" PORT=4000

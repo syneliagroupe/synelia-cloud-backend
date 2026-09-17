@@ -64,8 +64,7 @@ from synelia.deps.contexte import Contexte
 from synelia.modules.ia_agents import service
 from synelia.modules.ia_agents.service import depot_agents
 from synelia.securite import emettre_acces
-from synelia.travaux import Executeur, PauseHumaine, demarrer_travail, executeur
-from synelia.travaux import moteur
+from synelia.travaux import Executeur, PauseHumaine, demarrer_travail, executeur, moteur
 
 log = journal("ia_agents.flux")
 
@@ -251,7 +250,11 @@ async def _dispatch(
         return texte
 
     if etape.type in ("anonymisation", "habilitation", "transfert"):
-        return etat.derniere_sortie if etat.derniere_sortie is not None else etat.variables.get("entree")
+        return (
+            etat.derniere_sortie
+            if etat.derniere_sortie is not None
+            else etat.variables.get("entree")
+        )
 
     return None
 
@@ -262,7 +265,11 @@ async def _executer_agent(ctx: Contexte, etat: _Etat, etape: m.EtapeFlux) -> str
             f"Étape « {etape.nom} » : aucun agent référencé.", champs={"agentId": "requis"}
         )
     agent = await depot_agents.obtenir(ctx, etape.agentId)
-    base = etat.derniere_sortie if etat.derniere_sortie is not None else etat.variables.get("entree", "")
+    base = (
+        etat.derniere_sortie
+        if etat.derniere_sortie is not None
+        else etat.variables.get("entree", "")
+    )
     message = _rendre(str(base), etat.variables)
     fragments = etat.variables.get("_fragmentsConnaissance")
     if fragments:
@@ -292,8 +299,15 @@ def _executer_outil(etape: m.EtapeFlux) -> dict[str, Any]:
 
 async def _executer_connaissance(ctx: Contexte, etat: _Etat, etape: m.EtapeFlux) -> dict[str, Any]:
     if not etape.connaissanceId:
-        return {"fragments": [], "note": "Étape connaissance sans connaissanceId : rien à chercher."}
-    base = etat.derniere_sortie if etat.derniere_sortie is not None else etat.variables.get("entree", "")
+        return {
+            "fragments": [],
+            "note": "Étape connaissance sans connaissanceId : rien à chercher.",
+        }
+    base = (
+        etat.derniere_sortie
+        if etat.derniere_sortie is not None
+        else etat.variables.get("entree", "")
+    )
     requete = _rendre(str(base), etat.variables)
     port = os.environ.get("PORT", "4000")
     url = f"http://127.0.0.1:{port}/v1/ia/connaissances/{etape.connaissanceId}/rechercher"
@@ -327,7 +341,9 @@ async def _executer_connaissance(ctx: Contexte, etat: _Etat, etape: m.EtapeFlux)
         raise erreurs.amont_indisponible("connaissances", f"HTTP {r.status_code} : {r.text[:200]}")
     donnees = r.json()
     fragments = donnees.get("fragments") or []
-    etat.variables["_fragmentsConnaissance"] = "\n".join(f"- {f.get('texte', '')}" for f in fragments)
+    etat.variables["_fragmentsConnaissance"] = "\n".join(
+        f"- {f.get('texte', '')}" for f in fragments
+    )
     return donnees
 
 
@@ -337,7 +353,9 @@ async def _executer_routeur(
     branches = etape.branches or []
     par_defaut = next((b for b in branches if b.parDefaut), None)
     candidates = [b for b in branches if not b.parDefaut]
-    retenues = [b for b in candidates if _condition_vraie(b.condition, etat.variables, etat.derniere_sortie)]
+    retenues = [
+        b for b in candidates if _condition_vraie(b.condition, etat.variables, etat.derniere_sortie)
+    ]
     if etape.modeRoutage != "toutes":
         retenues = retenues[:1]
     if not retenues and par_defaut is not None:
@@ -361,7 +379,9 @@ async def _executer_boucle(
     for i, item in enumerate(items[:max_iter]):
         etat.variables["item"] = item
         etat.variables["indexBoucle"] = i
-        resultats.append(await _executer_arbre(ctx, etat, travail, etape.corps or [], f"{suffixe}[{i}]"))
+        resultats.append(
+            await _executer_arbre(ctx, etat, travail, etape.corps or [], f"{suffixe}[{i}]")
+        )
     return resultats
 
 
@@ -378,7 +398,21 @@ def _executer_humain(etat: _Etat, etape: m.EtapeFlux, suffixe: str) -> str:
 
 _BUILTINS_AUTORISES = {
     n: getattr(builtins, n)
-    for n in ("str", "int", "float", "bool", "len", "abs", "round", "min", "max", "sum", "sorted", "list", "dict")
+    for n in (
+        "str",
+        "int",
+        "float",
+        "bool",
+        "len",
+        "abs",
+        "round",
+        "min",
+        "max",
+        "sum",
+        "sorted",
+        "list",
+        "dict",
+    )
 }
 
 
@@ -454,7 +488,10 @@ def _maj_stats_recursif(
             if info["coutFcfa"] is not None:
                 patch["coutPourMille"] = round(info["coutFcfa"] * 1000, 2)
         branches = (
-            [b.model_copy(update={"etapes": _maj_stats_recursif(b.etapes, agg)}) for b in e.branches]
+            [
+                b.model_copy(update={"etapes": _maj_stats_recursif(b.etapes, agg)})
+                for b in e.branches
+            ]
             if e.branches
             else None
         )
@@ -470,7 +507,9 @@ def _maj_stats_recursif(
     return nouvelles
 
 
-async def _appliquer_mesures(ctx: Contexte, flux: m.FluxOrchestration, mesures: list[dict[str, Any]]) -> None:
+async def _appliquer_mesures(
+    ctx: Contexte, flux: m.FluxOrchestration, mesures: list[dict[str, Any]]
+) -> None:
     if not mesures:
         return
     agg = _agreger(mesures)
@@ -503,13 +542,15 @@ async def demarrer_execution(
         cible_id=flux.id,
         entree={"entree": entree, "variables": overrides or {}},
         etapes=taches,
-        contexte={"variables": _preparer_variables(flux, entree, overrides), "resultats": {}, "messages": []},
+        contexte={
+            "variables": _preparer_variables(flux, entree, overrides),
+            "resultats": {},
+            "messages": [],
+        },
     )
 
 
-async def annuler_executions_en_cours(
-    ctx: Contexte, flux_id: str, *, motif: str
-) -> list[Travail]:
+async def annuler_executions_en_cours(ctx: Contexte, flux_id: str, *, motif: str) -> list[Travail]:
     """Suppression d'un flux (`DELETE /ia/flux/{id}`) : tout travail encore `queued`/`running`
     qui le référence — notamment une exécution en pause `humain` (`PauseHumaine`, voir le
     module) — resterait sinon un zombie éternel : le flux 404 désormais, `POST

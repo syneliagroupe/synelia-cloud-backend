@@ -337,7 +337,9 @@ async def test_cle_api_authentifie_une_requete_reelle(client):
     assert r.status_code == 201
     secret = r.json()["secret"]
 
-    r = await client.get("/v1/securite/cles-api", headers={"Authorization": "", "X-Api-Key": secret})
+    r = await client.get(
+        "/v1/securite/cles-api", headers={"Authorization": "", "X-Api-Key": secret}
+    )
     assert r.status_code == 200
 
     r = await client.get("/v1/audit", headers={"Authorization": "", "X-Api-Key": secret})

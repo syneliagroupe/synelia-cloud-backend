@@ -373,13 +373,9 @@ async def test_cycle_service_vm(client):
     r = await client.get(f"/v1/projets/{pid}/services/{web_id}")
     assert r.json()["statut"] == "stopped"
 
-    r = await client.delete(
-        f"/v1/projets/{pid}/services/{web_id}", params={"confirmation": "web"}
-    )
+    r = await client.delete(f"/v1/projets/{pid}/services/{web_id}", params={"confirmation": "web"})
     assert r.status_code == 202 and r.json()["statut"] == "done"
-    r = await client.delete(
-        f"/v1/projets/{pid}/services/{pg['id']}", params={"confirmation": "pg"}
-    )
+    r = await client.delete(f"/v1/projets/{pid}/services/{pg['id']}", params={"confirmation": "pg"})
     assert r.status_code == 202 and r.json()["statut"] == "done"
     r = await client.get(f"/v1/projets/{pid}/services")
     assert len(r.json()) == 0

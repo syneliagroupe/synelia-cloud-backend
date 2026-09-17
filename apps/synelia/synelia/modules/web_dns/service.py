@@ -21,6 +21,7 @@ def amont() -> DesignateSimule:
     existait déjà dans `packages/openstack` mais n'était jamais importé nulle part."""
     return fournisseur(DesignateSimule, DesignateOpenStack)
 
+
 NS_DEFAUTS = ["ns1.synelia.cloud", "ns2.synelia.cloud"]
 
 MODELES_DNS = [

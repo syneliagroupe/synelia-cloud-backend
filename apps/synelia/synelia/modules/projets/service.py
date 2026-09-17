@@ -247,7 +247,9 @@ async def _assurer_vm_projet(ctx: Contexte, projet: m.Projet) -> dict[str, Any]:
         cle_ssh=cle.get("ssh_cle_nom"),
         cloud_init=construire_cloud_init_vm_projet(cle.get("ssh_publique")),
     )
-    ip_privee = srv.get("ip_privee") or f"10.{hash(projet.id) % 250}.0.{hash('vm-projet') % 250 + 2}"
+    ip_privee = (
+        srv.get("ip_privee") or f"10.{hash(projet.id) % 250}.0.{hash('vm-projet') % 250 + 2}"
+    )
     # IP flottante de gestion SSH backend — même raison que `web_hebergement` : le réseau privé
     # de la zone VPS n'est routable que depuis l'intérieur du lab OpenStack, le trafic HTTP
     # public lui ne passe jamais par elle (uniquement par le load balancer partagé).
@@ -343,7 +345,9 @@ async def _installer_service_vm(
     hote = domaine_service_vm(service.id) if expose else None
     compose, routage = construire_service_stack_vm(service, image, env, port, hote)
     racine = dossier_service_vm(service.id)
-    await asyncio.to_thread(ssh.ecrire_fichier, ip, cle_privee, f"{racine}/docker-compose.yml", compose)
+    await asyncio.to_thread(
+        ssh.ecrire_fichier, ip, cle_privee, f"{racine}/docker-compose.yml", compose
+    )
     if routage:
         await asyncio.to_thread(
             ssh.ecrire_fichier,
@@ -543,7 +547,9 @@ def env_projet(projet: m.Projet, service: m.ServiceProjet) -> dict[str, str]:
     return {
         v.cle: v.valeur
         for v in projet.variables
-        if v.portee == "runtime" and service.environnement in v.environnements and v.valeur is not None
+        if v.portee == "runtime"
+        and service.environnement in v.environnements
+        and v.valeur is not None
     }
 
 

@@ -78,9 +78,7 @@ class ExecuteurSauvegardeRestore(Executeur):
         if index == 1:  # « Restaurer les fichiers » (catalogue `web.backup.restore`)
             entre = travail.entree or {}
             s = await depot.obtenir(ctx, travail.cible_id or "")
-            execution = next(
-                (e for e in s.executions if e.id == entre.get("executionId")), None
-            )
+            execution = next((e for e in s.executions if e.id == entre.get("executionId")), None)
             # Une restauration ne vaut que ce que vaut l'image qu'elle restaurerait — même
             # garde-fou que `ExecuteurSauvegardeTestRestauration` : point inconnu (ex. demo),
             # granularité que la sauvegarde ne capture pas (elle ne fait qu'un instantané

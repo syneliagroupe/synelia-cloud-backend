@@ -66,7 +66,11 @@ async def test_cle_ia_modele_non_autorise(client):
 async def test_cle_ia_residence_max_bloque_modele_externe(client):
     r = await client.post(
         "/v1/ia/cles",
-        json={"nom": "Clé souveraine", "espaceId": "espace-demo-abj", "residenceMax": "reglementee"},
+        json={
+            "nom": "Clé souveraine",
+            "espaceId": "espace-demo-abj",
+            "residenceMax": "reglementee",
+        },
     )
     secret = r.json()["secret"]
     _mock_llm()
@@ -115,7 +119,8 @@ async def test_cle_ia_depassement_alerter_laisse_passer(client):
 @respx.mock
 async def test_cle_ia_debit_max_par_minute(client):
     r = await client.post(
-        "/v1/ia/cles", json={"nom": "Clé débit", "espaceId": "espace-demo-abj", "debitMaxParMinute": 1}
+        "/v1/ia/cles",
+        json={"nom": "Clé débit", "espaceId": "espace-demo-abj", "debitMaxParMinute": 1},
     )
     secret = r.json()["secret"]
     _mock_llm()
@@ -142,7 +147,9 @@ async def test_revoquer_cle_ia(client):
 
 @respx.mock
 async def test_rotationner_cle_ia_invalide_l_ancien_secret(client):
-    r = await client.post("/v1/ia/cles", json={"nom": "Clé tournante", "espaceId": "espace-demo-abj"})
+    r = await client.post(
+        "/v1/ia/cles", json={"nom": "Clé tournante", "espaceId": "espace-demo-abj"}
+    )
     cle_id = r.json()["cle"]["id"]
     ancien_prefixe = r.json()["cle"]["prefixe"]
     ancien_secret = r.json()["secret"]
@@ -152,7 +159,9 @@ async def test_rotationner_cle_ia_invalide_l_ancien_secret(client):
     assert r.status_code == 200, r.text
     corps = r.json()
     nouveau_secret = corps["secret"]
-    assert corps["cle"]["prefixe"] == ancien_prefixe, "le préfixe visible ne change pas à la rotation"
+    assert corps["cle"]["prefixe"] == ancien_prefixe, (
+        "le préfixe visible ne change pas à la rotation"
+    )
     assert nouveau_secret != ancien_secret
 
     # l'ancien secret ne fonctionne plus.

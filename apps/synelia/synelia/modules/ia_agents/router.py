@@ -602,7 +602,5 @@ async def revoquer_cle_ia(
 @router.post(
     "/ia/cles/{cleId}/rotation", response_model=m.CleIASecret, response_model_exclude_none=True
 )
-async def rotationner_cle_ia(
-    cleId: str, ctx: Contexte = Depends(exige("ia.key.manage"))
-) -> Any:  # noqa: N803
+async def rotationner_cle_ia(cleId: str, ctx: Contexte = Depends(exige("ia.key.manage"))) -> Any:  # noqa: N803
     return await cles.rotation(ctx, cleId)

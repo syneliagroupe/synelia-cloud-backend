@@ -115,7 +115,9 @@ class ExecuteurEspaceCreate(Executeur):
                 a.poser_quotas, c["projet_id"], e.quota.vcpu, e.quota.ramGo, e.quota.stockageTo
             )
         elif index == 2:
-            c.update(await asyncio.to_thread(a.creer_reseau, c["projet_id"], f"{e.code}-net", e.cidr))
+            c.update(
+                await asyncio.to_thread(a.creer_reseau, c["projet_id"], f"{e.code}-net", e.cidr)
+            )
             await depot.definir_secrets(
                 ctx,
                 e.id,
@@ -268,7 +270,9 @@ async def _provisionner_zone_vps(session: AsyncSession, espace_id: str, org_id: 
         else:
             os.environ["SYNELIA_TRAVAUX_EN_LIGNE"] = ancienne
     if resultat.get("statut") != "done":
-        log.error("zone_vps.provisioning_echoue", espace_id=espace_id, statut=resultat.get("statut"))
+        log.error(
+            "zone_vps.provisioning_echoue", espace_id=espace_id, statut=resultat.get("statut")
+        )
         return
     ligne = await session.get(Ressource, espace_id)
     if ligne is not None:

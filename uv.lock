@@ -3160,6 +3160,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+openstack = [
+    { name = "openstacksdk" },
+]
 paiements = [
     { name = "stripe" },
 ]
@@ -3180,6 +3183,7 @@ requires-dist = [
     { name = "jinja2", specifier = ">=3.1" },
     { name = "joserfc", specifier = ">=1.0" },
     { name = "openstacksdk", specifier = ">=4.0" },
+    { name = "openstacksdk", marker = "extra == 'openstack'", specifier = ">=4.0" },
     { name = "opentelemetry-exporter-otlp", specifier = ">=1.44.0" },
     { name = "opentelemetry-instrumentation-fastapi", specifier = ">=0.65b0" },
     { name = "opentelemetry-sdk", specifier = ">=1.44.0" },
@@ -3200,7 +3204,7 @@ requires-dist = [
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
     { name = "weasyprint", marker = "extra == 'pdf'", specifier = ">=63" },
 ]
-provides-extras = ["temporal", "pdf", "paiements"]
+provides-extras = ["temporal", "openstack", "pdf", "paiements"]
 
 [[package]]
 name = "synelia-catalogue"

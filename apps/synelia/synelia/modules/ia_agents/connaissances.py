@@ -89,7 +89,11 @@ def decouper_general(texte: str, taille_mots: int = 220, chevauchement_mots: int
 
 
 async def extraire_texte(
-    nom_fichier: str, *, texte: str | None = None, contenu_base64: str | None = None, url: str | None = None
+    nom_fichier: str,
+    *,
+    texte: str | None = None,
+    contenu_base64: str | None = None,
+    url: str | None = None,
 ) -> str:
     if texte:
         return texte
@@ -326,7 +330,9 @@ class ExecuteurIngestionDocument(Executeur):
         if connaissance is None:
             return
         message = (travail.erreur or {}).get("message", "Échec de l'ingestion.")
-        await depot_connaissance.modifier(ctx, connaissance.id, {"statut": "erreur", "erreur": message})
+        await depot_connaissance.modifier(
+            ctx, connaissance.id, {"statut": "erreur", "erreur": message}
+        )
 
     async def terminer(self, ctx: Contexte, travail: Travail) -> None:
         connaissance = await depot_connaissance.obtenir(ctx, travail.cible_id or "")

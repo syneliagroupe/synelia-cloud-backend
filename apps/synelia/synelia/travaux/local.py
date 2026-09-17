@@ -35,9 +35,7 @@ async def reprendre_orphelins(session: Any) -> int:
     voir `packages/db/synelia_db/modeles/travaux.py`) : le filtre `attente` se fait en Python,
     quelques lignes au plus."""
     lignes = (
-        (await session.execute(select(Travail).where(Travail.statut == "running")))
-        .scalars()
-        .all()
+        (await session.execute(select(Travail).where(Travail.statut == "running"))).scalars().all()
     )
     n = 0
     for travail in lignes:

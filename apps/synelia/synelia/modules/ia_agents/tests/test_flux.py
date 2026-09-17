@@ -172,7 +172,10 @@ async def test_flux_pause_humaine_puis_reprise(client):
     assert corps["statut"] == "running", corps
     travail_id = corps["id"]
     tache_humain = next(t for t in corps["taches"] if t["nom"] == "e-humain")
-    assert "attente" in tache_humain["message"].lower() or "validation" in tache_humain["message"].lower()
+    assert (
+        "attente" in tache_humain["message"].lower()
+        or "validation" in tache_humain["message"].lower()
+    )
 
     # Tant qu'aucune décision n'est prise, le travail reste en l'état si on le relit.
     r = await client.get(f"/v1/travaux/{travail_id}")

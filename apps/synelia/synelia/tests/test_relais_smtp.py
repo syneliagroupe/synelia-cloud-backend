@@ -82,9 +82,7 @@ async def test_cle_revoquee_refusee(client):
     await _activer_relais(client)
     r = await client.post("/v1/web/smtp/cles", json={"nom": "app-a-revoquer"})
     cle = r.json()["cle"]
-    r = await client.delete(
-        f"/v1/web/smtp/cles/{cle['id']}", params={"confirmation": cle["nom"]}
-    )
+    r = await client.delete(f"/v1/web/smtp/cles/{cle['id']}", params={"confirmation": cle["nom"]})
     assert r.status_code == 204
 
     await rs._rafraichir_cache()

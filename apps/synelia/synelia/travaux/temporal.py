@@ -11,10 +11,9 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import Any
 
-from temporalio import activity, workflow
-
 from synelia_db.modeles import Travail
 from synelia_kernel.config import reglages
+from temporalio import activity, workflow
 
 FILE = "synelia-travaux"
 

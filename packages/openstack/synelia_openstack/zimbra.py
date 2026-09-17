@@ -159,7 +159,9 @@ class ZimbraReel(ZimbraSimule):
         id_ = self._domaine_id(domaine)
         if not id_:
             return None
-        corps = f'<DeleteDomainRequest xmlns="{_NS_ADMIN}"><id>{escape(id_)}</id></DeleteDomainRequest>'
+        corps = (
+            f'<DeleteDomainRequest xmlns="{_NS_ADMIN}"><id>{escape(id_)}</id></DeleteDomainRequest>'
+        )
         self._admin(corps)
         return None
 
