@@ -17,11 +17,14 @@ _cache: dict[str, tuple[float, Any]] = {}
 
 
 def _memo(cle: str, fabrique):  # type: ignore[no-untyped-def]
-    t, v = _cache.get(cle, (0.0, None))
-    if time.monotonic() - t > 600:
+    # Ne pas utiliser (0.0, None) comme défaut : `time.monotonic()` est l'uptime, souvent
+    # < 600 s sur un runner CI frais, ce qui renvoyait None sans jamais appeler la fabrique.
+    entre = _cache.get(cle)
+    if entre is None or time.monotonic() - entre[0] > 600:
         v = fabrique()
         _cache[cle] = (time.monotonic(), v)
-    return v
+        return v
+    return entre[1]
 
 
 @router.get("/gabarits", response_model=list[m.Gabarit], response_model_exclude_none=True)
