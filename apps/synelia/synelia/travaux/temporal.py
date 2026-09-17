@@ -1,10 +1,10 @@
-"""Moteur Temporal : workflow générique `TravailWorkflow` qui rejoue les étapes via l'exécuteur du module.
+"""Moteur Temporal : ouverture et relance du workflow générique `TravailWorkflow`.
 
-Activé par SYNELIA_TEMPORAL_ADRESSE ; nécessite l'extra `temporal` (`uv sync --extra temporal`).
+Le workflow et son activité vivent dans `synelia.flux_travaux` (le SDK exige des classes de
+workflow au niveau module, réimportables dans le bac à sable) ; ici seul le client Temporal est
+utilisé, sans importer `temporalio` au chargement du module.
 
-Les classes workflow doivent être définies au niveau module : Temporal refuse
-`@workflow.run` sur une classe locale (`<locals>` dans le qualname).
-"""
+Activé par SYNELIA_TEMPORAL_ADRESSE ; nécessite l'extra `temporal` (`uv sync --extra temporal`)."""
 
 from __future__ import annotations
 
@@ -13,7 +13,6 @@ from typing import Any
 
 from synelia_db.modeles import Travail
 from synelia_kernel.config import reglages
-from temporalio import activity, workflow
 
 FILE = "synelia-travaux"
 
@@ -50,41 +49,8 @@ async def relancer(travail: Travail) -> None:
         )
 
 
-@activity.defn(name="executer_etapes")
-async def executer_etapes(entree: dict[str, Any]) -> str:
-    from synelia.travaux.worker_ctx import executer_depuis_worker
-
-    return await executer_depuis_worker(entree["travail_id"], entree.get("depuis"))
-
-
-@workflow.defn(name="TravailWorkflow")
-class TravailWorkflow:
-    def __init__(self) -> None:
-        self._relance = False
-
-    @workflow.signal
-    def relancer(self) -> None:
-        self._relance = True
-
-    @workflow.run
-    async def run(self, entree: dict[str, Any]) -> str:
-        statut = await workflow.execute_activity(
-            executer_etapes,
-            entree,
-            start_to_close_timeout=timedelta(hours=2),
-            heartbeat_timeout=timedelta(minutes=5),
-        )
-        while statut in {"failed", "rolled_back"}:
-            await workflow.wait_condition(lambda: self._relance)
-            self._relance = False
-            statut = await workflow.execute_activity(
-                executer_etapes,
-                {"travail_id": entree["travail_id"], "depuis": None},
-                start_to_close_timeout=timedelta(hours=2),
-            )
-        return statut
-
-
 def definitions() -> tuple[list[Any], list[Any]]:
     """Workflow + activités à enregistrer par le worker (`synelia worker`)."""
+    from synelia.flux_travaux import TravailWorkflow, executer_etapes
+
     return [TravailWorkflow], [executer_etapes]

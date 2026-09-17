@@ -12,7 +12,8 @@ jobs:
       - run: uv sync --frozen
       - run: uv run ruff check .
       - run: uv run ruff format --check .
-      - run: uv run pytest -q
+      # extra `temporal` : couvre les définitions enregistrées par `synelia worker`
+      - run: uv run --frozen --extra temporal pytest -q
       - name: Couverture du contrat
         run: uv run python tools/contrat_diff.py --strict
       - name: Image Docker
