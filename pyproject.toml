@@ -13,6 +13,14 @@ dependencies = [
   "synelia-testing",
 ]
 
+[project.optional-dependencies]
+# Dockerfile / compose use `uv sync --extra temporal` on this root package.
+# The extras themselves live on workspace member `synelia`.
+temporal = ["synelia[temporal]"]
+openstack = ["synelia[openstack]"]
+pdf = ["synelia[pdf]"]
+paiements = ["synelia[paiements]"]
+
 [dependency-groups]
 dev = [
   "ruff>=0.14",
