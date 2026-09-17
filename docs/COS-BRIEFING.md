@@ -2,7 +2,7 @@
 
 Read-this-first map of the Python FastAPI backend that serves the Synelia Cloud portal contract. Companion to `README.md`, `docs/GUIDE-MODULE.md`, and `docs/PLAN-DIRECTEUR-PYTHON.md`.
 
-**Repo:** `jvkassi/synelia-cloud-backend` (uv workspace, Python 3.13 / `.python-version`, `requires-python >= 3.12`).  
+**Repo:** `syneliagroupe/synelia-cloud-backend` (uv workspace, Python 3.13 / `.python-version`, `requires-python >= 3.12`).  
 **Contract:** OpenAPI 3.0.3 — **514 operations**, **364 paths**, **218 schemas**, **40 tags**.  
 **Portal:** [synelia-cloud](https://github.com/jvkassi/synelia-cloud) (Next.js). This backend is the Python variant of the director plan (no Blesta; OpenStack lab as production IaaS).
 
