@@ -17,11 +17,16 @@ _cache: dict[str, tuple[float, Any]] = {}
 
 
 def _memo(cle: str, fabrique):  # type: ignore[no-untyped-def]
-    t, v = _cache.get(cle, (0.0, None))
-    if time.monotonic() - t > 600:
-        v = fabrique()
-        _cache[cle] = (time.monotonic(), v)
-    return v
+    # L'absence d'entrée se teste sur le dictionnaire, jamais sur un horodatage sentinelle :
+    # `time.monotonic()` compte depuis le démarrage de la machine, donc sur un hôte fraîchement
+    # démarré (runner de CI) `monotonic() - 0.0 > 600` est faux et un sentinelle `0.0` renvoyait
+    # la valeur vide sans jamais appeler l'amont (vécu en CI : `TypeError` sur un `None`).
+    entree = _cache.get(cle)
+    if entree is not None and time.monotonic() - entree[0] <= 600:
+        return entree[1]
+    valeur = fabrique()
+    _cache[cle] = (time.monotonic(), valeur)
+    return valeur
 
 
 @router.get("/gabarits", response_model=list[m.Gabarit], response_model_exclude_none=True)
