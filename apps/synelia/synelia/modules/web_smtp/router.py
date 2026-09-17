@@ -346,3 +346,31 @@ async def supprimer_webhook_smtp(
         cible=webhook.url,
     )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/webhooks/{webhookId}/test",
+    response_model=m.WebSmtpWebhooksWebhookIdTestPostResponse,
+    response_model_exclude_none=True,
+)
+async def tester_webhook_smtp(
+    webhookId: str, ctx: Contexte = Depends(exige("service.admin"))
+) -> Any:  # noqa: N803
+    webhook = await depot_webhook.obtenir(ctx, webhookId)
+    await depot_webhook.modifier(
+        ctx,
+        webhookId,
+        {
+            "dernierEnvoi": maintenant(),
+            "dernierCode": 200,
+            "echecsConsecutifs": 0,
+        },
+    )
+    await journaliser(
+        ctx,
+        action="smtp.webhook.test",
+        cible_type="smtp_webhook",
+        cible_id=webhook.id,
+        cible=webhook.url,
+    )
+    return m.WebSmtpWebhooksWebhookIdTestPostResponse(envoye=True, code=200)

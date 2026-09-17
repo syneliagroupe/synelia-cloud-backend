@@ -84,6 +84,9 @@ async def test_webhooks_smtp(client):
     )
     assert r.status_code == 200 and r.json()["actif"] is False
 
+    r = await client.post(f"/v1/web/smtp/webhooks/{wid}/test")
+    assert r.status_code == 200 and r.json()["envoye"] is True
+
     r = await client.delete(f"/v1/web/smtp/webhooks/{wid}")
     assert r.status_code == 204
     assert (await client.get("/v1/web/smtp/webhooks")).json() == []
