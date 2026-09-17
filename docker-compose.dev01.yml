@@ -1,0 +1,196 @@
+# Hébergement du backend sur dev01, près du lab : Postgres durable + API en mode OpenStack réel.
+# Lancement : docker compose -f docker-compose.dev01.yml --env-file ~/.config/synelia/backend-dev01.env up -d --build
+name: synelia-backend-dev01
+
+# Variables communes à `api` et `worker` (§1 du plan d'architecture, docs/PLAN-ARCHITECTURE-SUITE.md) :
+# les deux processus parlent à OpenStack, MinIO, Zimbra, LiteLLM, Qdrant… avec les mêmes
+# identifiants — une ancre évite une copie divergente entre les deux services.
+x-env-backend: &env-backend
+  SYNELIA_ENV: production
+  SYNELIA_URL_PUBLIQUE: https://api.synelia.dev01.ovh.smile.ci
+  SYNELIA_URL_FRONTEND: https://app.synelia.dev01.ovh.smile.ci
+  # Rôle applicatif restreint (LOGIN, NOSUPERUSER, NOBYPASSRLS) — voir packages/db/synelia_db/
+  # rls.py. `synelia` (POSTGRES_PASSWORD) reste superutilisateur Postgres mais n'est plus
+  # utilisé que hors-ligne (docker exec psql) : un superutilisateur contourne toujours la
+  # RLS, donc ni l'API ni le worker ne doivent jamais s'y connecter.
+  SYNELIA_DATABASE_URL: postgresql+asyncpg://synelia_app:${SYNELIA_APP_DB_PASSWORD:?}@postgres:5432/synelia
+  SYNELIA_SECRET: ${SYNELIA_SECRET:?}
+  SYNELIA_SEED_ADMIN_MOT_DE_PASSE: ${SYNELIA_SEED_ADMIN_MOT_DE_PASSE:?}
+  SYNELIA_CORS_ORIGINES: '["*"]'
+  SYNELIA_FOURNISSEUR: openstack
+  SYNELIA_OS_AUTH_URL: ${SYNELIA_OS_AUTH_URL:?}
+  SYNELIA_OS_APPLICATION_CREDENTIAL_ID: ${SYNELIA_OS_APPLICATION_CREDENTIAL_ID:?}
+  SYNELIA_OS_APPLICATION_CREDENTIAL_SECRET: ${SYNELIA_OS_APPLICATION_CREDENTIAL_SECRET:?}
+  SYNELIA_OS_REGION: RegionOne
+  # Cluster Magnum désigné pour le PaaS (module applications/k8s_workload) : sans cette
+  # variable, K8sWorkloadReel reste indisponible et le PaaS retombe en simulation (choix
+  # délibéré, voir packages/openstack/synelia_openstack/k8s_workload.py).
+  SYNELIA_PAAS_CLUSTER_ID: ${SYNELIA_PAAS_CLUSTER_ID:?}
+  # Le vhost public de Magnum répond vite sur /clusters mais dépasse 60s (504) sur
+  # /certificates (RPC conductor + Barbican) une fois traversé depuis dev01 — l'endpoint
+  # interne répond en ~1s pour cette même route. Voir k8s_workload.py::_kubeconfig.
+  SYNELIA_OS_ENDPOINT_OVERRIDES: '{"container_infra": "http://192.168.26.234:9511/v1"}'
+  # Zone VPS partagée (web_hebergement) : bootstrap manuel one-shot, voir docs/runbooks.
+  SYNELIA_VPS_ZONE_ESPACE_ID: 01a072e1-e303-76c2-bb8a-c3142f1e8f01
+  SYNELIA_VPS_ZONE_ORG_ID: 01a06d82-5e1a-72d3-913b-f3d2c3f13081
+  SYNELIA_TRAVAUX_EN_LIGNE: "false"
+  SYNELIA_SEED_DEMO: "false"
+  SYNELIA_LITELLM_URL: http://litellm:4000
+  SYNELIA_LITELLM_MASTER_KEY: ${SYNELIA_LITELLM_MASTER_KEY:?}
+  SYNELIA_MINIO_URL: http://minio:9000
+  SYNELIA_MINIO_ROOT_USER: ${SYNELIA_MINIO_ROOT_USER:?}
+  SYNELIA_MINIO_ROOT_PASSWORD: ${SYNELIA_MINIO_ROOT_PASSWORD:?}
+  # Zimbra global (zimbra/docker-compose.yml, réseau partagé) : amont réel du module web_emails.
+  SYNELIA_ZIMBRA_URL: https://zimbra:7071
+  SYNELIA_ZIMBRA_ADMIN_USER: admin@zimbra.synelia.internal
+  SYNELIA_ZIMBRA_ADMIN_PASSWORD: ${ZIMBRA_ADMIN_PASSWORD:?}
+  # Compte SMTP administratif réel (courriels transactionnels : reset mdp, invitations, MFA) —
+  # distinct du Zimbra ci-dessus (mailboxes clientes) et du relais SMTP produit.
+  SYNELIA_SMTP_ADMIN_HOTE: ${SYNELIA_SMTP_ADMIN_HOTE:?}
+  SYNELIA_SMTP_ADMIN_UTILISATEUR: ${SYNELIA_SMTP_ADMIN_UTILISATEUR:?}
+  SYNELIA_SMTP_ADMIN_MOT_DE_PASSE: ${SYNELIA_SMTP_ADMIN_MOT_DE_PASSE:?}
+  # Relais SMTP produit (module web_smtp, docker-compose.relais-smtp.dev01.yml) : le VRAI
+  # relais custom déployé (apps/synelia/synelia/relais_smtp.py), joint par nom de conteneur sur
+  # ce même réseau — pas le produit "Postal" hypothétique (jamais déployé, retiré).
+  SYNELIA_RELAIS_SMTP_HOTE: relais-smtp
+  SYNELIA_RELAIS_SMTP_PORT: "587"
+  # Ancrage quotidien du journal d'audit (synelia.audit.ancrer, §3 du plan d'architecture) :
+  # optionnelle, l'utilisateur décide de l'adresse — pas de valeur inventée ici. Sans elle,
+  # seul le journal structuré (`audit.ancrage`, logs Docker du worker) sert d'ancrage.
+  SYNELIA_AUDIT_ANCRAGE_EMAIL: ${SYNELIA_AUDIT_ANCRAGE_EMAIL:-}
+  # Paystack (sandbox) — voir modules/facturation/paystack.py. Vide tant que non configuré :
+  # l'API répond alors `clePublique: ""` plutôt que de planter au démarrage.
+  PAYSTACK_PUBLIC_KEY: ${PAYSTACK_PUBLIC_KEY:-}
+  PAYSTACK_SECRET_KEY: ${PAYSTACK_SECRET_KEY:-}
+  # IA — bases de connaissances (module ia_agents/connaissances.py) : Docling extrait,
+  # Infinity vectorise (BGE-M3), Qdrant indexe. `SYNELIA_QDRANT_URL` est le seul signal
+  # « réel » — les deux autres ont des valeurs par défaut docker-compose, données ici pour
+  # que ce soit explicite.
+  SYNELIA_DOCLING_URL: http://docling:5001
+  SYNELIA_EMBEDDINGS_URL: http://infinity:7997
+  SYNELIA_EMBEDDINGS_MODELE: BAAI/bge-m3
+  SYNELIA_QDRANT_URL: http://qdrant:6333
+  # Observabilité réelle (victoria-metrics-k8s-stack + OTel Collector, cluster PaaS
+  # kube-37urf) : NodePort + IP flottante 192.168.20.245, voir packages/openstack/
+  # synelia_openstack/victoria.py et synelia/otel.py. No-op si absentes.
+  SYNELIA_VICTORIAMETRICS_URL: ${SYNELIA_VICTORIAMETRICS_URL:?}
+  SYNELIA_GRAFANA_URL: ${SYNELIA_GRAFANA_URL:?}
+  SYNELIA_OTEL_ENDPOINT: ${SYNELIA_OTEL_ENDPOINT:?}
+
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: synelia
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_DB: synelia
+    ports: ["127.0.0.1:5433:5432"]
+    volumes: [pgdata-dev01:/var/lib/postgresql]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U synelia"]
+      interval: 5s
+      retries: 30
+    restart: unless-stopped
+
+  api:
+    build: .
+    depends_on:
+      postgres: { condition: service_healthy }
+      minio: { condition: service_healthy }
+    environment:
+      <<: *env-backend
+      # Depuis ce déploiement (§1 du plan) : l'exécution des travaux sort du processus API,
+      # `demarrer_travail` met la ligne `queued` et c'est `worker` (ci-dessous) qui la réclame —
+      # plus de `create_task` perdu à chaque redéploiement de l'image `api`.
+      SYNELIA_TRAVAUX_WORKER: "true"
+      # Étape 1.7 du plan, après (c) stabilisé sur au moins deux cycles réels : 2, pas plus —
+      # 2×15 + 15 (worker) + 15 (relais) = 60 connexions Postgres potentielles sur 97
+      # disponibles. Valeur résiduelle : un `to_thread` oublié dans un gestionnaire de requête
+      # ne gèle plus que la moitié de la capacité ; le superviseur uvicorn relance un worker
+      # mort sans redémarrage de conteneur.
+      #
+      SYNELIA_API_WORKERS: "2"
+    ports: ["127.0.0.1:4010:4000"]
+    healthcheck:
+      # L'image purge `curl` (Dockerfile) : un client HTTP en Python fait l'affaire.
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:4000/healthz', timeout=3).status == 200 else 1)",
+        ]
+      interval: 10s
+      retries: 5
+    restart: unless-stopped
+
+  # Worker des travaux (moteur Local, `synelia.travaux.local` — pas de Temporal sur dev01) :
+  # un seul réplica — `reprendre_orphelins` (au boot) suppose qu'un travail `running` sans
+  # `attente` dans son contexte n'appartient à personne d'autre ; passer à plusieurs réplicas
+  # exigerait un bail/heartbeat par travail, pas fait ici. `stop_grace_period` : le worker
+  # cesse de réclamer et attend jusqu'à 55 s ses travaux en vol avant que Docker ne l'arrête ;
+  # ceux qui n'ont pas fini sont repris `failed` (relançables) par `reprendre_orphelins` au
+  # prochain boot — comportement documenté, préférable à la perte silencieuse d'avant ce plan.
+  worker:
+    build: .
+    command: ["worker"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      minio: { condition: service_healthy }
+    environment: *env-backend
+    restart: unless-stopped
+    stop_grace_period: 60s
+
+  minio:
+    image: minio/minio
+    environment:
+      MINIO_ROOT_USER: ${SYNELIA_MINIO_ROOT_USER:?}
+      MINIO_ROOT_PASSWORD: ${SYNELIA_MINIO_ROOT_PASSWORD:?}
+    command: ["server", "/data", "--console-address", ":9001"]
+    volumes: [minio-dev01:/data]
+    ports: ["127.0.0.1:9000:9000", "127.0.0.1:9001:9001"]
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      retries: 20
+    restart: unless-stopped
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main-stable
+    environment:
+      SYNELIA_OPENROUTER_KEY: ${SYNELIA_OPENROUTER_KEY:?}
+      SYNELIA_LITELLM_MASTER_KEY: ${SYNELIA_LITELLM_MASTER_KEY:?}
+    volumes: ["./litellm/config.yaml:/app/config.yaml:ro"]
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    ports: ["127.0.0.1:4001:4000"]
+    restart: unless-stopped
+
+  # Docling (extraction PDF/DOCX/HTML/Markdown → texte structuré), appelé uniquement au moment
+  # de l'ingestion d'un document — pas sur chaque requête, pas besoin de rester chaud.
+  docling:
+    image: quay.io/docling-project/docling-serve:latest
+    ports: ["127.0.0.1:5001:5001"]
+    restart: unless-stopped
+
+  # Infinity (michaelfeil/infinity) : sert BGE-M3 avec une API compatible OpenAI /embeddings.
+  # Image `-cpu` : dev01 n'a pas de GPU. Volume pour ne pas retélécharger le modèle (~2,2 Go)
+  # à chaque redémarrage.
+  infinity:
+    image: michaelf34/infinity:0.0.77-cpu
+    command: ["v2", "--model-id", "BAAI/bge-m3", "--port", "7997", "--engine", "torch"]
+    volumes: [infinity-dev01:/app/.cache]
+    ports: ["127.0.0.1:7997:7997"]
+    restart: unless-stopped
+
+  # Qdrant : une collection par base de connaissances (`kb_<connaissanceId>`).
+  qdrant:
+    image: qdrant/qdrant:v1.15.5
+    volumes: [qdrant-dev01:/qdrant/storage]
+    ports: ["127.0.0.1:6333:6333"]
+    restart: unless-stopped
+
+volumes:
+  pgdata-dev01: {}
+  minio-dev01: {}
+  infinity-dev01: {}
+  qdrant-dev01: {}

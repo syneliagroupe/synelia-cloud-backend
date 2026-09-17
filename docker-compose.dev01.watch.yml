@@ -1,0 +1,19 @@
+# Surcouche facultative pour itérer sur `api` sans reconstruire l'image à chaque changement :
+#
+#   docker compose -f docker-compose.dev01.yml -f docker-compose.dev01.watch.yml \
+#     --env-file ~/.config/synelia/backend-dev01.env up -d api
+#
+# Monte `apps/` et `packages/` en volume (au lieu d'être copiés à la construction) et lance
+# uvicorn avec --reload : éditer un fichier Python sur l'hôte redémarre l'API en place.
+# Un seul worker uvicorn — `--reload` et plusieurs travailleurs sont incompatibles (voir
+# `synelia.__main__.api`). Ne jamais utiliser cette surcouche en production : le rechargement
+# à chaud regarde chaque écriture fichier, ce que docker-compose.dev01.yml (l'image figée)
+# évite délibérément.
+services:
+  api:
+    command: ["api", "--rechargement"]
+    environment:
+      SYNELIA_API_WORKERS: "1"
+    volumes:
+      - ./apps:/app/apps
+      - ./packages:/app/packages

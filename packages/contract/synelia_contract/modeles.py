@@ -26,6 +26,63 @@ class ActionRbac(BaseModel):
     ]
 
 
+class AgentIA(BaseModel):
+    id: str
+    nom: str
+    consigne: Annotated[
+        str, Field(description="Consigne système envoyée au modèle avant le message de l’appelant.")
+    ]
+    espaceId: str | None = None
+    modele: Annotated[
+        str, Field(description="Slug du modèle IA utilisé — référence `ModeleIA.slug`.")
+    ]
+    temperature: float
+    topP: float
+    jetonsMax: int
+    statut: Literal["brouillon", "publie", "suspendu"]
+    createdAt: AwareDatetime
+
+
+class AgentIACreation(BaseModel):
+    nom: str
+    consigne: str
+    espaceId: str | None = None
+    modele: str
+    temperature: float | None = 0.7
+    topP: float | None = 1
+    jetonsMax: int | None = 1024
+
+
+class AgentIAModification(BaseModel):
+    nom: str | None = None
+    consigne: str | None = None
+    modele: str | None = None
+    temperature: float | None = None
+    topP: float | None = None
+    jetonsMax: int | None = None
+    statut: Literal["brouillon", "publie", "suspendu"] | None = None
+
+
+class AgentInvocationRequest(BaseModel):
+    message: Annotated[
+        str,
+        Field(
+            description="Message de l’appelant — un seul tour, pas de mémoire de conversation dans ce MVP."
+        ),
+    ]
+    conversationId: Annotated[
+        str | None, Field(description="Réservé pour un usage futur ; ignoré aujourd’hui.")
+    ] = None
+
+
+class AgentInvocationResponse(BaseModel):
+    reponse: str
+    jetonsEntree: int
+    jetonsSortie: int
+    coutFcfa: float
+    latenceMs: int
+
+
 class Constat(BaseModel):
     fichier: str
     constat: str
@@ -214,6 +271,14 @@ class Saturation(BaseModel):
     j90: Annotated[float | None, Field(ge=0.0, le=100.0)] = None
 
 
+class BaseConnaissanceModification(BaseModel):
+    nom: str | None = None
+    citations: bool | None = None
+    frequence: Literal["manuelle", "quotidienne", "horaire"] | None = None
+    clesAutorisees: list[str] | None = None
+    statut: Literal["a_jour", "indexation", "erreur", "jamais_indexee"] | None = None
+
+
 class UtilisateurInline(BaseModel):
     nom: str
     droits: Literal["tous", "lecture", "lecture_ecriture"]
@@ -337,6 +402,7 @@ class Replication(BaseModel):
 class Bucket(BaseModel):
     id: str
     orgId: str
+    espaceId: str
     nom: str
     region: Literal["ABJ", "GBM"]
     classe: Literal["chaud", "froid"]
@@ -359,6 +425,7 @@ class Replication1(BaseModel):
 
 
 class BucketCreation(BaseModel):
+    espaceId: str
     nom: str
     region: Literal["ABJ", "GBM"]
     classe: Literal["chaud", "froid"]
@@ -526,6 +593,70 @@ class CleApiSecret(BaseModel):
     secret: Annotated[
         str, Field(description="Renvoyé une seule fois, à la création ou à la rotation.")
     ]
+
+
+class CleIA(BaseModel):
+    id: str
+    nom: str
+    prefixe: Annotated[
+        str,
+        Field(description="Préfixe visible, seul fragment du secret affichable après création."),
+    ]
+    espaceId: str
+    usage: Annotated[
+        str, Field(description="Application ou équipe qui porte la clé — sert au showback.")
+    ]
+    modelesAutorises: Annotated[
+        list[str], Field(description="Slugs de `ModeleIA` autorisés, ou la valeur unique `tous`.")
+    ]
+    quotaJetonsMois: int
+    jetonsConsommes: int
+    debitMaxParMinute: int
+    budgetMensuel: Annotated[int, Field(description="Montant en FCFA.")]
+    budgetConsomme: Annotated[int, Field(description="Montant en FCFA.")]
+    auDepassement: Annotated[
+        Literal["bloquer", "alerter"],
+        Field(description="Comportement au dépassement : couper, ou laisser passer en alertant."),
+    ]
+    residenceMax: Annotated[
+        Literal["publique", "interne", "personnelle", "reglementee"],
+        Field(
+            description="Classe de données maximale que cette clé peut faire sortir vers un modèle externe."
+        ),
+    ]
+    statut: Literal["active", "suspendue", "revoquee"]
+    creeeLe: AwareDatetime
+    creeePar: str | None = None
+    derniereUtilisation: AwareDatetime | None = None
+
+
+class CleIACreation(BaseModel):
+    nom: str
+    espaceId: str
+    usage: str | None = None
+    modelesAutorises: list[str] | None = ["tous"]
+    quotaJetonsMois: int | None = 1000000
+    debitMaxParMinute: int | None = 60
+    budgetMensuel: Annotated[int | None, Field(description="Montant en FCFA.")] = None
+    auDepassement: Literal["bloquer", "alerter"] | None = "bloquer"
+    residenceMax: Literal["publique", "interne", "personnelle", "reglementee"] | None = "interne"
+
+
+class CleIAModification(BaseModel):
+    nom: str | None = None
+    usage: str | None = None
+    modelesAutorises: list[str] | None = None
+    quotaJetonsMois: int | None = None
+    debitMaxParMinute: int | None = None
+    budgetMensuel: Annotated[int | None, Field(description="Montant en FCFA.")] = None
+    auDepassement: Literal["bloquer", "alerter"] | None = None
+    residenceMax: Literal["publique", "interne", "personnelle", "reglementee"] | None = None
+    statut: Literal["active", "suspendue", "revoquee"] | None = None
+
+
+class CleIASecret(BaseModel):
+    cle: CleIA
+    secret: Annotated[str, Field(description="Renvoyé une seule fois, à la création.")]
 
 
 class CleS3(BaseModel):
@@ -742,6 +873,18 @@ class ConfigurationSso(BaseModel):
     provisioningJustInTime: bool | None = None
     correspondanceGroupes: list[CorrespondanceGroupe] | None = None
     dernierTest: DernierTest | None = None
+
+
+class ConnaissanceRechercheRequest(BaseModel):
+    query: Annotated[
+        str,
+        Field(
+            description="Question ou texte de recherche — vectorisé avec le même modèle que les fragments indexés."
+        ),
+    ]
+    topK: Annotated[
+        int | None, Field(description="Nombre de fragments renvoyés, du plus au moins pertinent.")
+    ] = 5
 
 
 class ConsoleVm(BaseModel):
@@ -1021,6 +1164,28 @@ class DisponibiliteDomaine(BaseModel):
     suggestions: list[Suggestion] | None = None
 
 
+class DocumentConnaissanceCreation(BaseModel):
+    nom: Annotated[str, Field(description="Nom du document — apparaît dans les citations.")]
+    texte: Annotated[
+        str | None,
+        Field(
+            description="Contenu déjà en texte ou Markdown (collé) — évite un aller-retour Docling inutile."
+        ),
+    ] = None
+    contenuBase64: Annotated[
+        str | None,
+        Field(
+            description="Fichier encodé en base64 (pdf, docx, html…), réellement extrait par Docling."
+        ),
+    ] = None
+    url: Annotated[
+        str | None,
+        Field(
+            description="Document déjà accessible en ligne (source web/git) — Docling va le chercher lui-même."
+        ),
+    ] = None
+
+
 class Domaine(BaseModel):
     id: str
     orgId: str
@@ -1288,81 +1453,6 @@ class Erreur(BaseModel):
     documentationUrl: str | None = None
 
 
-class ErreurDegrade(BaseModel):
-    code: str
-    message: str
-    correlationId: str
-    integration: Annotated[
-        str,
-        Field(
-            description="Intégration en défaut : `centreon`, `grafana`, `victorialogs`, `openstack`…"
-        ),
-    ]
-    donneesPartielles: Annotated[
-        bool | None, Field(description="Vrai quand une réponse dégradée accompagne l’erreur.")
-    ] = None
-    dateDonnees: Annotated[
-        AwareDatetime | None, Field(description="Fraîcheur des dernières données connues.")
-    ] = None
-
-
-class ErreurInterdit(BaseModel):
-    code: str
-    message: str
-    correlationId: str
-    actionRbac: Annotated[
-        str | None,
-        Field(
-            description="Identifiant de l'action refusée dans la matrice RBAC (`vm.create_delete`)."
-        ),
-    ] = None
-    rolesRequis: Annotated[
-        list[
-            Literal[
-                "super_admin",
-                "platform_operator",
-                "org_admin",
-                "espace_admin",
-                "project_owner",
-                "operator",
-                "service_admin",
-                "billing_manager",
-                "compliance",
-                "read_only",
-            ]
-        ],
-        Field(description="Rôles qui exécutent pleinement cette action."),
-    ]
-    roleCourant: (
-        Literal[
-            "super_admin",
-            "platform_operator",
-            "org_admin",
-            "espace_admin",
-            "project_owner",
-            "operator",
-            "service_admin",
-            "billing_manager",
-            "compliance",
-            "read_only",
-        ]
-        | None
-    ) = None
-
-
-class Champ(BaseModel):
-    champ: str
-    message: str
-    attendu: str | None = None
-
-
-class ErreurValidation(BaseModel):
-    code: str
-    message: str
-    correlationId: str
-    champs: list[Champ]
-
-
 class Ligne(BaseModel):
     libelle: str
     quantite: float
@@ -1390,6 +1480,11 @@ class EstimationCout(BaseModel):
         list[str] | None,
         Field(description="Ce que l’estimation ne couvre pas (egress, licences tierces)."),
     ] = None
+
+
+class Reprise(BaseModel):
+    tentatives: int
+    delaiS: int
 
 
 class Resultat(BaseModel):
@@ -1523,6 +1618,7 @@ class Facture(BaseModel):
     moyen: Literal["carte", "virement", "orange_money", "mtn_momo", "wave", "prepaye"] | None = None
     pdfUrl: str
     echeance: date_aliased | None = None
+    relances: int = 0
 
 
 class FenetrePatching(BaseModel):
@@ -1609,6 +1705,48 @@ class FicheProduit(BaseModel):
     paliers: list[Palier1] | None = None
     sla: str | None = None
     faq: list[FaqItem] | None = None
+
+
+class FluxExecutionRequest(BaseModel):
+    entree: Annotated[
+        str,
+        Field(
+            description="Message ou charge utile qui déclenche le flux — ce que le déclencheur aurait reçu."
+        ),
+    ]
+    variables: Annotated[
+        dict[str, Any] | None,
+        Field(
+            description="Valeurs de variables à surcharger pour cette exécution seulement (clé → valeur)."
+        ),
+    ] = None
+
+
+class Declencheur(BaseModel):
+    type: Literal["message", "planifie", "webhook", "fichier", "evenement"]
+    libelle: str
+    detail: str
+
+
+class FluxRepriseRequest(BaseModel):
+    decision: Literal["approuve", "rejete"]
+    commentaire: Annotated[
+        str | None, Field(description="Motif ou précision laissé par la personne qui valide.")
+    ] = None
+
+
+class FragmentRecherche(BaseModel):
+    texte: str
+    score: Annotated[float, Field(description="Similarité cosinus, entre 0 et 1.")]
+    document: Annotated[
+        str, Field(description="Nom du document source — présent même si `citations` est faux.")
+    ]
+    citations: Annotated[
+        str | None,
+        Field(
+            description="Extrait de citation du document d’origine, uniquement si `citations` est vrai sur la base."
+        ),
+    ] = None
 
 
 class Gabarit(BaseModel):
@@ -2273,6 +2411,61 @@ class ModeleDns(BaseModel):
     remplaceExistants: bool | None = None
 
 
+class ModeleIA(BaseModel):
+    id: str
+    slug: Annotated[
+        str,
+        Field(
+            description="Identifiant appelé côté passerelle — le vrai modèle OpenRouter pour les modèles invocables."
+        ),
+    ]
+    nom: str
+    editeur: str
+    famille: Literal["texte", "code", "embedding", "reranker", "transcription", "vision"]
+    hebergement: Literal["souverain", "externe"]
+    residence: str
+    site: str | None = None
+    parametres: str | None = None
+    licence: str
+    contexteJetons: int | None = None
+    prixEntree: Annotated[
+        float | None, Field(description="Prix pour un million de jetons en entrée, en FCFA.")
+    ] = None
+    prixSortie: Annotated[
+        float | None, Field(description="Prix pour un million de jetons en sortie, en FCFA.")
+    ] = None
+    unite: Literal["jeton", "minute"] | None = None
+    latenceP50Ms: int | None = None
+    debitJetonsSec: int | None = None
+    statut: Literal["disponible", "apercu", "degrade", "retire"]
+    usages: list[str] | None = None
+    description: str | None = None
+    invocable: Annotated[
+        bool,
+        Field(
+            description="Vrai si ce modèle est réellement appelable via la passerelle LiteLLM ; sinon `invoquer` renvoie 422."
+        ),
+    ]
+
+
+class ModeleIACreation(BaseModel):
+    slug: str
+    nom: str
+    editeur: str
+    famille: Literal["texte", "code", "embedding", "reranker", "transcription", "vision"]
+    hebergement: Literal["souverain", "externe"]
+    residence: str
+    licence: str
+    contexteJetons: int | None = None
+    prixEntree: float | None = None
+    prixSortie: float | None = None
+    unite: Literal["jeton", "minute"] | None = None
+    statut: Literal["disponible", "apercu", "degrade", "retire"] | None = None
+    usages: list[str] | None = None
+    description: str | None = None
+    invocable: bool | None = None
+
+
 class MoyenPaiement(BaseModel):
     id: str
     type: Literal["carte", "virement", "orange_money", "mtn_momo", "wave", "prepaye"]
@@ -2696,6 +2889,22 @@ class Projet(BaseModel):
     espaceId: str
     cree: AwareDatetime
     environnements: list[str]
+    etiquettes: Annotated[
+        list[str],
+        Field(description="Ventilation de la dépense et recherche — pas de rôle fonctionnel."),
+    ]
+    clusterId: Annotated[
+        str,
+        Field(
+            description="Le cluster Kubernetes qui héberge les services du projet — dédié ou partagé avec d'autres projets du même Espace."
+        ),
+    ]
+    cible: Annotated[
+        Literal["vm", "k8s"] | None,
+        Field(
+            description="Cible de calcul du projet : `k8s` (namespace sur le cluster PaaS partagé, par défaut) ou `vm` (une VM Nova dédiée, ses services en conteneurs Docker Compose). Fixée à la création."
+        ),
+    ] = "k8s"
     variables: Annotated[
         list[Variable1],
         Field(
@@ -2711,6 +2920,19 @@ class ProjetCreation(BaseModel):
     environnements: Annotated[list[str] | None, Field(description="Par défaut `production`.")] = (
         None
     )
+    etiquettes: Annotated[
+        list[str] | None, Field(description="Ventilation de la dépense et recherche.")
+    ] = None
+    clusterId: Annotated[
+        str | None,
+        Field(description="Cluster Kubernetes à rattacher, existant ou en cours de provisioning."),
+    ] = None
+    cible: Annotated[
+        Literal["vm", "k8s"] | None,
+        Field(
+            description="Par défaut `k8s`. Ignoré en modification (non modifiable après création)."
+        ),
+    ] = None
 
 
 class Contexte(BaseModel):
@@ -2947,15 +3169,65 @@ class ReponseErreur(BaseModel):
 
 
 class ReponseErreurDegrade(BaseModel):
-    erreur: ErreurDegrade
+    erreur: Erreur
+    integration: Annotated[
+        str,
+        Field(
+            description="Intégration en défaut : `centreon`, `grafana`, `victorialogs`, `openstack`…"
+        ),
+    ]
+    donneesPartielles: Annotated[
+        bool | None, Field(description="Vrai quand une réponse dégradée accompagne l’erreur.")
+    ] = None
+    dateDonnees: Annotated[
+        AwareDatetime | None, Field(description="Fraîcheur des dernières données connues.")
+    ] = None
 
 
 class ReponseErreurInterdit(BaseModel):
-    erreur: ErreurInterdit
+    erreur: Erreur
+    rolesRequis: Annotated[
+        list[
+            Literal[
+                "super_admin",
+                "platform_operator",
+                "org_admin",
+                "espace_admin",
+                "project_owner",
+                "operator",
+                "service_admin",
+                "billing_manager",
+                "compliance",
+                "read_only",
+            ]
+        ],
+        Field(description="Rôles qui exécutent pleinement cette action."),
+    ]
+    roleCourant: (
+        Literal[
+            "super_admin",
+            "platform_operator",
+            "org_admin",
+            "espace_admin",
+            "project_owner",
+            "operator",
+            "service_admin",
+            "billing_manager",
+            "compliance",
+            "read_only",
+        ]
+        | None
+    ) = None
 
 
 class ReponseErreurValidation(BaseModel):
-    erreur: ErreurValidation
+    erreur: Erreur
+    champs: Annotated[
+        dict[str, str],
+        Field(
+            description="Message de validation par champ en défaut, indexé par son chemin (`prix`, `espaceId`…)."
+        ),
+    ]
 
 
 class Reseau(BaseModel):
@@ -3257,6 +3529,10 @@ class ServiceProjet(BaseModel):
     id: str
     projetId: str
     nom: str
+    description: Annotated[
+        str | None,
+        Field(description="Saisie à la création, à côté du nom — pas de rôle fonctionnel."),
+    ] = None
     type: Literal["application", "base", "statique", "cron", "worker"]
     environnement: str
     statut: Literal["running", "building", "stopped", "degraded", "failed"]
@@ -3397,6 +3673,11 @@ class SiteWebCreation(BaseModel):
     administrateur: Administrateur1 | None = None
     preproduction: bool | None = None
     ssl: bool | None = None
+
+
+class SourceConnaissance(BaseModel):
+    type: Literal["s3", "drive", "web", "git"]
+    libelle: str
 
 
 class Cible1(BaseModel):
@@ -3687,6 +3968,14 @@ class VariableEnvironnement(BaseModel):
     scope: Literal["build", "runtime"]
 
 
+class VariableFlux(BaseModel):
+    cle: str
+    portee: Literal["environnement", "conversation", "systeme"]
+    valeur: str
+    secret: bool | None = None
+    description: str
+
+
 class Ligne2(BaseModel):
     label: str
     montant: Annotated[int, Field(description="Montant en FCFA.")]
@@ -3809,6 +4098,9 @@ class VmLotCreation(BaseModel):
         list[Machine], Field(description="Plan de déploiement composé dans l’écran de composition.")
     ]
     cleSsh: str | None = None
+    cloudInit: Annotated[
+        str | None, Field(description="Script d’amorçage, encodé en clair, commun au lot.")
+    ] = None
     antiAffinite: Annotated[
         bool | None, Field(description="Répartit les machines du lot sur des hôtes distincts.")
     ] = None
@@ -3819,6 +4111,7 @@ class VmModification(BaseModel):
     tags: list[str] | None = None
     backupPlanId: str | None = None
     applicationId: str | None = None
+    applicationNom: str | None = None
 
 
 class VmRedimensionnement(BaseModel):
@@ -4282,6 +4575,28 @@ class AuditExportPostResponse(BaseModel):
     expire: AwareDatetime | None = None
 
 
+class AuditIntegriteGetResponse(BaseModel):
+    intacte: bool
+    entreesVerifiees: int
+    totalEntrees: int
+    ruptureId: Annotated[
+        str | None,
+        Field(
+            description="Identifiant de la première entrée en rupture. Absent si la chaîne est intacte."
+        ),
+    ] = None
+    ruptureDate: Annotated[
+        AwareDatetime | None, Field(description="Absente si la chaîne est intacte.")
+    ] = None
+    raison: Annotated[str | None, Field(description="Absente si la chaîne est intacte.")] = None
+    empreinteFinale: Annotated[
+        str | None,
+        Field(
+            description="Empreinte de la dernière entrée. Présente seulement si la chaîne est intacte."
+        ),
+    ] = None
+
+
 class AuthDeconnexionPostResponse(BaseModel):
     ferme: bool
 
@@ -4603,6 +4918,21 @@ class GroupesSecuriteGroupeIdAttachementsPutRequest(BaseModel):
     cibles: list[str]
 
 
+class IaAgentsGetResponse(BaseModel):
+    donnees: list[AgentIA]
+    pagination: Pagination
+
+
+class IaClesGetResponse(BaseModel):
+    donnees: list[CleIA]
+    pagination: Pagination
+
+
+class IaModelesGetResponse(BaseModel):
+    donnees: list[ModeleIA]
+    pagination: Pagination
+
+
 class InvitationsGetResponse(BaseModel):
     donnees: list[Invitation]
     pagination: Pagination
@@ -4616,6 +4946,19 @@ class IpsGetResponse(BaseModel):
 class IpsIpIdAttachementPutRequest(BaseModel):
     cibleId: Annotated[str, Field(description="VM, load balancer ou passerelle.")]
     ptr: str | None = None
+
+
+class Noeud(BaseModel):
+    id: str
+    statut: str
+    vcpu: int | None = None
+    cpu: float | None = None
+    ram: float | None = None
+
+
+class KubernetesClusterIdMetriquesGetResponse(BaseModel):
+    series: list[Serie]
+    noeuds: list[Noeud]
 
 
 class KubernetesClusterIdMiseAJourPostRequest(BaseModel):
@@ -5607,6 +5950,11 @@ class WebSmtpWebhooksGetResponse(RootModel[list[WebhookSmtp]]):
     root: list[WebhookSmtp]
 
 
+class WebSmtpWebhooksWebhookIdTestPostResponse(BaseModel):
+    envoye: bool
+    code: int | None = None
+
+
 class WebSslGetResponse(BaseModel):
     donnees: list[Certificat]
     pagination: Pagination
@@ -5669,6 +6017,48 @@ class Backend(BaseModel):
     enSortie: EnSortie | None = None
     souverain: bool
     saturation: Saturation | None = None
+
+
+class BaseConnaissance(BaseModel):
+    id: str
+    nom: str
+    espaceId: str
+    source: SourceConnaissance
+    documents: int
+    fragments: int
+    modeleEmbedding: str
+    dimension: int
+    modeDecoupage: Annotated[
+        Literal["general", "parent_enfant", "qr"],
+        Field(
+            description="Le choix se fige à la création. Seul `general` est réellement découpé aujourd’hui."
+        ),
+    ]
+    methodeIndex: Literal["haute_qualite", "economique"]
+    modeRecherche: Literal["vectorielle", "plein_texte", "hybride"]
+    citations: Annotated[
+        bool, Field(description="Renvoyer le document d’origine avec chaque fragment cité.")
+    ]
+    tailleMo: float
+    frequence: Literal["manuelle", "quotidienne", "horaire"]
+    derniereIndexation: AwareDatetime
+    statut: Literal["a_jour", "indexation", "erreur", "jamais_indexee"]
+    clesAutorisees: Annotated[
+        list[str] | None,
+        Field(description="Identifiants de `CleIA` autorisées à interroger cette base."),
+    ] = None
+    erreur: str | None = None
+
+
+class BaseConnaissanceCreation(BaseModel):
+    nom: str
+    espaceId: str
+    source: SourceConnaissance
+    modeDecoupage: Literal["general", "parent_enfant", "qr"] | None = "general"
+    methodeIndex: Literal["haute_qualite", "economique"] | None = "haute_qualite"
+    modeRecherche: Literal["vectorielle", "plein_texte", "hybride"] | None = "vectorielle"
+    citations: bool | None = True
+    frequence: Literal["manuelle", "quotidienne", "horaire"] | None = "manuelle"
 
 
 class CapaciteParSiteItem(BaseModel):
@@ -5749,6 +6139,10 @@ class ComposantCreation(BaseModel):
     envVars: list[VariableEnvironnement] | None = None
     storage: list[StorageItem1] | None = None
     dependances: list[str] | None = None
+
+
+class ConnaissanceRechercheResponse(BaseModel):
+    fragments: list[FragmentRecherche]
 
 
 class DemandeDevis(BaseModel):
@@ -5985,6 +6379,11 @@ class GroupesSecuriteGetResponse(BaseModel):
     pagination: Pagination
 
 
+class IaConnaissancesGetResponse(BaseModel):
+    donnees: list[BaseConnaissance]
+    pagination: Pagination
+
+
 class KubernetesGetResponse(BaseModel):
     donnees: list[ClusterK8s]
     pagination: Pagination
@@ -6020,3 +6419,106 @@ class ServicesServiceManageIdSiegesGetResponse(BaseModel):
 
 class WebDriveDriveIdSiegesGetResponse(RootModel[list[Siege]]):
     root: list[Siege]
+
+
+class BrancheFlux(BaseModel):
+    id: str
+    nom: str
+    condition: Annotated[
+        str,
+        Field(
+            description="Évaluée en « premier mot-clé de la condition trouvé dans les variables ou la dernière sortie » — pas un langage d’expression complet."
+        ),
+    ]
+    partPct: float
+    parDefaut: Annotated[
+        bool | None,
+        Field(description="La branche de repli reçoit ce qu’aucune condition n’a retenu."),
+    ] = None
+    etapes: list[EtapeFlux]
+
+
+class EtapeFlux(BaseModel):
+    id: str
+    type: Literal[
+        "declencheur",
+        "agent",
+        "outil",
+        "connaissance",
+        "routeur",
+        "boucle",
+        "humain",
+        "code",
+        "reponse",
+        "anonymisation",
+        "habilitation",
+        "transfert",
+    ]
+    nom: str
+    source: str
+    detail: str
+    agentId: str | None = None
+    outilId: str | None = None
+    connaissanceId: Annotated[
+        str | None,
+        Field(
+            description="Base de connaissances interrogée — seul un champ dédié permet à l’exécution de savoir où chercher."
+        ),
+    ] = None
+    condition: str | None = None
+    verrouillee: bool | None = None
+    executions24h: int
+    latenceMs: int
+    coutPourMille: float
+    tauxErreurPct: float
+    reprise: Reprise | None = None
+    branches: list[BrancheFlux] | None = None
+    modeRoutage: Literal["premiere", "toutes"] | None = None
+    corps: list[EtapeFlux] | None = None
+    surItems: str | None = None
+    maxIterations: int | None = None
+
+
+class FluxOrchestration(BaseModel):
+    id: str
+    nom: str
+    description: str
+    espaceId: str
+    statut: Literal["publie", "brouillon", "suspendu"]
+    declencheur: Declencheur
+    etapes: list[EtapeFlux]
+    variables: list[VariableFlux]
+    executions7j: int | None = None
+    dureeMedianeS: int | None = None
+    tauxSuccesPct: float | None = None
+    coutParExecution: float | None = None
+    memoirePartagee: bool
+    version: str
+
+
+class FluxOrchestrationCreation(BaseModel):
+    nom: str
+    description: str | None = None
+    espaceId: str | None = None
+    declencheur: Declencheur
+    etapes: list[EtapeFlux] | None = None
+    variables: list[VariableFlux] | None = None
+    memoirePartagee: bool | None = False
+
+
+class FluxOrchestrationModification(BaseModel):
+    nom: str | None = None
+    description: str | None = None
+    statut: Literal["publie", "brouillon", "suspendu"] | None = None
+    declencheur: Declencheur | None = None
+    etapes: list[EtapeFlux] | None = None
+    variables: list[VariableFlux] | None = None
+    memoirePartagee: bool | None = None
+
+
+class IaFluxGetResponse(BaseModel):
+    donnees: list[FluxOrchestration]
+    pagination: Pagination
+
+
+BrancheFlux.model_rebuild()

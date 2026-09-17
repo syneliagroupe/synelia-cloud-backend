@@ -4,8 +4,18 @@
   "installCommand": "uv sync --no-dev",
   "buildCommand": "",
   "functions": {
-    "api/index.py": { "memory": 1024, "maxDuration": 60 }
+    "api/index.py": {
+      "memory": 1024,
+      "maxDuration": 60
+    }
   },
-  "rewrites": [{ "source": "/(.*)", "destination": "/api/index" }],
-  "env": { "VERCEL": "1", "SYNELIA_ENV": "preview" }
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/api/index"
+    }
+  ],
+  "env": {
+    "VERCEL": "1"
+  }
 }

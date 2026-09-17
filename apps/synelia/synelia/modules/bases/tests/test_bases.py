@@ -47,7 +47,9 @@ async def test_cycle_base(client):
     r = await client.get(f"/v1/bases/{bid}/identifiants")
     assert r.status_code == 200
     ident = r.json()
-    assert ident["host"].endswith(".int.synelia.cloud") and ident["utilisateur"]
+    # Le host est désormais l'IP privée réelle de la VM amont (aucune IP flottante :
+    # la base reste sur le réseau privé de l'Espace Cloud), plus de nom DNS interne fabriqué.
+    assert ident["host"].count(".") == 3 and ident["utilisateur"] == "synelia_postgresql"
 
     r = await client.post(f"/v1/bases/{bid}/identifiants/rotation", json={})
     assert r.status_code == 200

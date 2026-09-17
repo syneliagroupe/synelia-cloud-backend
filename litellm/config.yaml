@@ -1,0 +1,58 @@
+# Passerelle LiteLLM (MVP) : OpenRouter en amont unique, config-only (pas de base
+# dédiée à LiteLLM — le module ia_agents du backend garde son propre historique).
+model_list:
+  - model_name: meta-llama/llama-3.3-70b-instruct
+    litellm_params:
+      model: openrouter/meta-llama/llama-3.3-70b-instruct
+      api_key: os.environ/SYNELIA_OPENROUTER_KEY
+  - model_name: mistralai/mistral-small-3.2-24b-instruct
+    litellm_params:
+      model: openrouter/mistralai/mistral-small-3.2-24b-instruct
+      api_key: os.environ/SYNELIA_OPENROUTER_KEY
+  - model_name: qwen/qwen3-32b
+    litellm_params:
+      model: openrouter/qwen/qwen3-32b
+      api_key: os.environ/SYNELIA_OPENROUTER_KEY
+  - model_name: mistralai/codestral-2508
+    litellm_params:
+      model: openrouter/mistralai/codestral-2508
+      api_key: os.environ/SYNELIA_OPENROUTER_KEY
+  - model_name: openai/gpt-5.1
+    litellm_params:
+      model: openrouter/openai/gpt-5.1
+      api_key: os.environ/SYNELIA_OPENROUTER_KEY
+  - model_name: anthropic/claude-sonnet-4.5
+    litellm_params:
+      model: openrouter/anthropic/claude-sonnet-4.5
+      api_key: os.environ/SYNELIA_OPENROUTER_KEY
+  - model_name: mistralai/mistral-large-2407
+    litellm_params:
+      model: openrouter/mistralai/mistral-large-2407
+      api_key: os.environ/SYNELIA_OPENROUTER_KEY
+  - model_name: google/gemini-2.5-pro
+    litellm_params:
+      model: openrouter/google/gemini-2.5-pro
+      api_key: os.environ/SYNELIA_OPENROUTER_KEY
+  # Le garde-fou OpenRouter du compte partagé (guardrail 411e5fcb-…) restreint
+  # `allowed_models` à une liste réduite depuis le 2026-09-07 07:07 UTC — la clé
+  # configurée n'a pas les droits de gestion pour le corriger (confirmé : appel
+  # réel à /guardrails/{id} → 401 « Invalid management key »). deepseek-v4-flash
+  # et glm-5.3-flash sont les deux modèles vérifiés en direct comme réellement
+  # autorisés sous ce garde-fou (200 réel, les 8 modèles ci-dessus restent en
+  # configuration au cas où le garde-fou serait corrigé, mais échouent tant
+  # qu'il ne l'est pas). glm-5.3-flash est le modèle par défaut demandé pour la
+  # démo du 2026-09-09.
+  - model_name: deepseek/deepseek-v4-flash
+    litellm_params:
+      model: openrouter/deepseek/deepseek-v4-flash
+      api_key: os.environ/SYNELIA_OPENROUTER_KEY
+  - model_name: z-ai/glm-5.3-flash
+    litellm_params:
+      model: openrouter/z-ai/glm-5.3-flash
+      api_key: os.environ/SYNELIA_OPENROUTER_KEY
+
+litellm_settings:
+  drop_params: true
+
+general_settings:
+  master_key: os.environ/SYNELIA_LITELLM_MASTER_KEY

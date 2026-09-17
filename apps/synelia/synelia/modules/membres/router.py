@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 from synelia_contract import modeles as m
 from synelia_contract.rbac import ROLES_ORDRE
 from synelia_db.modeles import Invitation, Membership, Organisation, Utilisateur
-from synelia_kernel import erreurs
+from synelia_kernel import courriel, erreurs
 from synelia_kernel.dates import dans
 from synelia_kernel.ids import jeton_opaque, nouvel_id
 
@@ -46,6 +46,28 @@ async def obtenir_membership(ctx: Contexte, mem_id: str) -> tuple[Membership, Ut
         raise erreurs.introuvable("Membre", mem_id)
     u = await ctx.session.get(Utilisateur, mem.utilisateur_id)
     return mem, u
+
+
+async def _refuser_si_dernier_admin(ctx: Contexte, mem: Membership, message: str) -> None:
+    """Bloque toute opération (retrait ou rétrogradation) qui laisserait l'organisation sans
+    aucun `org_admin` — pas de chemin de récupération possible pour un compte encore
+    authentifié qui se coupe (ou coupe le dernier autre admin) l'accès admin de l'org."""
+    if mem.role != "org_admin" or mem.scope_type != "org":
+        return
+    nb = (
+        await ctx.session.execute(
+            select(func.count())
+            .select_from(Membership)
+            .where(
+                Membership.org_id == ctx.org_id,
+                Membership.role == "org_admin",
+                Membership.scope_type == "org",
+                Membership.id != mem.id,
+            )
+        )
+    ).scalar_one()
+    if nb == 0:
+        raise erreurs.conflit(message, code="dernier_admin")
 
 
 def invitation_contrat(ctx: Contexte, inv: Invitation, org_nom: str | None) -> dict[str, Any]:
@@ -109,7 +131,7 @@ async def ajouter_appartenance(
             select(Membership).where(
                 Membership.org_id == ctx.org_id,
                 Membership.utilisateur_id == corps.userId,
-                Membership.scope_type == corps.scopeType or "org",
+                Membership.scope_type == (corps.scopeType or "org"),
             )
         )
     ).scalar_one_or_none()
@@ -155,6 +177,12 @@ async def modifier_membre(
     if corps.role is not None and corps.role != mem.role:
         if corps.role not in ROLES_ORDRE:
             raise erreurs.validation("Rôle inconnu.", {"role": "invalide"})
+        if corps.role != "org_admin":
+            await _refuser_si_dernier_admin(
+                ctx,
+                mem,
+                "Impossible de rétrograder le dernier administrateur de l'organisation.",
+            )
         mem.role = corps.role
     if corps.scopeType is not None:
         mem.scope_type = corps.scopeType
@@ -179,24 +207,9 @@ async def retirer_membre(
     mem, u = await obtenir_membership(ctx, membreId)
     email = u.email if u else f"membre:{membreId}"
     exiger_confirmation(email, confirmation)
-    if mem.role == "org_admin" and mem.scope_type == "org":
-        nb = (
-            await ctx.session.execute(
-                select(func.count())
-                .select_from(Membership)
-                .where(
-                    Membership.org_id == ctx.org_id,
-                    Membership.role == "org_admin",
-                    Membership.scope_type == "org",
-                    Membership.id != mem.id,
-                )
-            )
-        ).scalar_one()
-        if nb == 0:
-            raise erreurs.conflit(
-                "Impossible de retirer le dernier administrateur de l'organisation.",
-                code="dernier_admin",
-            )
+    await _refuser_si_dernier_admin(
+        ctx, mem, "Impossible de retirer le dernier administrateur de l'organisation."
+    )
     await ctx.session.delete(mem)
     await ctx.session.flush()
     await journaliser(
@@ -255,6 +268,7 @@ async def inviter_membre(
         )
     if corps.role not in ROLES_ORDRE:
         raise erreurs.validation("Rôle inconnu.", {"role": "invalide"})
+    jeton_brut = jeton_opaque()
     inv = Invitation(
         id=nouvel_id(),
         org_id=ctx.org_id,
@@ -262,7 +276,7 @@ async def inviter_membre(
         role=corps.role,
         scope_type=corps.scopeType or "org",
         scope_id=corps.scopeId,
-        jeton_hash=hacher_jeton(jeton_opaque()),
+        jeton_hash=hacher_jeton(jeton_brut),
         invite_par=ctx.utilisateur_id,
         statut="en_attente",
         expire_le=dans(DUREE_INVITATION_S),
@@ -270,6 +284,21 @@ async def inviter_membre(
     )
     ctx.session.add(inv)
     await ctx.session.flush()
+    org = await ctx.session.get(Organisation, ctx.org_id)
+    lien = f"{ctx.reglages.url_frontend}/invitation/{jeton_brut}"
+    org_nom = org.nom if org else "une organisation"
+    paragraphes = [f"Vous avez été invité·e à rejoindre {org_nom} en tant que {corps.role}."]
+    if corps.message:
+        paragraphes.append(corps.message)
+    paragraphes.append("Ce lien est valable 7 jours.")
+    await courriel.envoyer(
+        email,
+        f"Invitation à rejoindre {org_nom} sur Synelia Cloud",
+        f"Rejoignez {org_nom}",
+        paragraphes,
+        bouton_texte="Accepter l'invitation",
+        bouton_url=lien,
+    )
     await journaliser(
         ctx,
         action="membre.invitation",

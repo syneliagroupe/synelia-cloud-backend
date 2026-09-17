@@ -10,6 +10,7 @@ from synelia_contract import modeles as m
 from synelia_contract import rbac
 from synelia_db.modeles import Organisation, Ressource
 
+from synelia.audit import journaliser
 from synelia.deps import Ctx, CtxPublic
 
 router = APIRouter(tags=["Compte & organisation active"])
@@ -126,7 +127,60 @@ async def modifier_onboarding(ctx: Ctx, corps: m.OnboardingPatchRequest) -> Any:
         (faites.add if corps.faite is not False else faites.discard)(corps.etape)
         etat["faites"] = sorted(faites)
     o.onboarding = etat
+    await journaliser(
+        ctx, action="onboarding.modification", cible_type="organisation", cible_id=ctx.org_id
+    )
     return await obtenir_onboarding(ctx)
+
+
+# Route réelle de chaque type de ressource côté frontend — la pluralisation
+# naïve (`/app/{type}s/{id}`) ne tenait que par coïncidence pour `vm` et
+# `espace` : la quasi-totalité des autres types renvoyaient un lien mort
+# (ex. `k8s_cluster` → `/app/k8s_clusters/` au lieu de `/app/kubernetes/`).
+# Un type sans fiche propre pointe vers la section qui le liste plutôt que de
+# deviner une URL qui n'existe pas.
+_HREF_PAR_TYPE: dict[str, str] = {
+    "vm": "/app/vms/{id}",
+    "espace": "/app/espaces/{id}",
+    "k8s_cluster": "/app/kubernetes/{id}",
+    "load_balancer": "/app/reseau/lb/{id}",
+    "bucket": "/app/objet/{id}",
+    "volume": "/app/stockage",
+    "reseau": "/app/reseau",
+    "groupe_securite": "/app/reseau",
+    "base_managee": "/app/bases",
+    "projet": "/app/applications/projets/{id}",
+    "web_domaine": "/app/web/domaines/{id}",
+    "web_site": "/app/web/applications/{id}",
+    "web_hebergement": "/app/web/hebergement/{id}",
+    "web_certificat": "/app/web/ssl/{id}",
+    "web_drive": "/app/web/drive/{id}",
+    "web_drive_siege": "/app/web/drive",
+    "web_sauvegarde": "/app/web/backup/{id}",
+    "dns_zone": "/app/web/domaines",
+    "smtp_relais": "/app/smtp",
+    "ticket": "/app/support/{id}",
+    "facture": "/app/facturation",
+    "ecriture": "/app/facturation",
+    "agent_ia": "/app/ia/agents/{id}",
+    "connaissance_ia": "/app/ia/connaissances/{id}",
+    "flux_ia": "/app/ia/orchestration/{id}",
+    "cle_ia": "/app/ia/parametres/passerelle",
+    "environnement": "/app/applications/variables",
+    "composant": "/app/applications/parametres",
+    "application": "/app/applications/projets",
+    "deploiement": "/app/applications/deploiements",
+    "docs_progression": "/app/docs",
+}
+
+
+def _href_resultat(r: Ressource) -> str:
+    """Lien réel de la fiche, ou de sa section à défaut de fiche propre."""
+    if r.type == "projet_service" and r.parent_id:
+        return f"/app/applications/projets/{r.parent_id}/{r.id}"
+    if r.type == "vm_instantane" and r.parent_id:
+        return f"/app/vms/{r.parent_id}"
+    return _HREF_PAR_TYPE.get(r.type, f"/app/{r.type}s/{r.id}").format(id=r.id)
 
 
 @router.get("/recherche", response_model=m.RechercheGetResponse, response_model_exclude_none=True)
@@ -147,7 +201,7 @@ async def rechercher(ctx: Ctx, q: str, types: str | None = None, limite: int = 2
             "id": r.id,
             "type": r.type,
             "libelle": r.nom or r.id,
-            "href": f"/app/{r.type}s/{r.id}",
+            "href": _href_resultat(r),
             "statut": r.statut,
         }
         resultats.append({k: v for k, v in d.items() if k in champs})

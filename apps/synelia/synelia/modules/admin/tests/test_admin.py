@@ -58,6 +58,21 @@ async def test_audit_plateforme(client):
     assert "pagination" in r.json()
 
 
+async def test_audit_plateforme_filtre_depuis_jusqua(client):
+    # `depuis`/`jusqua` doivent être lus depuis la valeur passée en requête, pas depuis
+    # l'horloge serveur — régression : le filtre comparait `Audit.date` à `maintenant()`
+    # quelle que soit la date demandée, donc `depuis` dans le passé ne renvoyait rien et
+    # `jusqua` dans le passé renvoyait tout.
+    await _creer_lead(client)  # garantit au moins une entrée d'audit récente
+    r = await client.get("/v1/admin/audit?depuis=2020-01-01T00:00:00Z")
+    assert r.status_code == 200, r.text
+    assert r.json()["pagination"]["total"] >= 1
+
+    r = await client.get("/v1/admin/audit?jusqua=2020-01-01T00:00:00Z")
+    assert r.status_code == 200, r.text
+    assert r.json()["pagination"]["total"] == 0
+
+
 async def test_travaux_plateforme(client):
     r = await client.get("/v1/admin/travaux")
     assert r.status_code == 200, r.text

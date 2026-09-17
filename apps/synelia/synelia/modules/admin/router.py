@@ -27,6 +27,9 @@ from synelia.modules.admin.service import (
     depot_placement,
     depot_statut_service,
 )
+from synelia.modules.espaces.service import depot as depot_espace
+from synelia.modules.membres.router import membre_contrat
+from synelia.modules.support.service import detenteur_tickets
 from synelia.travaux import demarrer_travail, vers_contrat
 
 router = APIRouter(prefix="/admin", tags=["Super admin — pilotage"])
@@ -96,7 +99,7 @@ async def lister_audit_plateforme(  # noqa: PLR0913,PLR0917
     if orgId:
         q = q.where(Audit.org_id == orgId)
     if depuis:
-        q = q.where(Audit.date >= service.utc(maintenant()))
+        q = q.where(Audit.date >= service.utc(depuis_iso(depuis)))
     if action:
         q = q.where(Audit.action.ilike(f"%{action}%"))
     if acteur:
@@ -108,7 +111,7 @@ async def lister_audit_plateforme(  # noqa: PLR0913,PLR0917
             )
         )
     if jusqua:
-        q = q.where(Audit.date <= service.utc(maintenant()))
+        q = q.where(Audit.date <= service.utc(depuis_iso(jusqua)))
     lignes = list((await ctx.session.execute(q.order_by(Audit.date.desc()))).scalars().all())
     ids = {a.acteur_id for a in lignes if a.acteur_id}
     noms: dict[str, str] = {}
@@ -231,6 +234,16 @@ async def obtenir_capacite(
         "projection": projection,
         "capaciteParSite": par_site or None,
     }
+
+
+@router.get("/espaces", response_model=list[m.EspaceCloud], response_model_exclude_none=True)
+async def lister_espaces_plateforme(ctx: Contexte = Depends(exige_admin("capacity.manage"))) -> Any:
+    """Espaces Cloud « plateforme » (`org_id` NULL) : réseau + load balancer partagés,
+    jamais visibles depuis `/espaces` (portée client) — ex. la zone VPS partagée de
+    `web_hebergement`, cf. `espaces.service.semer_zone_vps`. Seul point d'accès pour les
+    voir/piloter depuis l'équipe Synelia."""
+    lignes = await service.lignes_type(ctx, "espace")
+    return [m.EspaceCloud.model_validate(r.donnees) for r in lignes if r.org_id is None]
 
 
 # ── conformité ───────────────────────────────────────────────────────────────
@@ -518,10 +531,13 @@ async def elever_privileges(
         "expire": iso(exp),
         "accordePar": ctx.principal.email if ctx.principal else None,
     }
+    # Le rôle de base (`eq["role"]`) n'est jamais muté ici : le rôle effectivement
+    # autorisé (RBAC comme affichage) est recalculé à chaque lecture par
+    # `role_effectif_equipe()`, qui privilégie une élévation active tant qu'elle n'a
+    # pas expiré ou été révoquée — sans ça, une élévation « temporaire » restait en
+    # fait permanente (jamais réellement révoquée par expiration ou par DELETE).
     elevations.append(elev)
     eq["elevations"] = elevations
-    eq["role"] = corps.role
-    eq["elevation"] = {"active": True, "jusqua": iso(exp), "justification": corps.motif}
     u.equipe = eq
     await ctx.session.flush()
     await journaliser(
@@ -541,8 +557,15 @@ async def revoquer_elevation(
 ) -> Response:  # noqa: N803
     u = await service.membre_equipe(ctx, membreId)
     eq = dict(u.equipe)
+    # On désactive les élévations actives (`actif=False`) sans effacer l'historique —
+    # la trace (qui, quand, motif) reste consultable via GET .../elevation, seul l'effet
+    # RBAC cesse (voir `role_effectif_equipe`, qui ignore une élévation `actif=False`).
+    elevations = [dict(e) for e in (eq.get("elevations") or [])]
+    for e in elevations:
+        if e.get("actif", True):
+            e["actif"] = False
+    eq["elevations"] = elevations
     eq.pop("elevation", None)
-    eq["elevations"] = []
     u.equipe = eq
     await ctx.session.flush()
     await journaliser(
@@ -689,6 +712,9 @@ async def lancer_campagne_maj(
             "La campagne ne peut pas être lancée dans son état actuel.", code="etat_invalide"
         )
     await depot_campagne_maj.definir_statut(ctx, c.id, "en_cours")
+    await journaliser(
+        ctx, action="campagne_maj.lancement", cible_type="campagne_maj", cible_id=c.id, cible=c.nom
+    )
     return await demarrer_travail(
         ctx, "admin.maj.lancement", c.nom, cible_type="campagne_maj", cible_id=c.id, entree={}
     )
@@ -709,6 +735,9 @@ async def suspendre_campagne_maj(
             "La campagne ne peut pas être suspendue dans son état actuel.", code="etat_invalide"
         )
     await depot_campagne_maj.definir_statut(ctx, c.id, "suspendue")
+    await journaliser(
+        ctx, action="campagne_maj.suspension", cible_type="campagne_maj", cible_id=c.id, cible=c.nom
+    )
     return await demarrer_travail(
         ctx, "admin.suspension", c.nom, cible_type="campagne_maj", cible_id=c.id, entree={}
     )
@@ -839,6 +868,13 @@ async def lancer_campagne_migration(
             "La campagne ne peut pas être lancée dans son état actuel.", code="etat_invalide"
         )
     await depot_campagne_migration.definir_statut(ctx, c.id, "en_cours")
+    await journaliser(
+        ctx,
+        action="campagne_migration.lancement",
+        cible_type="campagne_migration",
+        cible_id=c.id,
+        cible=c.nom,
+    )
     return await demarrer_travail(
         ctx,
         "admin.migration.lancement",
@@ -862,6 +898,13 @@ async def annuler_campagne_migration(
 ) -> Any:  # noqa: N803
     c = await _campagne_migration(ctx, campagneId)
     exiger_confirmation(c.nom, confirmation)
+    await journaliser(
+        ctx,
+        action="campagne_migration.rollback",
+        cible_type="campagne_migration",
+        cible_id=c.id,
+        cible=c.nom,
+    )
     return await demarrer_travail(
         ctx,
         "admin.migration.rollback",
@@ -887,6 +930,13 @@ async def suspendre_campagne_migration(
             "La campagne ne peut pas être suspendue dans son état actuel.", code="etat_invalide"
         )
     await depot_campagne_migration.definir_statut(ctx, c.id, "suspendue")
+    await journaliser(
+        ctx,
+        action="campagne_migration.suspension",
+        cible_type="campagne_migration",
+        cible_id=c.id,
+        cible=c.nom,
+    )
     return await demarrer_travail(
         ctx, "admin.suspension", c.nom, cible_type="campagne_migration", cible_id=c.id, entree={}
     )
@@ -934,6 +984,64 @@ async def notifier_organisation(
         details={"destinataires": destinataires, "sujet": corps.sujet},
     )
     return {"destinataires": destinataires}
+
+
+# ── organisations : lecture cross-tenant (fiche organisation, espace fournisseur) ────────────
+# Les routes `/espaces`, `/membres`, `/support/tickets` sont scellées par organisation (RLS +
+# filtre applicatif sur `ctx.org_id`, cf. `Depot._org`) : un admin plateforme qui consulte la
+# fiche d'*une* organisation cliente ne peut pas s'en servir pour lire celles d'une autre. Ces
+# trois routes existent pour ce seul usage — passer `org_id=orgId` explicitement au dépôt/à la
+# requête, comme le fait déjà `notifier_organisation` ci-dessus et `service.lignes_type` pour les
+# agrégations plateforme. Aucune n'accepte l'id d'appel du client : l'appelant doit être
+# `exige_admin`, jamais une route `/v1/**` ordinaire.
+@router.get(
+    "/organisations/{orgId}/espaces",
+    response_model=list[m.EspaceCloud],
+    response_model_exclude_none=True,
+)
+async def lister_espaces_organisation(
+    orgId: str, ctx: Contexte = Depends(exige_admin("org.manage"))
+) -> Any:  # noqa: N803
+    org = await ctx.session.get(Organisation, orgId)
+    if org is None:
+        raise erreurs.introuvable("Organisation", orgId)
+    return await depot_espace.tous(ctx, org_id=orgId)
+
+
+@router.get(
+    "/organisations/{orgId}/membres",
+    response_model=list[m.Membre],
+    response_model_exclude_none=True,
+)
+async def lister_membres_organisation(
+    orgId: str, ctx: Contexte = Depends(exige_admin("org.manage"))
+) -> Any:  # noqa: N803
+    org = await ctx.session.get(Organisation, orgId)
+    if org is None:
+        raise erreurs.introuvable("Organisation", orgId)
+    q = (
+        select(Membership, Utilisateur)
+        .join(Utilisateur, Utilisateur.id == Membership.utilisateur_id)
+        .where(Membership.org_id == orgId)
+        .order_by(Membership.cree_le)
+    )
+    lignes = (await ctx.session.execute(q)).all()
+    return [membre_contrat(ctx, mem, u) for mem, u in lignes]
+
+
+@router.get(
+    "/organisations/{orgId}/tickets",
+    response_model=list[m.Ticket],
+    response_model_exclude_none=True,
+)
+async def lister_tickets_organisation(
+    orgId: str, ctx: Contexte = Depends(exige_admin("org.manage"))
+) -> Any:  # noqa: N803
+    org = await ctx.session.get(Organisation, orgId)
+    if org is None:
+        raise erreurs.introuvable("Organisation", orgId)
+    items = await detenteur_tickets.tous(ctx, org_id=orgId)
+    return [t.model_dump(mode="json") for t in items]
 
 
 # ── placements ───────────────────────────────────────────────────────────────
@@ -985,19 +1093,17 @@ async def obtenir_sante_plateforme(ctx: Contexte = Depends(exige_admin("capacity
     return {
         "backends": [_backend_usage(b, usage) for b in backends],
         "filesProvisioning": {"enAttente": en_attente, "enCours": en_cours, "enEchec24h": en_echec},
-        "integrations": [
-            {"nom": "Centreon", "statut": "ok", "dernierControle": maintenant()},
-            {"nom": "Grafana", "statut": "ok", "dernierControle": maintenant()},
-            {"nom": "VictoriaLogs", "statut": "ok", "dernierControle": maintenant()},
-            {"nom": "OpenStack", "statut": "ok", "dernierControle": maintenant()},
-            {"nom": "Temporal", "statut": "ok", "dernierControle": maintenant()},
-        ],
+        "integrations": await service.sante_integrations(ctx),
         "alertes": [],
-        "accesRefuses24h": 0,
-        "ticketsSlaRisque": 0,
+        "accesRefuses24h": await service.acces_refuses_24h(ctx),
+        "ticketsSlaRisque": await service.tickets_sla_risque(ctx),
     }
 
 
+# Seul le site ABJ est réellement adossé au lab OpenStack. Un second site "Grand-Bassam"
+# (GBM) figurait ici avec des specs inventées (Tier III, 800 kW, ISO 27001, latence 4ms) —
+# retiré le 2026-09-09, même règle que `backend-gbm` dans service.py : un site fantôme avec
+# des chiffres précis est plus trompeur qu'un site absent.
 SITES_PHYSIQUES = [
     {
         "code": "ABJ",
@@ -1009,21 +1115,7 @@ SITES_PHYSIQUES = [
         "energie": "Double alimentation",
         "redondance": "2N",
         "capacite": "1,2 MW",
-        "latencesMs": [{"vers": "GBM", "ms": 4}],
         "photoUrl": "/images/sites/abj.jpg",
-    },
-    {
-        "code": "GBM",
-        "nom": "Datacenter Grand-Bassam",
-        "ville": "Grand-Bassam",
-        "site": "GBM",
-        "operateur": "Synelia Cloud",
-        "certifications": ["ISO 27001", "Tier III"],
-        "energie": "Double alimentation",
-        "redondance": "2N",
-        "capacite": "800 kW",
-        "latencesMs": [{"vers": "ABJ", "ms": 4}],
-        "photoUrl": "/images/sites/gbm.jpg",
     },
 ]
 
@@ -1114,7 +1206,7 @@ async def mettre_a_jour_incident(
 async def modifier_statut_services(
     corps: m.AdminStatutServicesPutRequest, ctx: Contexte = Depends(exige_admin("capacity.manage"))
 ) -> Any:
-    for existant in await depot_statut_service.tous(ctx):
+    for existant in await depot_statut_service.lignes(ctx):
         await depot_statut_service.supprimer(ctx, existant.id)
     services = []
     for s in corps.services:
@@ -1173,9 +1265,11 @@ async def obtenir_tableau_de_bord_plateforme(
         "projetsTotal": projets,
         "backendsEnLigne": en_ligne,
         "backendsTotal": len(backends),
-        "accesRefuses24h": 0,
+        "accesRefuses24h": await service.acces_refuses_24h(ctx),
         "jobsEnEchec": jobs_echec,
-        "ticketsSlaRisque": 0,
+        "ticketsSlaRisque": await service.tickets_sla_risque(ctx),
+        # `caMensuel` reste à 0 : la facturation (module `facturation`) n'agrège pas encore
+        # de revenu récurrent plateforme calculé — hors périmètre de ce module.
         "caMensuel": 0,
     }
 

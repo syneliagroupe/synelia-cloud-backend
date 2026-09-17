@@ -1,24 +1,45 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from fastapi import APIRouter, Depends, status
 from synelia_contract import modeles as m
+from synelia_kernel.dates import maintenant
 from synelia_kernel.ids import nouvel_id
 
 from synelia.audit import journaliser
 from synelia.depot import Depot
 from synelia.deps import Contexte, Page, exige, exiger_confirmation
-from synelia.modules.kubernetes.service import depot_cluster, depot_pool
+from synelia.modules.kubernetes.service import (
+    depot_cluster,
+    depot_pool,
+    kubeconfig_reel,
+    metriques_instantanees,
+    reconcilier_statut,
+)
 from synelia.travaux import demarrer_travail
 
 router = APIRouter(prefix="/kubernetes", tags=["Kubernetes"])
 
 VERSIONS = ["1.31.4", "1.32.2", "1.33.0"]
 
+# Même triplet que `vms.router._SERIES` (module VM) : un instantané réel, pas un historique
+# persisté — cf. `metriques_instantanees`.
+_SERIES_K8S = [("cpu", "%"), ("ram", "%"), ("reseau_entrant", "Mo/s")]
+
 
 def _version_detail(version: str, recommandee: bool = False) -> m.VersionK8s:
     return m.VersionK8s(version=version, statut="recommandee" if recommandee else "supportee")
+
+
+async def _assembler_pools_cluster(ctx: Contexte, cluster: m.ClusterK8s) -> m.ClusterK8s:
+    """Assemble les pools d'un cluster depuis depot_pool pour une source de vérité unique.
+
+    Tous les pools (créés avec le cluster ou ajoutés après) vivent maintenant dans depot_pool ;
+    cette fonction remplace le champ `pools` vide du ClusterK8s stocké par les pools réels."""
+    pools = await depot_pool.tous(ctx, parent_id=cluster.id)
+    return cluster.model_copy(update={"pools": pools})
 
 
 @router.get("", response_model=m.KubernetesGetResponse, response_model_exclude_none=True)
@@ -29,7 +50,7 @@ async def lister_clusters(
     statut: str | None = None,
     ctx: Contexte = Depends(exige("org.dashboard.view", lecture=True)),
 ) -> Any:
-    return await depot_cluster.lister(
+    resultat = await depot_cluster.lister(
         ctx,
         page,
         filtre=lambda c: (
@@ -39,6 +60,12 @@ async def lister_clusters(
         ),
         tri_defaut="nom",
     )
+    # Reconcile-on-read : sans ça un cluster resterait affiché `provisioning` indéfiniment
+    # dans la liste, même après achèvement réel côté Magnum (cf. `reconcilier_statut`).
+    # Assembler aussi les pools depuis depot_pool pour chaque cluster (source de vérité unique).
+    clusters_reconcilies = [await reconcilier_statut(ctx, c) for c in resultat["donnees"]]
+    resultat["donnees"] = [await _assembler_pools_cluster(ctx, c) for c in clusters_reconcilies]
+    return resultat
 
 
 @router.post(
@@ -51,7 +78,7 @@ async def creer_cluster(
     corps: m.ClusterK8sCreation, ctx: Contexte = Depends(exige("vm.create_delete"))
 ) -> Any:
     await depot_cluster.exiger_nom_libre(ctx, corps.nom)
-    espace = await Depot("espace", m.EspaceCloud).obtenir(ctx, corps.espaceId)
+    await Depot("espace", m.EspaceCloud).obtenir(ctx, corps.espaceId)
     cluster = m.ClusterK8s(
         id=nouvel_id(),
         espaceId=corps.espaceId,
@@ -64,7 +91,6 @@ async def creer_cluster(
         modules=corps.modules or ["ingress-nginx"],
         statut="provisioning",
         site=corps.site,
-        applicationId=getattr(espace, "applicationId", None),
     )
     await depot_cluster.creer(ctx, cluster)
     await journaliser(
@@ -149,7 +175,40 @@ async def lister_versions_k8s(ctx: Contexte = Depends(exige(None))) -> Any:
 async def obtenir_cluster(
     clusterId: str, ctx: Contexte = Depends(exige("org.dashboard.view", lecture=True))
 ) -> Any:  # noqa: N803
-    return await depot_cluster.obtenir(ctx, clusterId)
+    cluster = await depot_cluster.obtenir(ctx, clusterId)
+    cluster_reconcilie = await reconcilier_statut(ctx, cluster)
+    # Assembler les pools depuis depot_pool pour une source de vérité unique.
+    return await _assembler_pools_cluster(ctx, cluster_reconcilie)
+
+
+@router.get(
+    "/{clusterId}/metriques",
+    response_model=m.KubernetesClusterIdMetriquesGetResponse,
+    response_model_exclude_none=True,
+)
+async def obtenir_metriques_k8s(
+    clusterId: str, ctx: Contexte = Depends(exige("org.dashboard.view", lecture=True))
+) -> Any:  # noqa: N803
+    cluster = await depot_cluster.obtenir(ctx, clusterId)
+    # Agrégat réel (diagnostics Nova/libvirt des VM masters/workers du cluster) : `None` en
+    # simulation ou tant que Magnum n'a créé aucune VM identifiable — cf. `metriques_instantanees`.
+    # Pas de valeur inventée pour meubler la page en attendant.
+    resultat = await metriques_instantanees(ctx, cluster)
+    ts = maintenant()
+    agrege = (resultat or {}).get("agrege")
+    series = [
+        m.Serie(
+            metrique=metrique,
+            unite=unite,
+            fenetre="24h",
+            points=[m.PointSerie(ts=ts, valeur=agrege[metrique])]
+            if agrege and metrique in agrege
+            else [],
+        )
+        for metrique, unite in _SERIES_K8S
+    ]
+    noeuds = [m.Noeud.model_validate(n) for n in (resultat or {}).get("noeuds", [])]
+    return m.KubernetesClusterIdMetriquesGetResponse(series=series, noeuds=noeuds)
 
 
 @router.delete(
@@ -192,6 +251,14 @@ async def obtenir_kubeconfig(
     clusterId: str, ctx: Contexte = Depends(exige("component.restart"))
 ) -> Any:  # noqa: N803
     cluster = await depot_cluster.obtenir(ctx, clusterId)
+    secrets = await depot_cluster.secrets(ctx, clusterId)
+    magnum_id = secrets.get("magnum_cluster_id")
+    # `kubeconfig_reel` construit le kubeconfig via un appel Magnum/openstacksdk synchrone
+    # (CSR signée, avec reprises et `time.sleep` en cas de 502/504 intermittents côté lab) :
+    # déchargé dans un thread pour ne pas geler la boucle asyncio pendant ces reprises.
+    reel = await asyncio.to_thread(kubeconfig_reel, magnum_id) if magnum_id else None
+    if reel:
+        return m.Kubeconfig(contenu=_kubeconfig_yaml(reel), expire=None, utilisateur="synelia-paas")
     contenu = (
         f"apiVersion: v1\nkind: Config\nclusters:\n- name: {cluster.nom}\n"
         f"  cluster:\n    server: https://{clusterId}.k8s.synelia.cloud:6443\n"
@@ -199,6 +266,31 @@ async def obtenir_kubeconfig(
         f"current-context: {cluster.nom}\nusers:\n- name: admin\n  user:\n    token: KUBECONFIG-TOKEN\n"
     )
     return m.Kubeconfig(contenu=contenu, expire=None, utilisateur="admin")
+
+
+def _kubeconfig_yaml(kc: dict[str, Any]) -> str:
+    cluster = kc["clusters"][0]
+    utilisateur = kc["users"][0]
+    contexte = kc["contexts"][0]
+    return (
+        "apiVersion: v1\nkind: Config\n"
+        "clusters:\n"
+        f"- name: {cluster['name']}\n"
+        "  cluster:\n"
+        f"    server: {cluster['cluster']['server']}\n"
+        f"    certificate-authority-data: {cluster['cluster']['certificate-authority-data']}\n"
+        "contexts:\n"
+        f"- name: {contexte['name']}\n"
+        "  context:\n"
+        f"    cluster: {contexte['context']['cluster']}\n"
+        f"    user: {contexte['context']['user']}\n"
+        f"current-context: {kc['current-context']}\n"
+        "users:\n"
+        f"- name: {utilisateur['name']}\n"
+        "  user:\n"
+        f"    client-certificate-data: {utilisateur['user']['client-certificate-data']}\n"
+        f"    client-key-data: {utilisateur['user']['client-key-data']}\n"
+    )
 
 
 @router.post(

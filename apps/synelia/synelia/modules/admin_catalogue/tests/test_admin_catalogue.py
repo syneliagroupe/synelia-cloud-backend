@@ -1,5 +1,22 @@
 """Admin catalogue : offres, familles, fiches de service, modèles, cycle de facturation plateforme."""
 
+from synelia.modules.admin_catalogue.service import CATALOGUE_REEL
+
+
+async def test_catalogue_reel_semé(client):
+    """Le catalogue de démarrage (`semer_catalogue_reel`) est présent dès le premier
+    démarrage, indépendamment du jeu de démo — chaque offre correspond à une ressource
+    réellement provisionnable (Espace Cloud, hébergement Web Cloud, base managée)."""
+    r = await client.get("/v1/admin/catalogue/offres", params={"parPage": 100})
+    assert r.status_code == 200, r.text
+    offres = {o["code"]: o for o in r.json()["donnees"]}
+    for attendu in CATALOGUE_REEL:
+        assert attendu["code"] in offres, f"offre {attendu['code']} absente du catalogue"
+        offre = offres[attendu["code"]]
+        assert offre["categorie"] == attendu["categorie"]
+        assert offre["prix"] == attendu["prix"]
+        assert offre["statut"] == "publiee"
+
 
 async def test_offres_crud(client):
     r = await client.get("/v1/admin/catalogue/offres")
@@ -36,16 +53,44 @@ async def test_offres_crud(client):
     )
     assert r.status_code == 200 and r.json()["nom"] == "Espace Premium Plus"
 
+    # Un brouillon jamais souscrit se supprime.
+    r = await client.delete(f"/v1/admin/catalogue/offres/{oid}")
+    assert r.status_code == 204
+
+    r = await client.get(f"/v1/admin/catalogue/offres/{oid}")
+    assert r.status_code == 404
+
+
+async def test_offre_publiee_ne_se_supprime_pas(client):
+    """Une offre publiée a été vendue : elle se déprécie, elle ne se supprime jamais."""
+    r = await client.post(
+        "/v1/admin/catalogue/offres",
+        json={
+            "code": "essentiel",
+            "nom": "Espace Essentiel",
+            "categorie": "espace_cloud",
+            "specs": "2 vCPU · 8 Go",
+            "prix": 20000,
+        },
+    )
+    assert r.status_code == 201, r.text
+    oid = r.json()["id"]
+
     r = await client.post(
         f"/v1/admin/catalogue/offres/{oid}/publication", json={"statut": "publiee"}
     )
     assert r.status_code == 200 and r.json()["statut"] == "publiee"
 
     r = await client.delete(f"/v1/admin/catalogue/offres/{oid}")
-    assert r.status_code == 204
+    assert r.status_code == 409 and r.json()["erreur"]["code"] == "offre_publiee"
 
-    r = await client.get(f"/v1/admin/catalogue/offres/{oid}")
-    assert r.status_code == 404
+    r = await client.post(
+        f"/v1/admin/catalogue/offres/{oid}/publication", json={"statut": "depreciee"}
+    )
+    assert r.status_code == 200 and r.json()["statut"] == "depreciee"
+
+    r = await client.delete(f"/v1/admin/catalogue/offres/{oid}")
+    assert r.status_code == 409 and r.json()["erreur"]["code"] == "offre_publiee"
 
 
 async def test_familles(client):
@@ -138,10 +183,14 @@ async def test_impayes(client):
     r = await client.get("/v1/admin/facturation/impayes")
     assert r.status_code == 200
 
+    # Test relances with non-existent facture: should return echecs=1, envoyees=0
+    # (the new behavior after commit 499f5c0 only counts factures that actually exist)
     r = await client.post(
         "/v1/admin/facturation/impayes/relances", json={"factures": ["x"], "niveau": "rappel"}
     )
-    assert r.status_code == 200 and r.json()["envoyees"] == 1
+    assert r.status_code == 200
+    assert r.json()["envoyees"] == 0
+    assert r.json()["echecs"] == 1
 
 
 async def test_marges(client):

@@ -5,7 +5,7 @@ from typing import Any
 from synelia_contract import modeles as m
 from synelia_db.modeles import Travail
 from synelia_openstack import fournisseur
-from synelia_openstack.plateforme_k8s import ArgoReel, ArgoSimule, DepotsReel, DepotsSimule
+from synelia_openstack.plateforme_k8s import DepotsReel, DepotsSimule
 
 from synelia.depot import Depot
 from synelia.deps.contexte import Contexte
@@ -22,10 +22,6 @@ depot_app = Depot("application", m.ApplicationPaas)
 
 _CLE_APPROBATION = "approbation_requise"
 _CLE_LIVE = "aete_live"
-
-
-def argo() -> ArgoSimule:
-    return fournisseur(ArgoSimule, ArgoReel)
 
 
 def depots() -> DepotsSimule:
@@ -88,12 +84,6 @@ class ExecuteurAppDeploy(Executeur):
         await depot_deploy.modifier(
             ctx, d.id, {"statut": "live", "previewUrl": preview, "dureeS": 12}
         )
-        nom = d.envNom or devant(d.envId)
-        argo().creer_application(nom, "", ".", "default")
-
-
-def devant(env_id: str) -> str:
-    return f"env-{env_id[:8]}"
 
 
 @executeur("app.rollback")

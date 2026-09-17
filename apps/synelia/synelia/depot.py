@@ -182,6 +182,7 @@ class Depot[T: BaseModel]:
             nom=str(cols["nom"]) if cols["nom"] is not None else None,
             statut=str(cols["statut"]) if cols["statut"] is not None else None,
             parent_id=parent_id,
+            cree_par_id=ctx.utilisateur_id,
             donnees=modele.model_dump(mode="json"),
             secrets={k: chiffrer(v) for k, v in (secrets or {}).items()},
         )

@@ -160,6 +160,12 @@ async def supprimer_offre(
     offreId: str, ctx: Contexte = Depends(exige_admin("catalog.edit"))
 ) -> Response:  # noqa: N803
     offre = await depot_offre.obtenir(ctx, offreId, org_id=None)
+    if offre.statut != "brouillon":
+        raise erreurs.conflit(
+            "Une offre publiée ne se supprime pas, elle se déprécie — elle a été vendue. "
+            "Seul un brouillon jamais souscrit se supprime.",
+            code="offre_publiee",
+        )
     if offre.souscriptionsActives > 0:
         raise erreurs.conflit(
             "Cette offre a des souscriptions actives, elle ne peut être supprimée.",
@@ -391,6 +397,17 @@ async def lancer_relances(
     corps: m.AdminFacturationImpayesRelancesPostRequest,
     ctx: Contexte = Depends(exige_admin("invoice.view")),
 ) -> Any:
+    depot_f = Depot("facture", m.Facture, plateforme=True)
+    envoyees = 0
+    for facture_id in corps.factures:
+        try:
+            facture = await depot_f.obtenir(ctx, facture_id)
+            # Increment relances counter
+            await depot_f.modifier(ctx, facture_id, {"relances": facture.relances + 1})
+            envoyees += 1
+        except Exception:  # noqa: BLE001, S112
+            # Silently skip factures that fail to update
+            continue
     await journaliser(
         ctx,
         action="facturation.relances",
@@ -398,7 +415,7 @@ async def lancer_relances(
         cible_id="impayes",
         details=corps.model_dump(mode="json"),
     )
-    return {"envoyees": len(corps.factures), "echecs": 0}
+    return {"envoyees": envoyees, "echecs": len(corps.factures) - envoyees}
 
 
 @router.get("/facturation/marges", response_model=list[m.MargeBackend])

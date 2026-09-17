@@ -1,23 +1,19 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, Response, status
 from synelia_contract import modeles as m
-from synelia_openstack import fournisseur
-from synelia_openstack.victoria import VictoriaReel, VictoriaSimule
 
 from synelia.audit import journaliser
 from synelia.deps import Contexte, Page, exige, exiger_confirmation
 from synelia.modules.observabilite import service
 from synelia.modules.observabilite.service import depot
+from synelia.modules.observabilite.service import victoria as _victoria
 
 router = APIRouter(prefix="/observabilite", tags=["Observabilité"])
-
-
-def _victoria() -> VictoriaSimule:
-    return fournisseur(VictoriaSimule, VictoriaReel)
 
 
 @router.get(
@@ -48,6 +44,8 @@ async def creer_regle_alerte(
 ) -> Any:
     regle = service.regle_vers_modele(corps, ctx)
     await depot.creer(ctx, regle)
+    if regle.actif:
+        service.appliquer_regle_k8s(regle)
     await journaliser(
         ctx,
         action="observabilite.alerte.creation",
@@ -83,6 +81,10 @@ async def modifier_regle_alerte(
     if corps.actif is not None:
         patch["actif"] = corps.actif
     updated = await depot.modifier(ctx, alerteId, patch)
+    if updated.actif:
+        service.appliquer_regle_k8s(updated)
+    else:
+        service.supprimer_regle_k8s(alerteId)
     await journaliser(
         ctx,
         action="observabilite.alerte.modification",
@@ -99,6 +101,7 @@ async def supprimer_regle_alerte(
 ) -> Response:  # noqa: N803
     regle = await depot.obtenir(ctx, alerteId)
     exiger_confirmation(regle.cible, confirmation)
+    service.supprimer_regle_k8s(alerteId)
     await depot.supprimer(ctx, alerteId, logique=True)
     await journaliser(
         ctx,
@@ -153,8 +156,15 @@ async def obtenir_journaux(
     recherche: str | None = None,
     ctx: Contexte = Depends(exige(None)),
 ) -> Any:  # noqa: N803
-    lignes = _victoria().extrait_logs(
-        ressourceId, niveau, depuis.isoformat() if depuis else None, recherche
+    # `extrait_logs` (httpx synchrone) est déchargé via `asyncio.to_thread` : même garde que
+    # `bases.service.gabarit_pour_palier`, sans quoi un VictoriaLogs injoignable gèlerait la
+    # boucle asyncio le temps du délai d'expiration — donc l'API entière, tous tenants confondus.
+    lignes = await asyncio.to_thread(
+        _victoria().extrait_logs,
+        ressourceId,
+        niveau,
+        depuis.isoformat() if depuis else None,
+        recherche,
     )
     return {
         "lignes": [m.LigneLog(**ligne) for ligne in lignes][:20],
@@ -174,4 +184,11 @@ async def obtenir_metriques(
     fenetre: str = "24h",
     ctx: Contexte = Depends(exige(None)),
 ) -> Any:  # noqa: N803
-    return service.metriques(fenetre, metriques.split(",") if metriques else None)
+    # `service.metriques` enchaîne jusqu'à huit appels httpx synchrones vers VictoriaMetrics
+    # (un par série + un par tuile) : même garde `asyncio.to_thread` que `obtenir_journaux`
+    # ci-dessus — un VictoriaMetrics injoignable prenait jusqu'à 8 × 5 s pour échouer et
+    # gelait la boucle asyncio pendant tout ce temps, donc l'API entière (vérifié en direct
+    # sur dev01 : ~40 s avant ce correctif).
+    return await asyncio.to_thread(
+        service.metriques, fenetre, metriques.split(",") if metriques else None
+    )

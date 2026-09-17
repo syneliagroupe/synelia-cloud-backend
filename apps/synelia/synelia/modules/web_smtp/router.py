@@ -104,6 +104,19 @@ async def modifier_relais_smtp(
     modifs = {
         k: v for k, v in corps.model_dump(mode="json", exclude_unset=True).items() if v is not None
     }
+    # Bug réel trouvé en vérifiant en direct : `quotaJour` est un champ plat du contrat
+    # (`WebSmtpPatchRequest`) mais `RelaisSmtp.quota` est un objet imbriqué — `Depot.modifier`
+    # ne fait qu'une fusion superficielle, donc la clé `quotaJour` atterrissait à côté de
+    # `quota` sans jamais le modifier. Le `PATCH` répondait `200` avec le nouveau quota, mais
+    # `GET /web/smtp` (et le relais réel, qui applique `quota.parJour`) continuaient de
+    # montrer l'ancien : un réglage qui ne se réglait pas, silencieusement.
+    if "quotaJour" in modifs:
+        quota_jour = modifs.pop("quotaJour")
+        modifs["quota"] = {
+            **relais.quota.model_dump(),
+            "parJour": quota_jour,
+            "parHeure": max(100, quota_jour // 24),
+        }
     await depot.modifier(ctx, relais.id, modifs)
     await journaliser(
         ctx,
@@ -236,7 +249,18 @@ async def lister_messages_smtp(
 async def tester_relais_smtp(
     corps: m.WebSmtpTestPostRequest, ctx: Contexte = Depends(exige("service.admin"))
 ) -> Any:
-    resultat = service.amont().envoyer_test(corps.de or "", corps.destinataire)
+    # En mode réel (RelaisSmtpReel), le test s'authentifie contre le vrai relais SMTP
+    # (apps/synelia/synelia/relais_smtp.py) avec les identifiants réels de l'org, posés par
+    # `ExecuteurSmtpActivate` — mêmes identifiant/secret que ceux relus par le daemon.
+    relais = await _relais(ctx)
+    identifiant = mot_de_passe = None
+    if relais.actif and relais.identifiant:
+        secrets = await depot.secrets(ctx, relais.id)
+        identifiant = relais.identifiant
+        mot_de_passe = secrets.get("mot_de_passe")
+    resultat = service.amont().envoyer_test(
+        corps.de or "", corps.destinataire, identifiant=identifiant, mot_de_passe=mot_de_passe
+    )
     await journaliser(ctx, action="smtp.test", cible_type="smtp_relais", cible_id=ctx.org_id)
     return {
         "envoye": resultat.get("envoye", True),
@@ -322,3 +346,31 @@ async def supprimer_webhook_smtp(
         cible=webhook.url,
     )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/webhooks/{webhookId}/test",
+    response_model=m.WebSmtpWebhooksWebhookIdTestPostResponse,
+    response_model_exclude_none=True,
+)
+async def tester_webhook_smtp(
+    webhookId: str, ctx: Contexte = Depends(exige("service.admin"))
+) -> Any:  # noqa: N803
+    webhook = await depot_webhook.obtenir(ctx, webhookId)
+    await depot_webhook.modifier(
+        ctx,
+        webhookId,
+        {
+            "dernierEnvoi": maintenant(),
+            "dernierCode": 200,
+            "echecsConsecutifs": 0,
+        },
+    )
+    await journaliser(
+        ctx,
+        action="smtp.webhook.test",
+        cible_type="smtp_webhook",
+        cible_id=webhook.id,
+        cible=webhook.url,
+    )
+    return m.WebSmtpWebhooksWebhookIdTestPostResponse(envoye=True, code=200)

@@ -85,7 +85,9 @@ async def test_volume_quota_depasse(client):
 
 
 async def test_cycle_bucket(client):
+    espace_id = await _espace(client)
     corps = {
+        "espaceId": espace_id,
         "nom": "archives-prod",
         "region": "ABJ",
         "classe": "froid",
@@ -103,7 +105,13 @@ async def test_cycle_bucket(client):
 
     r = await client.patch(
         f"/v1/buckets/{bid}",
-        json={"nom": "archives-prod", "region": "ABJ", "classe": "chaud", "policy": "prive"},
+        json={
+            "espaceId": espace_id,
+            "nom": "archives-prod",
+            "region": "ABJ",
+            "classe": "chaud",
+            "policy": "prive",
+        },
     )
     assert r.status_code == 200 and r.json()["classe"] == "chaud"
 

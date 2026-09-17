@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+from datetime import timedelta
 from typing import Annotated, Any
 
 from fastapi import Depends, Header, Request
@@ -13,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from synelia_contract.rbac import ROLES_EQUIPE
 from synelia_db import rls
-from synelia_db.modeles import CleApi, Membership, SessionAuth, Utilisateur
+from synelia_db.modeles import CleApi, Membership, Organisation, SessionAuth, Utilisateur
 from synelia_db.session import fabrique
 from synelia_kernel import erreurs
 from synelia_kernel.config import Reglages, reglages
@@ -21,7 +22,13 @@ from synelia_kernel.dates import maintenant
 from synelia_kernel.journal import org_id_courant, utilisateur_id_courant
 
 from synelia.deps import limitation
-from synelia.securite import hacher_jeton, lire_acces
+from synelia.securite import (
+    hacher_jeton,
+    ip_autorisee,
+    lire_acces,
+    politiques_securite,
+    role_effectif_equipe,
+)
 
 
 @dataclass
@@ -108,6 +115,27 @@ async def contexte_public(
     )
 
 
+async def _politiques_org(session: AsyncSession, org_id: str | None) -> dict[str, Any]:
+    if not org_id:
+        return {}
+    o = await session.get(Organisation, org_id)
+    return politiques_securite(o.politiques) if o else {}
+
+
+async def _verifier_organisation_active(
+    session: AsyncSession, org_id: str | None, *, admin_plateforme: bool
+) -> None:
+    """Une organisation suspendue coupe l'accès de ses membres à *chaque* requête (pas
+    seulement à la connexion) — une session déjà ouverte avant la suspension ne doit pas
+    survivre jusqu'à son expiration naturelle. L'équipe Synelia garde l'accès (elle doit
+    pouvoir consulter/réactiver l'organisation qu'elle vient de suspendre)."""
+    if not org_id or admin_plateforme:
+        return
+    o = await session.get(Organisation, org_id)
+    if o is not None and o.statut == "suspendue":
+        raise erreurs.interdit("Organisation suspendue.", code="organisation_suspendue")
+
+
 async def _principal_depuis_jeton(session: AsyncSession, jeton: str) -> Principal:
     claims = lire_acces(jeton)
     sid = claims.get("sid")
@@ -117,6 +145,17 @@ async def _principal_depuis_jeton(session: AsyncSession, jeton: str) -> Principa
             raise erreurs.non_authentifie("Session révoquée ou expirée.")
         if not s.mfa_validee:
             raise erreurs.non_authentifie("Second facteur requis.")
+        inactivite_min = (
+            (await _politiques_org(session, s.org_id)).get("session", {}).get("inactiviteMin")
+        )
+        reference = s.derniere_activite_le or s.cree_le
+        if (
+            inactivite_min
+            and reference
+            and maintenant() - reference > timedelta(minutes=inactivite_min)
+        ):
+            s.revoquee_le = maintenant()
+            raise erreurs.non_authentifie("Session expirée pour inactivité.")
         s.derniere_activite_le = maintenant()
     u = await session.get(Utilisateur, claims["sub"])
     if u is None or u.statut == "suspendu":
@@ -128,16 +167,35 @@ async def _principal_depuis_jeton(session: AsyncSession, jeton: str) -> Principa
     )
     roles = {m.org_id: m.role for m in membres if m.scope_type == "org"}
     equipe = u.equipe or {}
+    role_equipe = role_effectif_equipe(equipe)
+    org_id = claims.get("org")
+    admin_plateforme = bool(equipe) and role_equipe in ROLES_EQUIPE
+    await _verifier_organisation_active(session, org_id, admin_plateforme=admin_plateforme)
+    if admin_plateforme:
+        role = role_equipe or claims.get("role") or "read_only"
+    elif org_id:
+        # Rôle réel de l'organisation à *cette* requête, jamais celui figé dans le jeton à
+        # la connexion (`claims["role"]`) : sinon un changement de rôle via
+        # `PATCH /v1/membres/{id}` ne prend effet qu'à l'expiration/rafraîchissement du
+        # jeton déjà émis (jusqu'à 15 min), ce qui vide de son sens toute rétrogradation
+        # de sécurité (compte compromis, offboarding). `roles` vient d'une lecture Membership
+        # fraîche faite plus haut pour *chaque* requête authentifiée (déjà nécessaire pour
+        # `roles_par_org`) : pas de requête supplémentaire, donc pas de coût additionnel.
+        # Absent de `roles` (membre retiré entre-temps) : on ne retombe jamais sur le rôle du
+        # jeton, seulement sur `read_only` — même logique que l'organisation suspendue.
+        role = roles.get(org_id) or "read_only"
+    else:
+        role = claims.get("role") or "read_only"
     return Principal(
         utilisateur_id=u.id,
         email=u.email,
         nom=u.nom,
-        org_id=claims.get("org"),
-        role=claims.get("role") or "read_only",
+        org_id=org_id,
+        role=role,
         session_id=sid,
         emprunt=bool(claims.get("emprunt")),
         equipe=bool(equipe),
-        role_equipe=equipe.get("role"),
+        role_equipe=role_equipe,
         roles_par_org=roles,
     )
 
@@ -165,6 +223,26 @@ async def _principal_depuis_cle(session: AsyncSession, cle: str) -> Principal:
     )
 
 
+async def _verifier_restriction_ip(
+    session: AsyncSession, request: Request, principal: Principal
+) -> None:
+    """`restrictionIp` réelle : coupe l'accès si l'IP de la requête n'est dans aucune plage
+    autorisée couvrant la portée (portail/API) de ce principal."""
+    politiques = await _politiques_org(session, principal.org_id)
+    restriction = politiques.get("restrictionIp", {})
+    if not restriction.get("actif"):
+        return
+    if restriction.get("appliqueAuxAdmins") is False and principal.est_admin_plateforme:
+        return
+    portee_requise = "api" if principal.cle_api_id else "portail"
+    ip = request.client.host if request.client else None
+    if not ip_autorisee(ip, restriction.get("plages", []), portee_requise):
+        raise erreurs.interdit(
+            "Adresse IP non autorisée par la politique de sécurité de l'organisation.",
+            code="ip_non_autorisee",
+        )
+
+
 async def contexte(
     request: Request,
     session: Annotated[AsyncSession, Depends(_session)],
@@ -186,6 +264,7 @@ async def contexte(
             principal.org_id = x_organisation_id
             principal.role = principal.role_equipe or principal.role
         elif x_organisation_id in principal.roles_par_org:
+            await _verifier_organisation_active(session, x_organisation_id, admin_plateforme=False)
             principal.org_id = x_organisation_id
             principal.role = principal.roles_par_org[x_organisation_id]
         else:
@@ -196,6 +275,18 @@ async def contexte(
     rls.org_id_transaction.set(principal.org_id)
     org_id_courant.set(principal.org_id)
     utilisateur_id_courant.set(principal.utilisateur_id)
+    # La résolution du principal ci-dessus (`_principal_depuis_jeton`/`_principal_depuis_cle`)
+    # a déjà exécuté des requêtes (lecture de `sessions_auth`/`utilisateurs`/`memberships`/
+    # `cles_api`) avant que `org_id` soit connu — la transaction Postgres est donc déjà ouverte,
+    # avec `app.org_id` posé à `''` par l'écouteur `begin` (RLS no-op le temps de cette
+    # résolution, nécessaire : on ne sait pas encore à quelle organisation restreindre). Poser
+    # `org_id_transaction.set(...)` seul ne suffit plus à corriger `app.org_id` sur cette
+    # transaction déjà commencée (l'écouteur ne se redéclenche pas) : `rls.poser()` l'applique
+    # directement, pour que toutes les requêtes métier qui suivent dans cette même transaction
+    # soient bien filtrées par la RLS Postgres, pas seulement par les filtres applicatifs.
+    await rls.poser(session, principal.org_id)
+    if principal.org_id:
+        await _verifier_restriction_ip(session, request, principal)
     request.state.principal = principal
     return Contexte(
         request=request,
@@ -209,7 +300,3 @@ async def contexte(
 
 Ctx = Annotated[Contexte, Depends(contexte)]
 CtxPublic = Annotated[Contexte, Depends(contexte_public)]
-
-
-def dict_sans_none(d: dict[str, Any]) -> dict[str, Any]:
-    return {k: v for k, v in d.items() if v is not None}

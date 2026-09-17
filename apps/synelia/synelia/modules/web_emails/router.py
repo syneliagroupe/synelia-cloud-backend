@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 from typing import Any
 
@@ -27,7 +28,7 @@ def _nouvelle(domaine: str, palier: str) -> m.Messagerie:
         domaine=domaine,
         actif=False,
         palier=palier,
-        solutionOSS="stalwart",
+        solutionOSS="zimbra",
         hoteWebmail="webmail.synelia.cloud",
         boites=[],
         boitesIncluses=p["boites"],
@@ -112,6 +113,36 @@ async def modifier_messagerie(
     return await depot.obtenir(ctx, messagerieId)
 
 
+@router.delete(
+    "/{messagerieId}",
+    response_model=m.TravailProvisioning,
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model_exclude_none=True,
+)
+async def supprimer_messagerie(
+    messagerieId: str,
+    confirmation: str | None = None,
+    ctx: Contexte = Depends(exige("marketplace.subscribe")),
+) -> Any:  # noqa: N803
+    mess = await depot.obtenir(ctx, messagerieId)
+    exiger_confirmation(mess.domaine, confirmation)
+    await journaliser(
+        ctx,
+        action="web.emails.suppression",
+        cible_type="web_messagerie",
+        cible_id=messagerieId,
+        cible=mess.domaine,
+    )
+    return await demarrer_travail(
+        ctx,
+        "web.email.deactivate",
+        mess.domaine,
+        cible_type="web_messagerie",
+        cible_id=messagerieId,
+        etapes=service.ETAPES_SUPPRESSION,
+    )
+
+
 @router.put("/{messagerieId}/alias", response_model=m.Messagerie, response_model_exclude_none=True)
 async def modifier_alias_messagerie(
     messagerieId: str,
@@ -141,7 +172,7 @@ async def verifier_authentification_messagerie(
     messagerieId: str, ctx: Contexte = Depends(exige(None))
 ) -> Any:  # noqa: N803
     mess = await depot.obtenir(ctx, messagerieId)
-    resultat = service.amont().verifier_authentification(mess.domaine)
+    resultat = await asyncio.to_thread(service.amont().verifier_authentification, mess.domaine)
     a_creer = (
         [m.EnregistrementDnsCreation(**r) for r in resultat.get("enregistrements", [])]
         if resultat.get("spf") != "valide"
@@ -195,7 +226,9 @@ async def creer_boite_mail(
         mfa=bool(corps.mfaObligatoire),
         derniereConnexion=None,
     )
-    service.amont().creer_boite(mess.domaine, corps.adresse, corps.motDePasse)
+    await asyncio.to_thread(
+        service.amont().creer_boite, mess.domaine, corps.adresse, corps.motDePasse
+    )
     boites = [*mess.boites, boite]
     await depot.modifier(ctx, messagerieId, {"boites": [b.model_dump(mode="json") for b in boites]})
     await journaliser(
@@ -223,6 +256,13 @@ async def modifier_boite_mail(
         raise erreurs.introuvable("Boîte mail", adresse)
     changement = corps.model_dump(mode="json", exclude_unset=True)
     changement = {k: v for k, v in changement.items() if v is not None}
+    # `motDePasse` ne fait pas partie du modèle `BoiteMail` (le portail ne le stocke jamais) :
+    # il part vers Zimbra en direct, pas dans le dépôt applicatif.
+    mot_de_passe = changement.pop("motDePasse", None)
+    if mot_de_passe:
+        await asyncio.to_thread(
+            service.amont().definir_mot_de_passe, mess.domaine, adresse, mot_de_passe
+        )
     nouvelle = boite.model_copy(update=changement)
     boites = [nouvelle if b.adresse == adresse else b for b in mess.boites]
     await depot.modifier(ctx, messagerieId, {"boites": [b.model_dump(mode="json") for b in boites]})
@@ -251,7 +291,7 @@ async def supprimer_boite_mail(
     boite = next((b for b in mess.boites if b.adresse == adresse), None)
     if boite is None:
         raise erreurs.introuvable("Boîte mail", adresse)
-    service.amont().supprimer_boite(mess.domaine, adresse)
+    await asyncio.to_thread(service.amont().supprimer_boite, mess.domaine, adresse)
     boites = [b for b in mess.boites if b.adresse != adresse]
     await depot.modifier(ctx, messagerieId, {"boites": [b.model_dump(mode="json") for b in boites]})
     await journaliser(
@@ -276,7 +316,7 @@ async def ouvrir_webmail(
     ctx: Contexte = Depends(exige("service.open")),
 ) -> Any:  # noqa: N803
     mess = await depot.obtenir(ctx, messagerieId)
-    url = service.amont().ouvrir_webmail(corps.adresse)
+    url = await asyncio.to_thread(service.amont().ouvrir_webmail, corps.adresse)
     await journaliser(
         ctx,
         action="web.emails.ouverture",

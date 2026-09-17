@@ -4,7 +4,11 @@ version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
   "synelia-kernel",
+  "cryptography>=43",
   "httpx>=0.28",
+  "kubernetes>=31",
+  "minio>=7.2",
+  "paramiko>=3.4",
 ]
 
 [build-system]
