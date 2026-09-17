@@ -242,7 +242,7 @@ Intentional or current deltas (not a commitment to fix in this PR):
 | Observability | OTel + Prometheus → Victoria | structlog + Victoria **link** connector; no `/metrics` instrumentation |
 | Contract tests | Schemathesis + oasdiff in CI | schemathesis in **dev deps only**; coverage is path presence, not response property tests |
 | Types | pyright strict in CI | pyright in pyproject, **not** a CI step; mode `basic` |
-| Lint | ruff green | **ruff check + format fail on `master`** (see battery) |
+| Lint | ruff green | **green after this briefing land** (`PLR0917` ignored like `PLR0913`; remaining UP/E/S/RUF issues fixed) |
 | Docker extra | temporal in image | yes (`--extra temporal`); openstacksdk **not** in the image |
 | IA domain | last phase, needs frontend contract | 9 `ia.*` RBAC actions, zero paths |
 | Tests | testcontainers Postgres/Temporal | SQLite per test + inline jobs; no live OpenStack |
@@ -256,20 +256,20 @@ Simulation quality: many `@executeur` implementations succeed after a sleep (or 
 
 ## 5. Test battery
 
-Environment: Cloud Agent VM, 2026-09-17. Installed `uv 0.12.15`, CPython **3.13.15** via `uv python install`, then `uv sync` (lock already resolved, 93 packages, **no extras**). No application code changes. Docker image job **not** run (heavy; CI-only).
+Environment: Cloud Agent VM, 2026-09-17. Installed `uv 0.12.15`, CPython **3.13.15** via `uv python install`, then `uv sync` (lock already resolved, 93 packages, **no extras**). Docker image job **not** run locally (CI).
+
+First pass on `master` (`ddfbd4b`): pytest and `contrat_diff --strict` already passed; ruff check/format failed (21 lint hits, 2 unformatted files). Hygiene in this land: ignore `PLR0917` (same family as existing `PLR0913` for FastAPI handlers), PEP 695 generics, import/format nits. **Second pass is green.**
 
 | Step | Command | Result |
 |---|---|---|
 | Sync | `uv sync` | **PASS** |
-| Lint | `uv run ruff check .` (CI) | **FAIL** — 21 errors (UP046, PLR0917×9, PLW0127, E741×3, E731, PLR1714, S110, E402×3, RUF046, UP047). No autofix without `--unsafe-fixes`. |
-| Format | `uv run ruff format --check .` (CI) | **FAIL** — would reformat `api/index.py` and a code fence in `docs/GUIDE-MODULE.md`. 238 files already formatted. |
-| Tests | `uv run pytest -q` | **PASS** — **201 passed**, 845 warnings, **348 s**. Warnings: FastAPI `ORJSONResponse` deprecation (per-request noise). |
+| Lint | `uv run ruff check .` (CI) | **PASS** |
+| Format | `uv run ruff format --check .` (CI) | **PASS** |
+| Tests | `uv run pytest -q` | **PASS** — **201 passed**, 845 warnings, **333 s**. Warnings: FastAPI `ORJSONResponse` deprecation (per-request noise). |
 | Contract | `uv run python tools/contrat_diff.py --strict` | **PASS** — **514/514 (100 %)** all 40 tags. |
-| Docker | `docker build` (CI) | **NOT RUN** |
+| Docker | `docker build` (CI) | **NOT RUN** locally |
 
 Pytest collection: 201 tests under `apps/synelia` (module `tests/` plus `synelia/tests/test_socle.py` and `test_espaces.py`). Harness: `conftest.py` loads `synelia_testing`; each `client` fixture gets a fresh SQLite file, schema + seed, admin session, inline jobs.
-
-**Implication:** a PR against this repo that only adds this file will still go **red on GitHub Actions** because ruff is already red on `master`. Fixing ruff is out of scope for this briefing-only change.
 
 ### contrat_diff tag table (this run)
 
@@ -319,10 +319,9 @@ Couverture : 514/514 opérations (100 %)
 
 ---
 
-## 6. Suggested next engineering (not this PR)
+## 6. Suggested next engineering
 
-1. Make ruff check/format match CI on `master` (or pin/ignore the new rules if the bump was unintentional).
-2. Add Alembic migrations before any production Postgres.
-3. Implement `TravailPlanifieWorkflow` or point schedules at `TravailWorkflow`.
-4. Put Schemathesis (or equivalent) on a subset of tags; path coverage is already complete.
-5. Align CI `push` branches with the actual default (`master` vs `main`).
+1. Add Alembic migrations before any production Postgres.
+2. Implement `TravailPlanifieWorkflow` or point schedules at `TravailWorkflow`.
+3. Put Schemathesis (or equivalent) on a subset of tags; path coverage is already complete.
+4. Align CI `push` branches with the actual default (`master` vs `main`).

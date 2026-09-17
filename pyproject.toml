@@ -46,7 +46,7 @@ extend-exclude = ["packages/contract/synelia_contract/modeles.py", "packages/con
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC", "S", "PL", "RUF"]
-ignore = ["PLR0913", "PLR2004", "S101", "S105", "S106", "RUF001", "RUF002", "RUF003", "PLR0911", "PLR0912", "PLR0915", "E501", "B008", "PLW0603", "S311", "S104", "RUF012", "PLC0415", "ASYNC110", "S603", "S607", "RUF100"]
+ignore = ["PLR0913", "PLR0917", "PLR2004", "S101", "S105", "S106", "RUF001", "RUF002", "RUF003", "PLR0911", "PLR0912", "PLR0915", "E501", "B008", "PLW0603", "S311", "S104", "RUF012", "PLC0415", "ASYNC110", "S603", "S607", "RUF100"]
 
 [tool.ruff.lint.per-file-ignores]
 "**/tests/**" = ["S", "PL", "B"]

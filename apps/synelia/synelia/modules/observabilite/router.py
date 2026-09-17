@@ -140,8 +140,6 @@ async def lister_evenements_supervision(  # noqa: PLR0913
         events = [e for e in events if e["gravite"] == gravite]
     if ressourceId:
         events = [e for e in events if ressourceId in e["ressource"]]
-    if not depuis:
-        events = events
     return filtrer_trier_paginer(
         events, page, champs_recherche=("ressource", "message"), tri_defaut="ts"
     )
@@ -159,7 +157,7 @@ async def obtenir_journaux(
         ressourceId, niveau, depuis.isoformat() if depuis else None, recherche
     )
     return {
-        "lignes": [m.LigneLog(**l) for l in lignes][:20],
+        "lignes": [m.LigneLog(**ligne) for ligne in lignes][:20],
         "tronque": len(lignes) > 20,
         "lienVictoriaLogs": _victoria().lien_logs(recherche or ressourceId),
     }

@@ -285,7 +285,7 @@ async def lister_offres_publiques(
 @router.get("/offres/{slug}", response_model=m.FicheProduit, response_model_exclude_none=True)
 async def obtenir_fiche_produit(slug: str, ctx: CtxPublic) -> Any:
     offres = await detenteur_offres.tous(ctx, statut="publiee")
-    found = next((x for x in offres if x.code == slug or x.id == slug), None)
+    found = next((x for x in offres if slug in (x.code, x.id)), None)
     if found is None:
         found = next((x for x in _OFFRES_FALLBACK if x["code"] == slug), None)
     if found is None:

@@ -15,11 +15,11 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from joserfc import jwt
 from joserfc.jwk import OKPKey
 from joserfc.jws import JWSRegistry
-
-_REGISTRE = JWSRegistry(algorithms=["EdDSA"])
 from synelia_kernel import erreurs
 from synelia_kernel.config import reglages
 from synelia_kernel.dates import maintenant
+
+_REGISTRE = JWSRegistry(algorithms=["EdDSA"])
 
 _hasher = PasswordHasher()
 

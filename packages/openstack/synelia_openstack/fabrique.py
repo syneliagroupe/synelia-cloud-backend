@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Any, TypeVar
+from typing import Any
 
 from synelia_kernel.config import reglages
-
-T = TypeVar("T")
 
 _instances: dict[type, Any] = {}
 
@@ -17,7 +15,7 @@ def mode() -> str:
     return "simule"
 
 
-def fournisseur(simule: type[T], reel: type[T]) -> T:
+def fournisseur[T](simule: type[T], reel: type[T]) -> T:
     """Choisit l'implémentation selon la configuration ; une instance par classe."""
     cls = reel if mode() == "openstack" else simule
     if cls not in _instances:
