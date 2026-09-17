@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import unicodedata
 from typing import Any
 
 from fastapi import APIRouter, Depends
@@ -13,6 +14,7 @@ from synelia_kernel.dates import maintenant
 from synelia.depot import Depot
 from synelia.deps import Contexte, Ctx, exige
 from synelia.modules.facturation import metrologie
+from synelia.modules.facturation import service as facturation_service
 from synelia.travaux import vers_contrat
 
 router = APIRouter(prefix="/tableau-de-bord", tags=["Tableau de bord"])
@@ -90,14 +92,20 @@ async def _synthese(ctx: Contexte) -> dict[str, Any]:
     tickets = await Depot("ticket", m.Ticket).tous(
         ctx, filtre=lambda t: t.statut not in {"resolu", "ferme"}
     )
+    # Réutilise le vrai calcul de conformité SLA (taux de réussite des travaux sur 30j,
+    # ou l'engagement contractuel quand rien n'a encore été mesuré) plutôt qu'un chiffre fixe.
+    sla = await facturation_service.sla_engagements(ctx)
+    engagements = sla["engagements"]
+    uptime30j = round(sum(e["constate"] for e in engagements) / len(engagements), 2)
+    sla_contractuel = round(sum(e["dispo"] for e in engagements) / len(engagements), 2)
     return {
         **compteurs,
         "siegesUtilises": None,
         "siegesSouscrits": None,
         "quota": quota,
         "usage": usage,
-        "uptime30j": 99.9,
-        "slaContractuel": 99.95,
+        "uptime30j": uptime30j,
+        "slaContractuel": sla_contractuel,
         "depenseMois": int(cons["total"]),
         "previsionMois": int(cons["prevision"]),
         "depenseMoisPrecedent": int(cons["totalMoisPrecedent"]),
@@ -125,9 +133,16 @@ SUGGESTIONS = [
 ]
 
 
+def _sans_accents(texte: str) -> str:
+    return "".join(c for c in unicodedata.normalize("NFKD", texte) if not unicodedata.combining(c))
+
+
 @router_copilote.post("", response_model=m.ReponseCopilote, response_model_exclude_none=True)
 async def interroger_copilote(corps: m.QuestionCopilote, ctx: Ctx) -> Any:
-    q = (corps.question or "").lower()
+    # Les mots-clés ci-dessous sont sans accent ; une question posée avec les accents
+    # français usuels (« dépense », « coût ») ne matchait plus rien et retombait
+    # toujours sur la réponse générique.
+    q = _sans_accents((corps.question or "").lower())
     syn = await _synthese(ctx)
     if "vm" in q or "machine" in q:
         reponse = f"Votre organisation compte actuellement {syn['vms']} machine(s) virtuelle(s) sur {syn['espaces']} espace(s)."

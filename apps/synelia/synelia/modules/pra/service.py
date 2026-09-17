@@ -31,6 +31,11 @@ def plan_vers_modele(corps: m.PlanPraCreation, ctx: Contexte) -> m.PlanPra:
             nom=g.nom,
             ressources=g.ressources,
             dependances=g.dependances or [],
+            # `ipRepli` (correspondance ressource -> IP sur le site de repli) reste `None` :
+            # `ExecuteurBascule`/`ExecuteurRetour` ne créent aucune ressource amont sur le site de
+            # repli (aucun appel `amont()`, la bascule ne fait qu'écrire le statut du plan) — il
+            # n'existe donc aucune IP réelle à rapporter ici tant qu'un vrai réseau/mapping IP de
+            # site de repli n'est pas construit.
             ipRepli=None,
         )
         for g in corps.groupes

@@ -397,6 +397,12 @@ async def ouvrir_service_manage(
 ) -> Any:  # noqa: N803
     s = await depot_service.obtenir(ctx, serviceManageId)
     url = f"{s.urlNative}/open?jeton={nouvel_id()}"
+    await journaliser(
+        ctx,
+        action="service_manage.ouverture",
+        cible_type="service_manage",
+        cible_id=serviceManageId,
+    )
     return m.OuvertureService(url=url, expire=maintenant(), methode="redirection")
 
 
@@ -478,7 +484,11 @@ async def modifier_siege(
     ctx: Contexte = Depends(exige("seat.assign")),
 ) -> Any:  # noqa: N803
     await depot_service.obtenir(ctx, serviceManageId)
-    return await depot_siege.modifier(ctx, siegeId, corps, org_id=ctx.org_id)
+    siege = await depot_siege.modifier(ctx, siegeId, corps, org_id=ctx.org_id)
+    await journaliser(
+        ctx, action="service_manage.siege_modifie", cible_type="siege", cible_id=siegeId
+    )
+    return siege
 
 
 @router.delete("/{serviceManageId}/sieges/{siegeId}", status_code=status.HTTP_204_NO_CONTENT)

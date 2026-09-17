@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, Response, status
@@ -16,25 +17,18 @@ from synelia_kernel.ids import jeton_opaque, nouvel_id, prefixe_lisible
 from synelia.audit import journaliser
 from synelia.deps import Contexte, Page, exige, exiger_confirmation
 from synelia.deps.pagination import filtrer_trier_paginer
-from synelia.securite import hacher_jeton
+from synelia.securite import hacher_jeton, politiques_securite
 
 router = APIRouter(prefix="/securite", tags=["Sécurité & accès"])
 
-DEFAULT_POLITIQUES = {
-    "mfa": {"obligatoire": False, "methodes": ["totp"]},
-    "session": {"dureeMaxMin": 720, "inactiviteMin": 60},
-    "restrictionIp": {"actif": False, "plages": []},
-}
+# `reauthentificationActionsSensibles` : la session courante doit avoir été ouverte (ou
+# avoir validé son MFA) il y a moins de ce délai pour exécuter les actions les plus
+# sensibles (rotation/révocation de clé d'API, révocation de toutes les sessions).
+REAUTH_FENETRE_MIN = 15
 
 
 def politiques_contrat(o: Organisation) -> dict[str, Any]:
-    p = {**DEFAULT_POLITIQUES, **(o.politiques or {})}
-    p["mfa"] = {**DEFAULT_POLITIQUES["mfa"], **p.get("mfa", {})}
-    p["session"] = {**DEFAULT_POLITIQUES["session"], **p.get("session", {})}
-    p["restrictionIp"] = {**DEFAULT_POLITIQUES["restrictionIp"], **p.get("restrictionIp", {})}
-    p["restrictionIp"]["plages"] = p["restrictionIp"].get("plages", [])
-    p["mfa"]["methodes"] = p["mfa"].get("methodes", ["totp"])
-    return p
+    return politiques_securite(o.politiques)
 
 
 def cle_contrat(c: CleApi) -> dict[str, Any]:
@@ -75,6 +69,20 @@ def _valider_portee(ctx: Contexte, portee: list[str]) -> None:
             raise erreurs.validation(
                 f"Portée non autorisée pour le rôle {ctx.role}.", {"portee": action}
             )
+
+
+async def _exiger_reauth_recente(ctx: Contexte) -> None:
+    """Applique réellement `reauthentificationActionsSensibles` quand la politique l'active."""
+    o = await _org(ctx)
+    if not politiques_contrat(o).get("session", {}).get("reauthentificationActionsSensibles"):
+        return
+    sid = ctx.principal.session_id if ctx.principal else None
+    s = await ctx.session.get(SessionAuth, sid) if sid else None
+    if s is None or s.cree_le < maintenant() - timedelta(minutes=REAUTH_FENETRE_MIN):
+        raise erreurs.interdit(
+            "Cette action exige une réauthentification récente.",
+            code="reauthentification_requise",
+        )
 
 
 async def _obtenir_cle(ctx: Contexte, cle_id: str) -> CleApi:
@@ -182,6 +190,7 @@ async def revoquer_cle_api(
 ) -> Response:  # noqa: N803
     c = await _obtenir_cle(ctx, cleId)
     exiger_confirmation(c.nom, confirmation)
+    await _exiger_reauth_recente(ctx)
     c.revoquee_le = maintenant()
     await ctx.session.flush()
     await journaliser(
@@ -201,6 +210,7 @@ async def rotationner_cle_api(
     c = await _obtenir_cle(ctx, cleId)
     if c.revoquee_le is not None:
         raise erreurs.conflit("Une clé révoquée ne peut pas être tournée.", code="cle_revoquee")
+    await _exiger_reauth_recente(ctx)
     prefixe = c.prefixe
     secret = _nouveau_secret(prefixe)
     c.secret_hash = hacher_jeton(secret)
@@ -238,8 +248,6 @@ async def modifier_politiques_securite(
     if actuelles.get("session", {}).get("dureeMaxMin") != nouvelles.get("session", {}).get(
         "dureeMaxMin"
     ):
-        from synelia_db.modeles import SessionAuth
-
         lignes = (
             (
                 await ctx.session.execute(
@@ -292,7 +300,11 @@ async def lister_sessions_actives(
     courante = ctx.principal.session_id if ctx.principal else None
     sessions = [_session_contrat(s, u, courante) for s, u in lignes]
     return filtrer_trier_paginer(
-        sessions, page, champs_recherche=("utilisateurNom", "email"), tri_defaut="derniereActivite"
+        sessions,
+        page,
+        champs_recherche=("utilisateurNom", "email"),
+        tri_defaut="derniereActivite",
+        ordre_defaut="desc",
     )
 
 
@@ -319,6 +331,7 @@ async def revoquer_toutes_sessions(
 ) -> Any:
     o = await _org(ctx)
     exiger_confirmation(o.nom, confirmation)
+    await _exiger_reauth_recente(ctx)
     courante = ctx.principal.session_id if ctx.principal else None
     lignes = (
         (

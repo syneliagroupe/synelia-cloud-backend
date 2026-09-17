@@ -182,7 +182,7 @@ Without `SYNELIA_DATABASE_URL`: SQLite file `./synelia.sqlite3`. Seed: `SYNELIA_
 
 ### 2.3 Docker / Dokploy / Kubernetes (production near the lab)
 
-Single `Dockerfile`: `python:3.13-slim`, `uv sync --frozen --no-dev --extra temporal --extra openstack`, non-root `synelia`, `ENTRYPOINT ["synelia"]`, `CMD ["api"]`. Worker: `command: ["worker"]`. OpenStack credentials stay in guest env (`SYNELIA_*`), never in the image.
+Single `Dockerfile`: `python:3.13-slim` plus MinIO `mc`, `uv sync --frozen --no-dev --extra temporal --extra openstack`, non-root `synelia`, `ENTRYPOINT ["synelia"]`, `CMD ["api"]`. Worker: `command: ["worker"]`. OpenStack credentials stay in guest env (`SYNELIA_*`), never in the image.
 
 ### 2.4 CI (`.github/workflows/ci.yml`)
 

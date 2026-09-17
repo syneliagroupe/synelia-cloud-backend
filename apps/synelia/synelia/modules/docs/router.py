@@ -18,8 +18,13 @@ from synelia.travaux import demarrer_travail
 router = APIRouter(prefix="/docs", tags=["Documentation & formation"])
 
 
-def _cle_progression(user_id: str, parcours_slug: str) -> str:
-    return f"{user_id}:{parcours_slug}"
+# NB : la progression est scellée par utilisateur (parent_id), pas par un identifiant
+# composite "user:slug" — celui-ci dépassait le VARCHAR(36) de `ressources.id` (fait pour
+# des UUID) dès qu'on y ajoutait le moindre suffixe, et échouait uniquement sur Postgres
+# (SQLite, utilisé par les tests, n'impose pas la longueur).
+async def _ligne_progression(ctx: Ctx, parcours_slug: str) -> Any:
+    lignes = await detenteur_progression.lignes(ctx, parent_id=ctx.utilisateur_id or "")
+    return next((r for r in lignes if r.nom == parcours_slug), None)
 
 
 @router.get("/bac-a-sable", response_model=m.BacASable, response_model_exclude_none=True)
@@ -100,8 +105,8 @@ def _parcours(slug: str) -> dict[str, Any]:
 
 
 async def _progression(ctx: Ctx, parcours_slug: str) -> m.ProgressionFormation | None:
-    cle = _cle_progression(ctx.utilisateur_id or "", parcours_slug)
-    return await detenteur_progression.trouver(ctx, cle)
+    ligne = await _ligne_progression(ctx, parcours_slug)
+    return m.ProgressionFormation.model_validate(ligne.donnees) if ligne else None
 
 
 @router.get(
@@ -131,8 +136,8 @@ async def valider_module_formation(
     if module is None:
         raise erreurs.introuvable("Module de formation", moduleSlug)
     total = len(p["modules"])
-    cle = _cle_progression(ctx.utilisateur_id or "", parcoursSlug)
-    existant = await detenteur_progression.trouver(ctx, cle)
+    ligne = await _ligne_progression(ctx, parcoursSlug)
+    existant = m.ProgressionFormation.model_validate(ligne.donnees) if ligne else None
     termines = set(existant.modulesTermines) if existant else set()
     termines.add(moduleSlug)
     pct = round(100 * len(termines) / total, 1)
@@ -148,10 +153,10 @@ async def valider_module_formation(
             else (existant.attestationUrl if existant else None)
         ),
     )
-    if existant:
-        await detenteur_progression.remplacer(ctx, cle, prog)
+    if ligne:
+        await detenteur_progression.remplacer(ctx, ligne.id, prog)
     else:
-        await detenteur_progression.creer(ctx, prog, id_=cle)
+        await detenteur_progression.creer(ctx, prog, parent_id=ctx.utilisateur_id)
     await journaliser(ctx, action="docs.module", cible_type="docs_module", cible=moduleSlug)
     return prog.model_dump(mode="json")
 
@@ -160,9 +165,8 @@ async def valider_module_formation(
     "/progression", response_model=list[m.ProgressionFormation], response_model_exclude_none=True
 )
 async def lister_ma_progression(ctx: Ctx) -> Any:
-    prefix = f"{ctx.utilisateur_id or ''}:"
-    lignes = await detenteur_progression.lignes(ctx)
-    return [ligne.donnees for ligne in lignes if (ligne.id or "").startswith(prefix)]
+    lignes = await detenteur_progression.lignes(ctx, parent_id=ctx.utilisateur_id or "")
+    return [ligne.donnees for ligne in lignes]
 
 
 @router.get("/sections", response_model=m.DocsSectionsGetResponse, response_model_exclude_none=True)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import random
+import asyncio
 from datetime import timedelta
 from typing import Any, Literal
 
@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, Response, status
 from synelia_contract import modeles as m
 from synelia_kernel import erreurs
 from synelia_kernel.dates import maintenant
-from synelia_kernel.ids import nouvel_id
+from synelia_kernel.ids import jeton_opaque, nouvel_id
 
 from synelia.audit import journaliser
 from synelia.depot import Depot
@@ -31,8 +31,9 @@ PORT_DEFAUT = 8080
 
 
 def _mot_de_passe() -> str:
-    alpha = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789"
-    return "".join(random.choice(alpha) for _ in range(16))
+    # `random` n'est pas un générateur cryptographique : un mot de passe de service réel
+    # doit sortir de `secrets` (via `jeton_opaque`, même convention que `bases`/`web_smtp`).
+    return jeton_opaque(16)
 
 
 def _cout(ressources: m.Ressources2) -> int:
@@ -94,9 +95,22 @@ async def creer_projet(
         espaceId=corps.espaceId,
         cree=maintenant(),
         environnements=corps.environnements or ["production"],
+        etiquettes=corps.etiquettes or [],
+        clusterId=corps.clusterId or "",
         variables=[],
+        cible=corps.cible or "k8s",
     )
     await s.depot_projet.creer(ctx, projet, parent_id=corps.espaceId)
+    if projet.cible == "vm":
+        # Provisionnement paresseux : contrairement à un namespace Kubernetes (objet API sans
+        # coût réel propre, créé ici sans attendre un premier service), la VM Nova dédiée
+        # d'un projet en cible `vm` a un coût réel — elle n'est provisionnée qu'au premier
+        # service ayant réellement quelque chose à exécuter (`_assurer_vm_projet`).
+        pass
+    else:
+        # `k8s_client` est synchrone/bloquant : déchargé dans un thread pour ne pas geler la
+        # boucle asyncio (même garde que `synelia.modules.vms.service`).
+        await asyncio.to_thread(s.k8s().creer_namespace, s.namespace_projet(projet))
     await journaliser(
         ctx, action="projet.creation", cible_type="projet", cible_id=projet.id, cible=projet.nom
     )
@@ -160,6 +174,12 @@ async def supprimer_projet(
             {"nom": "Libérer les ressources du projet", "dureeS": 20},
         ],
     )
+
+
+def _source(from_: m.Source2 | None) -> m.Source1 | None:
+    if from_ is None or not from_.type or not from_.ref:
+        return None
+    return m.Source1(type=from_.type, ref=from_.ref, branche=from_.branche)
 
 
 def _cron(from_: m.Cron1 | None) -> m.Cron | None:
@@ -241,6 +261,7 @@ async def creer_service_projet(
             if modele
             else None
         )
+        or (s.MOTEUR_PORT.get(corps.moteur or "") if corps.type == "base" else None)
         or PORT_DEFAUT
     )
     service_id = nouvel_id()
@@ -257,13 +278,13 @@ async def creer_service_projet(
         coutMensuel=_cout(ressources),
         modeleSlug=corps.modeleSlug,
         sieges=m.Sieges(attribues=0, souscrits=0),
-        source=corps.source,
+        source=_source(corps.source),
         portConteneur=port,
         moteur=corps.moteur,
         version=corps.version or (modele.version if modele else None),
         base=m.Base1(
             nom=corps.nom,
-            utilisateur=f"{corps.nom}_user",
+            utilisateur=s.utilisateur_base(corps.nom),
             hoteInterne=s.hote_interne(
                 m.ServiceProjet(
                     id=service_id,
@@ -279,7 +300,7 @@ async def creer_service_projet(
                 ),
                 projet,
             ),
-            port=5432,
+            port=s.MOTEUR_PORT.get(corps.moteur or "", 5432),
         )
         if corps.type == "base" and corps.moteur
         else None,
@@ -289,11 +310,12 @@ async def creer_service_projet(
     )
     secrets = {"motDePasse": _mot_de_passe()}
     if corps.type == "base":
+        utilisateur_bd = s.utilisateur_base(corps.nom)
         secrets.update(
             {
-                "utilisateur": f"{corps.nom}_user",
+                "utilisateur": utilisateur_bd,
                 "base": corps.nom,
-                "uri": f"{corps.moteur or 'postgresql'}://{corps.nom}_user:{secrets['motDePasse']}@{service.base.hoteInterne}:{service.base.port}/{corps.nom}"
+                "uri": f"{corps.moteur or 'postgresql'}://{utilisateur_bd}:{secrets['motDePasse']}@{service.base.hoteInterne}:{service.base.port}/{corps.nom}"
                 if service.base
                 else "",
             }
@@ -358,10 +380,11 @@ async def modifier_service_projet(
         )
         changements["ressources"] = ressources
         changements["coutMensuel"] = _cout(ressources)
+    if corps.source is not None:
+        changements["source"] = _source(corps.source)
     for champ in (
         "type",
         "environnement",
-        "source",
         "portConteneur",
         "version",
         "moteur",

@@ -7,6 +7,7 @@ from sqlalchemy import select
 from synelia_contract import modeles as m
 from synelia_db.modeles import Ressource, Travail
 from synelia_kernel import erreurs
+from synelia_kernel.dates import maintenant
 from synelia_openstack import fournisseur
 from synelia_openstack.registrar import RegistrarOpenStack, RegistrarSimule
 
@@ -47,8 +48,6 @@ def prix_tld(extension: str) -> int:
 
 
 def expiration_dans(annees: int) -> date:
-    from synelia_kernel.dates import maintenant
-
     return maintenant().date() + timedelta(days=365 * max(1, annees))
 
 
@@ -80,11 +79,18 @@ async def agregats(ctx: Contexte, nom: str) -> dict[str, Any]:
     return out
 
 
+def _duree_annees(travail: Travail, defaut: int = 1) -> int:
+    return int((travail.entree or {}).get("dureeAnnees") or defaut)
+
+
 @executeur("domaine.commander")
 class ExecuteurDomaineCommander(Executeur):
     async def terminer(self, ctx: Contexte, travail: Travail) -> None:
         d = await depot.obtenir(ctx, travail.cible_id or "")
-        await depot.remplacer(ctx, d.id, d.model_copy(update={"expiration": expiration_dans(1)}))
+        annees = _duree_annees(travail)
+        await depot.remplacer(
+            ctx, d.id, d.model_copy(update={"expiration": expiration_dans(annees)})
+        )
 
 
 @executeur("domaine.transferer")
@@ -97,4 +103,8 @@ class ExecuteurDomaineTransferer(Executeur):
 class ExecuteurDomaineRenouveler(Executeur):
     async def terminer(self, ctx: Contexte, travail: Travail) -> None:
         d = await depot.obtenir(ctx, travail.cible_id or "")
-        await depot.remplacer(ctx, d.id, d.model_copy(update={"expiration": expiration_dans(1)}))
+        annees = _duree_annees(travail)
+        aujourdhui = maintenant().date()
+        base = d.expiration if d.expiration and d.expiration >= aujourdhui else aujourdhui
+        nouvelle = base + timedelta(days=365 * max(1, annees))
+        await depot.remplacer(ctx, d.id, d.model_copy(update={"expiration": nouvelle}))

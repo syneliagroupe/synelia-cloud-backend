@@ -1,0 +1,10 @@
+# Bac à sable dev01 : frontend Synelia Cloud pointé sur le backend dev01 (api.synelia.dev01.ovh.smile.ci).
+name: synelia-front-dev01
+services:
+  front:
+    build:
+      context: /var/lib/synelia-cloud/front-deploy
+      args:
+        NEXT_PUBLIC_API_URL: https://api.synelia.dev01.ovh.smile.ci/v1
+    ports: ["127.0.0.1:3010:3000"]
+    restart: unless-stopped

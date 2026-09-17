@@ -7,8 +7,10 @@ from typing import Any
 
 from pydantic import BaseModel
 from sqlalchemy import func, select
-from synelia_db.modeles import Organisation, Ressource, Utilisateur
-from synelia_kernel import argent
+from synelia_contract import modeles as m
+from synelia_db.modeles import Membership, Organisation, Ressource, Travail, Utilisateur
+from synelia_kernel import argent, courriel
+from synelia_kernel.dates import maintenant
 from synelia_kernel.ids import nouvel_id
 
 from synelia.demo import peupleur
@@ -42,8 +44,16 @@ class CycleFacturation(BaseModel):
 depot_ecriture = Depot("ecriture", Ecriture, champ_nom="libelle", libelle="Écriture")
 
 depot_cycle = Depot(
-    "cycle_facturation", CycleFacturation, champ_nom="periode", libelle="Cycle de facturation"
+    "cycle_facturation",
+    CycleFacturation,
+    plateforme=True,
+    champ_nom="periode",
+    libelle="Cycle de facturation",
 )
+
+# Offre plateforme (catalogue admin) : même dépôt que `admin_catalogue.router.depot_offre`
+# (import différé impossible côté admin_catalogue → facturation, on redéclare la vue).
+depot_offre = Depot("offre", m.Offre, plateforme=True, champ_nom="code", libelle="Offre")
 
 
 def mois_precedent(periode: str) -> str:
@@ -76,30 +86,108 @@ async def prochain_numero(ctx: Contexte, annee: int) -> str:
     return f"SYN-{annee}-{total + 1:06d}"
 
 
+# Composant -> types de travaux (`Travail.cible_type`) qui le concernent. Sert à calculer
+# un taux de réussite réel des opérations de l'organisation sur 30 jours, faute d'une source
+# de mesure de disponibilité par composant : pas de nombre inventé, un vrai ratio succès/échec
+# (ou l'engagement contractuel lui-même quand aucune opération n'a encore eu lieu).
+_CIBLES_SLA: dict[str, tuple[str, ...]] = {
+    "compute": ("vm", "espace", "k8s_cluster", "service_manage", "application"),
+    "stockage": ("volume",),
+    "reseau": ("load_balancer", "ip_flottante", "groupe_securite", "reseau", "dns_zone"),
+}
+
+_DISPO_CIBLE: dict[str, float] = {"compute": 99.9, "stockage": 99.9, "reseau": 99.9}
+
+
+async def sla_engagements(ctx: Contexte) -> dict[str, Any]:
+    depuis = maintenant() - timedelta(days=30)
+    engagements: list[dict[str, Any]] = []
+    for composant, cibles in _CIBLES_SLA.items():
+        q = select(Travail.statut).where(
+            Travail.org_id == ctx.org_id,
+            Travail.cible_type.in_(cibles),
+            Travail.started_at >= depuis,
+            Travail.statut.in_(["done", "failed"]),
+        )
+        statuts = list((await ctx.session.execute(q)).scalars())
+        dispo = _DISPO_CIBLE[composant]
+        if statuts:
+            constate = round(100 * (statuts.count("done") / len(statuts)), 2)
+        else:
+            # Aucune opération mesurée sur la période : pas d'incident constaté, donc
+            # conformité à l'engagement plutôt qu'un chiffre fabriqué.
+            constate = dispo
+        engagements.append(
+            {
+                "composant": composant,
+                "dispo": dispo,
+                "constate": constate,
+                "reponseCritique": 15,
+                "resolutionCritique": 60,
+            }
+        )
+    return {"engagements": engagements, "credits": []}
+
+
+async def offre_souscrite(ctx: Contexte, org_id: str) -> m.Offre | None:
+    """L'offre du catalogue à laquelle l'organisation est abonnée (`Organisation.tenant_plan`
+    porte le `code` de l'offre), sinon `None` — pas d'abonnement, facture 100% à l'usage."""
+    org = (
+        await ctx.session.execute(select(Organisation).where(Organisation.id == org_id))
+    ).scalar_one_or_none()
+    if org is None or not org.tenant_plan:
+        return None
+    return await depot_offre.par_nom(ctx, org.tenant_plan, org_id=None)
+
+
 async def construire_facture(ctx: Contexte, org_id: str, periode: str) -> dict[str, Any]:
-    cons = await metrologie.consommation(ctx, periode)
-    total = int(cons["total"])
+    # Vu depuis une autre organisation (cycle plateforme sur plusieurs org) : la consommation
+    # doit être celle de `org_id`, pas celle de l'organisation active dans `ctx`.
+    from synelia.modules.organisations.service import contexte_pour  # évite un cycle d'imports
+
+    ctx_org = contexte_pour(ctx, org_id)
+    cons = await metrologie.consommation(ctx_org, periode)
+    conso_total = int(cons["total"])
+
     numero = await prochain_numero(ctx, int(periode.split("-", maxsplit=1)[0]))
+    offre = await offre_souscrite(ctx, org_id)
+
+    lignes = []
+    if offre is not None:
+        lignes.append(
+            {
+                "libelle": f"Abonnement {offre.nom} ({periode})",
+                "ref": offre.code,
+                "quantite": 1,
+                "pu": offre.prix,
+                "total": offre.prix,
+            }
+        )
+    lignes.append(
+        {
+            "libelle": f"Consommation {periode}",
+            "ref": periode,
+            "quantite": 1,
+            "pu": conso_total,
+            "total": conso_total,
+        }
+    )
+    sous_total = sum(ligne["total"] for ligne in lignes)
+    facture_id = nouvel_id()
     facture = {
-        "id": nouvel_id(),
+        "id": facture_id,
         "orgId": org_id,
         "numero": numero,
         "periode": periode,
-        "lignes": [
-            {
-                "libelle": f"Consommation {periode}",
-                "ref": periode,
-                "quantite": 1,
-                "pu": total,
-                "total": total,
-            }
-        ],
-        "sousTotal": total,
+        "lignes": lignes,
+        "sousTotal": sous_total,
         "tvaPct": float(argent.TVA_CI_PCT),
-        "total": argent.ttc(total),
+        "total": argent.ttc(sous_total),
         "devise": "XOF",
         "statut": "emise",
-        "pdfUrl": f"/v1/facturation/factures/{nouvel_id()}/pdf",
+        # Bug réel corrigé : un `nouvel_id()` frais ici pointait vers un id inexistant, le
+        # téléchargement PDF de toute facture générée par un cycle rendait 404.
+        "pdfUrl": f"/v1/facturation/factures/{facture_id}/pdf",
         "echeance": (
             date(int(periode.split("-", maxsplit=1)[0]), int(periode.split("-")[1]), 1)
             + timedelta(days=31)
@@ -110,7 +198,33 @@ async def construire_facture(ctx: Contexte, org_id: str, periode: str) -> dict[s
     )
     ctx.session.add(r)
     await ctx.session.flush()
+    await _notifier_facture_emise(ctx, org_id, facture)
     return facture
+
+
+async def _notifier_facture_emise(ctx: Contexte, org_id: str, facture: dict[str, Any]) -> None:
+    """Best-effort : prévient les org_admin par courriel qu'une nouvelle facture est disponible.
+    Une panne d'envoi ne doit jamais faire échouer le cycle de facturation."""
+    destinataires = (
+        await ctx.session.execute(
+            select(Utilisateur)
+            .join(Membership, Membership.utilisateur_id == Utilisateur.id)
+            .where(Membership.org_id == org_id, Membership.role == "org_admin")
+        )
+    ).scalars()
+    for u in destinataires:
+        await courriel.envoyer(
+            u.email,
+            f"Nouvelle facture {facture['numero']} — Synelia Cloud",
+            f"Bonjour {u.nom},",
+            [
+                f"Votre facture {facture['numero']} pour la période {facture['periode']} "
+                f"est disponible, d'un montant de {facture['total']} {facture['devise']}.",
+                f"Échéance : {facture['echeance']}.",
+            ],
+            bouton_texte="Voir la facture",
+            bouton_url=f"{ctx.reglages.url_frontend}/app/facturation/factures/{facture['id']}",
+        )
 
 
 @executeur("facturation.cycle")
@@ -125,8 +239,29 @@ class ExecuteurCycleFacturation(Executeur):
             q = q.where(Organisation.id.in_(org_ids))
         orgs = (await ctx.session.execute(q)).scalars().all()
         previous = mois_precedent(periode)
+        emises = 0
+        montant_total = 0
+        echecs: list[dict[str, str]] = []
         for org in orgs:
-            await construire_facture(ctx, org.id, previous)
+            try:
+                facture = await construire_facture(ctx, org.id, previous)
+            except Exception as exc:  # noqa: BLE001 — une organisation en échec ne bloque pas le cycle
+                echecs.append({"orgId": org.id, "erreur": str(exc)})
+                continue
+            emises += 1
+            montant_total += int(facture["total"])
+        if await depot_cycle.trouver(ctx, periode):
+            await depot_cycle.modifier(
+                ctx,
+                periode,
+                {
+                    "statut": "termine",
+                    "organisations": len(orgs),
+                    "facturesEmises": emises,
+                    "montantTotal": montant_total,
+                    "echecs": echecs,
+                },
+            )
 
 
 @peupleur

@@ -32,6 +32,7 @@ async def test_cycle_deploiement(client):
     assert r.status_code == 202, r.text
     dep = r.json()
     assert dep["statut"] == "live" and dep["envId"] == env["id"]
+    assert dep["commitMessage"] == "fix: panneau"
     dep_id = dep["id"]
 
     r = await client.get(f"/v1/deploiements/{dep_id}")

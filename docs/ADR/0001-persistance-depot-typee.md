@@ -8,7 +8,8 @@ Postgres, exigeait une persistance qui n'oblige pas à écrire une migration par
 
 ## Décision
 Les tables **identité** (`utilisateurs`, `organisations`, `memberships`, `invitations`, `sessions_auth`,
-`cles_api`), **audit** (append-only, hash chaîné) et **travaux** (projection des workflows) sont dédiées.
+`cles_api`), **audit** (append-only, hash chaîné — droits Postgres restreints, cf.
+`docs/PLAN-ARCHITECTURE-SUITE.md` §3) et **travaux** (projection des workflows) sont dédiées.
 Toutes les autres ressources du contrat vivent dans `ressources` (`type`, `org_id`, `nom`, `statut`,
 `parent_id`, `donnees` JSON, `secrets` chiffrés), lues et écrites par `Depot[T]` où `T` est la classe
 Pydantic **générée du contrat**. Le module reste propriétaire de ses règles ; le dépôt ne fait que ranger.

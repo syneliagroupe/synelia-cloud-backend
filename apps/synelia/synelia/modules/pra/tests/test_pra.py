@@ -33,6 +33,29 @@ async def test_cycle_plan_pra(client):
     assert r.status_code == 204
 
 
+async def test_modifier_plan_pra_sans_dependances(client):
+    """Régression : `dependances` est optionnel sur `GroupePra` (le contrat de création), mais
+    requis sur le `Groupe` stocké — un client qui l'omet sur un PATCH (comme le fait le
+    formulaire d'édition de l'app mobile) faisait planter la revalidation de `Depot.modifier`
+    en 500 nu avant le correctif de `modifier_plan_pra`."""
+    r = await client.post("/v1/pra", json=_pra())
+    pra_id = r.json()["id"]
+
+    r = await client.patch(
+        f"/v1/pra/{pra_id}",
+        json={
+            **_pra(),
+            "rtoCibleMin": 90,
+            "groupes": [{"ordre": 1, "nom": "Bases", "ressources": ["vm-bd-01", "vm-bd-02"]}],
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["rtoCibleMin"] == 90
+    assert r.json()["groupes"] == [
+        {"ordre": 1, "nom": "Bases", "ressources": ["vm-bd-01", "vm-bd-02"], "dependances": []}
+    ]
+
+
 async def test_replication_continue_refusee(client):
     r = await client.post(
         "/v1/pra", json={**_pra(), "replication": {"mode": "continu", "retardS": 0}}

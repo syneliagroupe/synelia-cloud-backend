@@ -1,0 +1,51 @@
+# Relais SMTP réel (module web_smtp) sur dev01 : process séparé, sur le réseau partagé du stack
+# backend (`synelia-backend-dev01_default`) — même motif que `zimbra/docker-compose.yml` pour
+# Zimbra : rejoint en externe le réseau du stack API pour être atteignable par nom de conteneur
+# (`relais-smtp`), sans dépendre des ports 127.0.0.1 de l'hôte.
+#
+# Avant, ce service tournait en `network_mode: host` (bind 127.0.0.1 uniquement) parce que le port
+# 587 hôte était déjà pris par Zimbra et parce qu'il fallait atteindre Postgres/Zimbra en boucle
+# locale. Conséquence non voulue : injoignable depuis le conteneur `api` (bridge réseau séparé,
+# 127.0.0.1 y désigne le conteneur lui-même) — c'est ce qui a laissé `web_smtp` durablement câblé
+# sur un amont simulé (`PostalSimule`) malgré ce vrai relais qui tournait déjà à côté. Rejoindre le
+# réseau du stack backend règle ça d'un coup : plus de conflit de port (chaque conteneur a son
+# propre espace de ports), Postgres et Zimbra atteints par nom de conteneur comme le fait déjà `api`.
+#
+# Écoute en clair sur 587 *à l'intérieur* de ce réseau Docker. Publié aussi sur 127.0.0.1:2587 côté
+# hôte, pour les tests `smtplib`/`openssl s_client` depuis un shell dev01 (inchangé).
+#
+# Lancement : docker compose -f docker-compose.relais-smtp.dev01.yml --env-file ~/.config/synelia/backend-dev01.env up -d --build
+name: synelia-relais-smtp-dev01
+
+services:
+  relais-smtp:
+    build: .
+    command: ["relais-smtp"]
+    environment:
+      SYNELIA_ENV: production
+      # Même rôle applicatif restreint que le conteneur `api` (docker-compose.dev01.yml) — ce
+      # relais lit/écrit aussi `ressources`/`audit` filtrés par org_id (RLS), voir
+      # packages/db/synelia_db/rls.py. Ne jamais y connecter le superutilisateur `synelia`.
+      SYNELIA_DATABASE_URL: postgresql+asyncpg://synelia_app:${SYNELIA_APP_DB_PASSWORD:?}@postgres:5432/synelia
+      SYNELIA_SECRET: ${SYNELIA_SECRET:?}
+      SYNELIA_SMTP_RELAIS_PORT: "587"
+      # Amont : Zimbra (partagé, toutes orgs), atteint ici par nom de conteneur (même réseau) —
+      # plus besoin du 127.0.0.1:587 de l'hôte. Tant que Zimbra n'a pas de compte de service dédié,
+      # la livraison finale peut échouer/différer : seuls AUTH + quota + protocole SMTP sont
+      # garantis réels par ce relais.
+      SYNELIA_SMTP_RELAIS_AMONT_HOTE: zimbra
+      SYNELIA_SMTP_RELAIS_AMONT_PORT: "587"
+      SYNELIA_SMTP_RELAIS_AMONT_IDENTIFIANT: ${SYNELIA_SMTP_RELAIS_AMONT_IDENTIFIANT:-}
+      SYNELIA_SMTP_RELAIS_AMONT_MOT_DE_PASSE: ${SYNELIA_SMTP_RELAIS_AMONT_MOT_DE_PASSE:-}
+    ports: ["127.0.0.1:2587:587"]
+    networks:
+      backend:
+        aliases: [relais-smtp]
+    restart: unless-stopped
+
+networks:
+  # Réseau du stack backend (docker-compose.dev01.yml) : permet à l'API d'appeler le relais SMTP
+  # par nom de conteneur (`service.amont()` → `RelaisSmtpReel`, `SYNELIA_RELAIS_SMTP_HOTE=relais-smtp`).
+  backend:
+    name: synelia-backend-dev01_default
+    external: true

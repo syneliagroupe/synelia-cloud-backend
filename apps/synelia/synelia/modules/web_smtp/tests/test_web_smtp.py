@@ -23,6 +23,13 @@ async def test_cycle_relais(client):
     r = await client.patch("/v1/web/smtp", json={"domainesAutorises": ["exemple.ci", "b.ci"]})
     assert r.status_code == 200 and "b.ci" in r.json()["domainesAutorises"]
 
+    # Régression : `quotaJour` (champ plat du contrat) doit se répercuter sur le quota
+    # imbriqué réellement appliqué par le relais, pas se perdre à côté de `quota`.
+    r = await client.patch("/v1/web/smtp", json={"quotaJour": 4000})
+    assert r.status_code == 200 and r.json()["quota"]["parJour"] == 4000
+    relais = (await client.get("/v1/web/smtp")).json()
+    assert relais["quota"]["parJour"] == 4000
+
     r = await client.post(
         "/v1/web/smtp/test", json={"destinataire": "x@exemple.ci", "de": "y@exemple.ci"}
     )
@@ -76,6 +83,9 @@ async def test_webhooks_smtp(client):
         json={"url": "https://app.ci/cb2", "evenements": ["rebond"], "actif": False},
     )
     assert r.status_code == 200 and r.json()["actif"] is False
+
+    r = await client.post(f"/v1/web/smtp/webhooks/{wid}/test")
+    assert r.status_code == 200 and r.json()["envoye"] is True
 
     r = await client.delete(f"/v1/web/smtp/webhooks/{wid}")
     assert r.status_code == 204

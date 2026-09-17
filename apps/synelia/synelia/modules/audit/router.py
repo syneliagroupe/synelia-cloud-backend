@@ -3,13 +3,14 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Response, status
 from sqlalchemy import or_, select
 from synelia_contract import modeles as m
-from synelia_db.modeles import Audit, Organisation
+from synelia_db.modeles import Audit, Organisation, Travail
+from synelia_kernel import erreurs
 from synelia_kernel.dates import dans
 
-from synelia.audit import journaliser
+from synelia.audit import journaliser, verifier_chaine
 from synelia.deps import Contexte, Page, exige
 from synelia.deps.pagination import filtrer_trier_paginer
 from synelia.modules.audit import service
@@ -60,6 +61,19 @@ async def lister_evenements_audit(  # noqa: PLR0913, PLR0917
     )
 
 
+@router.get("/integrite")
+async def verifier_integrite_audit(
+    ctx: Contexte = Depends(exige("compliance.export", lecture=True)),
+) -> Any:
+    """Rejoue la chaîne de hachage de l'organisation active et confirme qu'elle est intacte, ou
+    signale la première ligne où l'empreinte enregistrée ne correspond plus à ce qui est
+    recalculé à partir des champs eux-mêmes — insertion, modification ou suppression.
+    *Tamper-evident*, pas *tamper-proof* : détecte toute altération faite sans le droit de
+    réécrire la chaîne (le rôle applicatif n'a que `SELECT, INSERT` sur `audit`), pas une
+    altération faite avec le superutilisateur Postgres — voir `synelia.audit.verifier_chaine`."""
+    return await verifier_chaine(ctx)
+
+
 @router.post(
     "/export",
     response_model=m.AuditExportPostResponse,
@@ -101,3 +115,32 @@ async def exporter_audit(
         "urlTelechargement": f"{ctx.reglages.url_publique}{ctx.reglages.prefixe_api}/audit/exports/{travail['id']}",
         "expire": dans(24 * 3600),
     }
+
+
+@router.get("/exports/{travailId}")  # noqa: N803
+async def telecharger_export_audit(
+    travailId: str,
+    ctx: Contexte = Depends(exige("compliance.export", lecture=True)),  # noqa: N803
+) -> Response:
+    travail = await ctx.session.get(Travail, travailId)
+    if travail is None or (
+        travail.org_id != ctx.org_id_ou_none
+        and not (ctx.principal and ctx.principal.est_admin_plateforme)
+    ):
+        raise erreurs.introuvable("Travail", travailId)
+    if travail.type != "audit.export":
+        raise erreurs.introuvable("Export d'audit", travailId)
+    if travail.statut != "done":
+        raise erreurs.conflit(
+            "L'export n'est pas encore prêt : le travail associé n'est pas terminé.",
+            code="export_non_pret",
+        )
+    resultat = await service.telecharger_export(ctx, travail)
+    if resultat is None:
+        raise erreurs.introuvable("Fichier d'export", travailId)
+    contenu, content_type, nom_fichier = resultat
+    return Response(
+        content=contenu,
+        media_type=content_type,
+        headers={"Content-Disposition": f'attachment; filename="{nom_fichier}"'},
+    )

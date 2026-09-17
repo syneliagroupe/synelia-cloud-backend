@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import date
 from typing import Any
 
@@ -130,7 +131,7 @@ async def revoquer_certificat(
 ) -> Any:  # noqa: N803
     cert = await depot.obtenir(ctx, certificatId)
     exiger_confirmation(cert.hote, confirmation)
-    service.amont().revoquer(cert.hote)
+    await asyncio.to_thread(service.amont().revoquer, cert.hote)
     await depot.modifier(ctx, certificatId, {"etat": "revoque"})
     await journaliser(
         ctx,
@@ -185,7 +186,7 @@ async def relancer_validation_certificat(
     cert = await depot.obtenir(ctx, certificatId)
     if cert.etat == "actif":
         raise erreurs.conflit("Ce certificat est déjà valide.", code="certificat_deja_valide")
-    resultat = service.amont().valider(cert.hote)
+    resultat = await asyncio.to_thread(service.amont().valider, cert.hote)
     enregistrement = m.EnregistrementDnsCreation(
         type="TXT", nom=f"_acme-challenge.{cert.hote}", valeur=f"tok-{nouvel_id()[:8]}"
     )

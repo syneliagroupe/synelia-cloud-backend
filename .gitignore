@@ -18,3 +18,6 @@ node_modules/
 htmlcov/
 .agents/
 .claude/
+tests-rapports/
+.schemathesis/
+zimbra/zimbra-storage/

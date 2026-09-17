@@ -22,6 +22,7 @@ class Ressource(Base, Identifie, Horodate):
         Index("ix_ressources_type_org", "type", "org_id"),
         Index("ix_ressources_parent", "type", "parent_id"),
         Index("ix_ressources_nom", "type", "org_id", "nom"),
+        Index("ix_ressources_cree_par", "cree_par_id"),
     )
 
     org_id: Mapped[str | None] = mapped_column(String(36))
@@ -29,6 +30,9 @@ class Ressource(Base, Identifie, Horodate):
     nom: Mapped[str | None] = mapped_column(String(300))
     parent_id: Mapped[str | None] = mapped_column(String(120))
     statut: Mapped[str | None] = mapped_column(String(40))
+    cree_par_id: Mapped[str | None] = mapped_column(
+        String(36)
+    )  # utilisateurs.id du principal qui a fait le POST — NULL pour l'amorçage plateforme
     donnees: Mapped[dict[str, Any]] = mapped_column(default=dict)
     secrets: Mapped[dict[str, Any]] = mapped_column(
         default=dict

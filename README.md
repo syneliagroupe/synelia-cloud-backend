@@ -44,6 +44,18 @@ docker compose up -d            # postgres 18, valkey 8, temporal + ui (8233), m
 - **CI** : `.github/workflows/ci.yml` (ruff, pytest, couverture du contrat, image) ; `vercel.yml` (déploiement
   par Actions si l'intégration Git native n'est pas utilisée).
 
+## État réel (2026-09-07)
+
+Tout l'univers Infrastructure provisionne de vraies ressources OpenStack (`SYNELIA_FOURNISSEUR=openstack`) :
+VM/Espaces/Kubernetes/LB/Réseau/Volumes/Bases/Buckets, Web Cloud (DNS Designate, SSL, hébergements réels avec
+Docker+Traefik, messagerie Zimbra, relais SMTP réel) et le PaaS (`projets` cible `k8s` sur Magnum, cible `vm`
+sur une VM dédiée). La facturation produit de vraies factures et les notifie par email. Restent simulés par
+décision : `services_manages` (phase 7 non construite), le registrar de domaines (pas de partenaire TLD), et
+le pipeline `/applications`+`/deploiements`. Sauvegardes/PRA échouent honnêtement (Karbor absent du lab).
+Détails et historique : [`docs/runbooks/lab-openstack.md`](docs/runbooks/lab-openstack.md).
+
 ## Écrire un module
 
-[`docs/GUIDE-MODULE.md`](docs/GUIDE-MODULE.md). Module de référence : `modules/espaces/`.
+[`docs/GUIDE-MODULE.md`](docs/GUIDE-MODULE.md). Module de référence : `modules/espaces/`. Sa section
+« Invariants durs » est obligatoire : `asyncio.to_thread` sur tout appel SDK synchrone (sinon gel de l'API
+pour tous les tenants), statuts écrits limités aux Literals du contrat, réconciliation à la lecture.

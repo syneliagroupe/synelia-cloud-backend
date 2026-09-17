@@ -26,6 +26,7 @@ class Reglages(BaseSettings):
     prefixe_api: str = "/v1"
     docs_actives: bool = True
     url_publique: str = "http://localhost:4000"
+    url_frontend: str = "http://localhost:3000"
     cors_origines: list[str] = Field(default_factory=lambda: ["*"])
 
     database_url: str = Field(default_factory=_url_base_par_defaut)
@@ -55,6 +56,22 @@ class Reglages(BaseSettings):
     os_region: str = "RegionOne"
     os_endpoint_overrides: dict[str, str] = Field(default_factory=dict)
     simulation_duree_etape_ms: int = 0
+
+    # Zone VPS partagée (web_hebergement) : un unique Espace Cloud « plateforme » (org_id
+    # NULL, jamais visible depuis /espaces côté client), réseau + load balancer Octavia
+    # partagés par toutes les VM d'hébergement (routage L7 par Host()) — voir
+    # `espaces.service.semer_zone_vps`/`depot_plateforme` et
+    # `web_hebergement.service.zone_vps_secrets`. `vps_zone_org_id` ne sert plus qu'à sceller
+    # l'organisation admin le temps d'un provisioning initial (repli sans bootstrap manuel,
+    # cf. `semer_zone_vps`) ; une fois la ligne créée elle devient org-less, cette variable
+    # n'est alors plus consultée.
+    vps_zone_espace_id: str | None = None
+    vps_zone_org_id: str | None = None
+
+    # Audit : ancrage quotidien hors-rôle (SYNELIA_AUDIT_ANCRAGE_EMAIL), cf. `synelia.audit.ancrer`
+    # et §3 de docs/PLAN-ARCHITECTURE-SUITE.md. Optionnelle : sans elle, seul le journal
+    # structuré (`audit.ancrage`, logs Docker) sert d'ancrage — pas d'adresse inventée ici.
+    audit_ancrage_email: str | None = None
 
     # Amorçage
     seed_admin_email: str | None = "admin@synelia.cloud"

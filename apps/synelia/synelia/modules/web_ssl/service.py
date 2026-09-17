@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import date, timedelta
 
 from synelia_contract import modeles as m
@@ -104,22 +105,53 @@ class ExecuteurCertificatRenew(Executeur):
     async def terminer(self, ctx: Contexte, travail: Travail) -> None:
         c = await depot.obtenir(ctx, travail.cible_id or "")
         duree = travail.contexte.get("duree_jours", duree_jours(c.type, None))
+        # Sans cet appel, un renouvellement ne touchait que la fiche DB (date d'expiration
+        # avancée) : le certificat réellement en place côté ACME n'était jamais renouvelé —
+        # même classe de bug (« faux succès ») que `vm.resize` avant son fix (redimensionnement
+        # DB-only, VM Nova inchangée).
+        # `AcmeReel` (`httpx.post` synchrone) est déchargé via `asyncio.to_thread` : même garde
+        # que `vms.service`, sans quoi un appel amont lent gèlerait la boucle asyncio — donc
+        # l'API entière, tous tenants confondus.
+        r = await asyncio.to_thread(amont().renouveler, c.hote, 0 if c.type == "letsencrypt" else 1)
+        jours = r.get("expirationJours") or duree
         await depot.modifier(
             ctx,
             c.id,
             {
                 "etat": "actif",
                 "emisLe": date.today(),
-                "expire": date.today() + timedelta(days=duree),
+                "expire": date.today() + timedelta(days=jours),
             },
         )
 
 
 @executeur("web.ssl.commande")
 class ExecuteurCertificatCommande(Executeur):
+    async def etape(self, ctx: Contexte, travail: Travail, index: int, nom: str) -> str | None:
+        if index == 0:
+            c = await depot.obtenir(ctx, travail.cible_id or "")
+            entre = travail.entree or {}
+            # `commander` publie l'enregistrement de validation (TXT `_acme-challenge…` en
+            # DNS ou jeton HTTP selon `validationDomaine`) auprès de l'autorité, `valider` le
+            # fait vérifier : sans ces deux appels, le certificat n'était jamais réellement
+            # émis, seule la fiche DB passait à `actif` (constaté ici, même piège que
+            # `web_dns` avant son câblage Designate — un connecteur `AcmeReel` déjà écrit,
+            # mais jamais appelé par l'exécuteur qui rend le travail « réussi »).
+            r = await asyncio.to_thread(
+                amont().commander, c.hote, c.type, entre.get("validationDomaine") or "dns"
+            )
+            await asyncio.to_thread(amont().valider, c.hote)
+            ctxt = dict(travail.contexte)
+            ctxt["expiration_jours_amont"] = r.get("expirationJours")
+            travail.contexte = ctxt
+            return f"Certificat commandé et validé auprès de {c.emetteur}"
+        return None
+
     async def terminer(self, ctx: Contexte, travail: Travail) -> None:
         c = await depot.obtenir(ctx, travail.cible_id or "")
-        duree = travail.contexte.get("duree_jours", duree_jours(c.type, None))
+        duree = travail.contexte.get("expiration_jours_amont") or travail.contexte.get(
+            "duree_jours", duree_jours(c.type, None)
+        )
         await depot.modifier(
             ctx,
             c.id,

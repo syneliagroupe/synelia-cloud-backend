@@ -19,6 +19,8 @@ from synelia.modules.web_hebergement.service import (
     depot_comptes,
     depot_domaines,
     depot_taches,
+    mesurer_espace_utilise,
+    reconcilier_statut,
 )
 from synelia.travaux import demarrer_travail
 
@@ -33,7 +35,7 @@ async def lister_hebergements(
     palier: str | None = None,
     ctx: Contexte = Depends(exige("org.dashboard.view", lecture=True)),
 ) -> Any:  # noqa: N803, PLR0917
-    return await depot.lister(
+    resultat = await depot.lister(
         ctx,
         page,
         filtre=lambda h: (
@@ -43,6 +45,10 @@ async def lister_hebergements(
         ),
         tri_defaut="domaineProvisoire",
     )
+    # Reconcile-on-read : sans ça un hébergement resterait affiché `en_ligne` dans la liste même
+    # après la disparition de sa VM Nova (supprimée hors bande — cf. `reconcilier_statut`).
+    resultat["donnees"] = [await reconcilier_statut(ctx, h) for h in resultat["donnees"]]
+    return resultat
 
 
 @router.post(
@@ -54,6 +60,28 @@ async def lister_hebergements(
 async def creer_hebergement(
     corps: m.HebergementCreation, ctx: Contexte = Depends(exige("marketplace.subscribe"))
 ) -> Any:
+    if corps.installer and corps.installer.type:
+        # Le champ existe dans le contrat et était accepté sans erreur : `corps.model_dump()`
+        # partait bien dans `entree` du travail (visible dans l'audit), mais aucun exécuteur ne
+        # l'a jamais lu — la VM se met en service avec une page d'accueil générique, sans
+        # WordPress/PrestaShop/etc., et le travail se déclare quand même « done » sur ses 5
+        # étapes : un « faux succès » silencieux constaté en direct (installer: wordpress à la
+        # création, page générique "Synelia Web Hebergement" servie ensuite). Installer une
+        # application sur la VM déjà en service (`POST /web/sites`, `site.installer`) est un
+        # mécanisme différent et déjà réel (SSH + docker compose) — le rebrancher pour qu'il
+        # tourne automatiquement à la création est un vrai travail d'intégration (séquencement
+        # après la mise en ligne, choix du `hote`, réutilisation du pool LB existant plutôt que
+        # d'en ouvrir un nouveau), pas un correctif ponctuel : on échoue franchement plutôt que
+        # de continuer à ignorer la demande en silence.
+        raise erreurs.validation(
+            "L'installation d'une application à la création de l'hébergement n'est pas encore "
+            "prise en charge. Créez d'abord l'hébergement, attendez qu'il soit en ligne, puis "
+            "installez l'application via POST /web/sites.",
+            champs={
+                "installer": "Non pris en charge à la création ; utilisez POST /web/sites une "
+                "fois l'hébergement en ligne."
+            },
+        )
     if corps.domaine:
         await depot.exiger_nom_libre(ctx, corps.domaine)
     hebergement = service.construire_hebergement(ctx, corps)
@@ -75,7 +103,8 @@ async def creer_hebergement(
         entree=corps.model_dump(mode="json"),
         etapes=[
             {"nom": "Réserver les quotas du palier", "dureeS": 4},
-            {"nom": "Créer le serveur d'hébergement (Plesk)", "dureeS": 40},
+            {"nom": "Créer le serveur d'hébergement (OpenStack)", "dureeS": 40},
+            {"nom": "Router le domaine sur le load balancer partagé (Octavia)", "dureeS": 10},
             {"nom": "Provisionner le serveur de bases", "dureeS": 20},
             {"nom": "Activer la surveillance", "dureeS": 6},
         ],
@@ -86,7 +115,11 @@ async def creer_hebergement(
 async def obtenir_hebergement(
     hebergementId: str, ctx: Contexte = Depends(exige("org.dashboard.view", lecture=True))
 ) -> Any:  # noqa: N803
-    return await depot.obtenir(ctx, hebergementId)
+    h = await reconcilier_statut(ctx, await depot.obtenir(ctx, hebergementId))
+    # Mesure réelle de l'espace disque uniquement sur la fiche détail : un SSH par ligne sur
+    # la liste serait trop coûteux pour un chiffre qui n'a pas besoin d'être à jour à chaque
+    # requête (cf. `mesurer_espace_utilise`).
+    return await mesurer_espace_utilise(ctx, h)
 
 
 @router.patch("/{hebergementId}", response_model=m.Hebergement, response_model_exclude_none=True)
@@ -135,11 +168,7 @@ async def supprimer_hebergement(
         h.domaineProvisoire,
         cible_type="web_hebergement",
         cible_id=hebergementId,
-        etapes=[
-            {"nom": "Suspension des sites et bases", "dureeS": 8},
-            {"nom": "Suppression du serveur (Plesk)", "dureeS": 25},
-            {"nom": "Clore la facturation", "dureeS": 4},
-        ],
+        etapes=service.ETAPES_SUPPRESSION,
     )
 
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from synelia_contract import modeles as m
 from synelia_db.modeles import Travail
 from synelia_kernel.ids import jeton_opaque
-from synelia_openstack import postal
+from synelia_openstack import relais_smtp
 
 from synelia.depot import Depot
 from synelia.deps.contexte import Contexte
@@ -42,13 +42,17 @@ HOTE = "smtp.synelia.cloud"
 PORTS = [587]
 
 
-def amont() -> postal.PostalSimule:
-    return postal.choisir_postal()
+def amont() -> relais_smtp.RelaisSmtpSimule:
+    return relais_smtp.choisir_relais_smtp()
 
 
 @executeur("smtp.activate")
 class ExecuteurSmtpActivate(Executeur):
     async def terminer(self, ctx: Contexte, travail: Travail) -> None:
+        # L'identifiant et le secret posés ici sont la vraie backing du relais : le process
+        # `synelia relais-smtp` (apps/synelia/synelia/relais_smtp.py) lit ces mêmes lignes
+        # `smtp_relais` (identifiant + secret chiffré `mot_de_passe`) pour authentifier les
+        # connexions SMTP réelles et appliquer le quota — aucune valeur simulée en aval.
         relais = await depot.obtenir(ctx, travail.cible_id or "")
         identifiant = f"smtp@{travail.org_id or ctx.org_id_ou_none or 'org'}"
         await depot.modifier(

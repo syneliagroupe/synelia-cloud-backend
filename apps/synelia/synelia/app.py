@@ -14,7 +14,7 @@ from synelia_kernel.config import reglages
 from synelia_kernel.dates import iso
 from synelia_kernel.journal import configurer, journal
 
-from synelia import erreurs_http, modules
+from synelia import erreurs_http, modules, otel
 from synelia.deps.correlation import CorrelationMiddleware
 
 log = journal("app")
@@ -78,6 +78,7 @@ def creer_app() -> FastAPI:
     )
     app.add_middleware(CorrelationMiddleware)
     erreurs_http.installer(app)
+    otel.configurer(app, version=r.version, env=r.env)
 
     v1 = APIRouter(prefix=r.prefixe_api)
     for routeur in routeurs_modules():

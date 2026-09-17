@@ -65,6 +65,17 @@ async def test_cycle_messagerie(client):
     r = await client.get(f"/v1/web/emails/{mid}")
     assert len(r.json()["boites"]) == 0
 
+    r = await client.delete(f"/v1/web/emails/{mid}", params={"confirmation": "mauvais"})
+    assert r.status_code == 422
+
+    r = await client.delete(f"/v1/web/emails/{mid}", params={"confirmation": "exemple.ci"})
+    assert r.status_code == 202, r.text
+    travail = r.json()
+    assert travail["type"] == "web.email.deactivate" and travail["statut"] == "done"
+
+    r = await client.get(f"/v1/web/emails/{mid}")
+    assert r.status_code == 404
+
 
 async def test_quota_boites(client):
     r = await client.post("/v1/web/emails", json={"domaine": "quota.ci", "palier": "starter"})
@@ -84,3 +95,10 @@ async def test_quota_boites(client):
         f"/v1/web/emails/{mid}/boites", json={"adresse": "trop@quota.ci", "nom": "Trop"}
     )
     assert r.status_code == 402 and r.json()["erreur"]["code"] == "quota_depasse"
+
+    # Suppression avec des boîtes encore actives : l'exécuteur doit les retirer avant
+    # le domaine (Zimbra refuse `DeleteDomainRequest` sur un domaine non vide).
+    r = await client.delete(f"/v1/web/emails/{mid}", params={"confirmation": "quota.ci"})
+    assert r.status_code == 202, r.text
+    r = await client.get(f"/v1/web/emails/{mid}")
+    assert r.status_code == 404

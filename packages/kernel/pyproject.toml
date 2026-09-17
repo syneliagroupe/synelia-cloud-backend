@@ -9,6 +9,7 @@ dependencies = [
   "uuid-utils>=0.9",
   "cryptography>=43",
   "orjson>=3.10",
+  "premailer>=3.10.0",
 ]
 
 [build-system]
