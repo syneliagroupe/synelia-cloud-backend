@@ -19,4 +19,4 @@ def heures_vers_mois(prix_heure: int, heures: int = 730) -> int:
 
 
 def arrondi_fcfa(valeur: float) -> int:
-    return int(round(valeur))
+    return round(valeur)

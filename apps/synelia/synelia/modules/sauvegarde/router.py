@@ -290,9 +290,9 @@ async def obtenir_conformite_sauvegarde(
 ) -> Any:  # noqa: N803
     lignes = await service.conformite(ctx)
     if protection:
-        lignes = [l for l in lignes if l["protection"] == protection]
+        lignes = [ligne for ligne in lignes if ligne["protection"] == protection]
     if type:
-        lignes = [l for l in lignes if l["type"] == type]
+        lignes = [ligne for ligne in lignes if ligne["type"] == type]
     from synelia.deps.pagination import filtrer_trier_paginer
 
     return filtrer_trier_paginer(

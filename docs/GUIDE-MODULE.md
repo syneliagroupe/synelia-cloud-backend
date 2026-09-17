@@ -51,8 +51,14 @@ apps/synelia/synelia/modules/<module>/
 Exemple minimal de route :
 ```python
 @router.get("", response_model=m.VmsGetResponse, response_model_exclude_none=True)
-async def lister_vms(page: Page, espaceId: str | None = None, ctx: Contexte = Depends(exige("org.dashboard.view", lecture=True))) -> Any:
-    return await depot.lister(ctx, page, filtre=lambda v: not espaceId or v.espaceId == espaceId, tri_defaut="nom")
+async def lister_vms(
+    page: Page,
+    espaceId: str | None = None,
+    ctx: Contexte = Depends(exige("org.dashboard.view", lecture=True)),
+) -> Any:
+    return await depot.lister(
+        ctx, page, filtre=lambda v: not espaceId or v.espaceId == espaceId, tri_defaut="nom"
+    )
 ```
 Règles :
 - `response_model_exclude_none=True` partout ; renvoyer des dicts ou des modèles Pydantic, jamais des ORM.

@@ -9,7 +9,7 @@ Le module écrit ses routes et ses règles ; le dépôt ne fait que ranger et re
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any, Generic, TypeVar
+from typing import Any
 
 from pydantic import BaseModel
 from sqlalchemy import func, select
@@ -22,10 +22,8 @@ from synelia_kernel.ids import nouvel_id
 from synelia.deps.contexte import Contexte
 from synelia.deps.pagination import PageParams, filtrer_trier_paginer
 
-T = TypeVar("T", bound=BaseModel)
 
-
-class Depot(Generic[T]):
+class Depot[T: BaseModel]:
     def __init__(
         self,
         type_: str,

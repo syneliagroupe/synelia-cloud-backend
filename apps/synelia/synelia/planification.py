@@ -36,5 +36,5 @@ async def declarer() -> None:
             await client.create_schedule(
                 ident, Schedule(action=action, spec=ScheduleSpec(cron_expressions=[cron]))
             )
-        except Exception:  # noqa: BLE001 — déjà déclarée
+        except Exception:  # noqa: BLE001, S110 — déjà déclarée
             pass

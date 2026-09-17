@@ -858,10 +858,11 @@ async def lister_regles_routage(
                 actif=True,
             )
         )
-    filtre = lambda r: (
-        (not hote or r.hote == hote) and (not environnement or r.environnement == environnement)
-    )  # noqa: E731
-    regles = [r for r in regles if filtre(r)]
+    regles = [
+        r
+        for r in regles
+        if (not hote or r.hote == hote) and (not environnement or r.environnement == environnement)
+    ]
     total = len(regles)
     debut = (page.page - 1) * page.par_page
     return m.RoutageGetResponse(
