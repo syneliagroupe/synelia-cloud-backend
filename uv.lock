@@ -2128,6 +2128,20 @@ dependencies = [
     { name = "synelia-testing" },
 ]
 
+[package.optional-dependencies]
+openstack = [
+    { name = "synelia", extra = ["openstack"] },
+]
+paiements = [
+    { name = "synelia", extra = ["paiements"] },
+]
+pdf = [
+    { name = "synelia", extra = ["pdf"] },
+]
+temporal = [
+    { name = "synelia", extra = ["temporal"] },
+]
+
 [package.dev-dependencies]
 dev = [
     { name = "datamodel-code-generator" },
@@ -2145,6 +2159,10 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "synelia", editable = "apps/synelia" },
+    { name = "synelia", extras = ["openstack"], marker = "extra == 'openstack'", editable = "apps/synelia" },
+    { name = "synelia", extras = ["paiements"], marker = "extra == 'paiements'", editable = "apps/synelia" },
+    { name = "synelia", extras = ["pdf"], marker = "extra == 'pdf'", editable = "apps/synelia" },
+    { name = "synelia", extras = ["temporal"], marker = "extra == 'temporal'", editable = "apps/synelia" },
     { name = "synelia-catalogue", editable = "packages/catalogue" },
     { name = "synelia-contract", editable = "packages/contract" },
     { name = "synelia-db", editable = "packages/db" },
@@ -2152,6 +2170,7 @@ requires-dist = [
     { name = "synelia-openstack", editable = "packages/openstack" },
     { name = "synelia-testing", editable = "packages/testing" },
 ]
+provides-extras = ["temporal", "openstack", "pdf", "paiements"]
 
 [package.metadata.requires-dev]
 dev = [

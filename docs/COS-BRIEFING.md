@@ -243,7 +243,7 @@ Intentional or current deltas (not a commitment to fix in this PR):
 | Contract tests | Schemathesis + oasdiff in CI | schemathesis in **dev deps only**; coverage is path presence, not response property tests |
 | Types | pyright strict in CI | pyright in pyproject, **not** a CI step; mode `basic` |
 | Lint | ruff green | **green after this briefing land** (`PLR0917` ignored like `PLR0913`; remaining UP/E/S/RUF issues fixed) |
-| Docker extra | temporal in image | yes (`--extra temporal`); openstacksdk **not** in the image |
+| Docker extra | temporal in image | Root `optional-dependencies` forward `temporal` to `synelia[temporal]` so `uv sync --extra temporal` in the Dockerfile works; openstacksdk **not** in the image |
 | IA domain | last phase, needs frontend contract | 9 `ia.*` RBAC actions, zero paths |
 | Tests | testcontainers Postgres/Temporal | SQLite per test + inline jobs; no live OpenStack |
 | CI branch | `main` | clone default **`master`**; `main` also exists on origin |
@@ -267,7 +267,7 @@ First pass on `master` (`ddfbd4b`): pytest and `contrat_diff --strict` already p
 | Format | `uv run ruff format --check .` (CI) | **PASS** |
 | Tests | `uv run pytest -q` | **PASS** — **201 passed**, 845 warnings, **333 s**. Warnings: FastAPI `ORJSONResponse` deprecation (per-request noise). |
 | Contract | `uv run python tools/contrat_diff.py --strict` | **PASS** — **514/514 (100 %)** all 40 tags. |
-| Docker | `docker build` (CI) | **NOT RUN** locally |
+| Docker extra | `uv sync --frozen --no-dev --extra temporal` | **PASS** locally after forwarding extras; Docker daemon not available in this VM |
 
 Pytest collection: 201 tests under `apps/synelia` (module `tests/` plus `synelia/tests/test_socle.py` and `test_espaces.py`). Harness: `conftest.py` loads `synelia_testing`; each `client` fixture gets a fresh SQLite file, schema + seed, admin session, inline jobs.
 
