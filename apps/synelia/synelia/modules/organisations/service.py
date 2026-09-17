@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import dataclasses
+from datetime import date
 from typing import Any
 
 from sqlalchemy import func, select
 from synelia_contract import modeles as m
-from synelia_db.modeles import Membership, Organisation
+from synelia_db.modeles import Membership, Organisation, Ressource
 from synelia_kernel import erreurs
 from synelia_kernel.dates import maintenant
 
 from synelia.depot import Depot
 from synelia.deps.contexte import Contexte
+
+TICKETS_OUVERTS = ("ouvert", "en_cours", "attente_client")
 
 TYPES_COMPTES = {
     "espaces": "espace",
@@ -69,6 +72,43 @@ def contexte_pour(ctx: Contexte, org_id: str) -> Contexte:
     return dataclasses.replace(ctx, principal=dataclasses.replace(ctx.principal, org_id=org_id))
 
 
+async def impayes(ctx: Contexte, org_id: str) -> list[m.Impaye]:
+    """Factures émises/impayées en retard d'échéance pour cette organisation — même règle
+    que `/admin/facturation/impayes`, restreinte à `org_id` (les factures sont stockées à
+    portée plateforme : le filtre par organisation se fait sur le champ `orgId`, pas la
+    colonne `Ressource.org_id`)."""
+    depot_f = Depot("facture", m.Facture, plateforme=True)
+    aujourdhui = date.today()
+    out = []
+    for f in await depot_f.tous(ctx):
+        if f.orgId != org_id or f.statut not in ("emise", "impayee") or not f.echeance:
+            continue
+        retard = (aujourdhui - f.echeance).days
+        if retard < 0:
+            continue
+        out.append(
+            m.Impaye(
+                org=f.orgId,
+                orgId=f.orgId,
+                facture=f.numero,
+                montant=f.total,
+                echeance=f.echeance,
+                relances=0,
+                retardJours=retard,
+                prochaineAction="mise_en_demeure" if retard >= 15 else "rappel",
+            )
+        )
+    return out
+
+
+async def tickets_organisation(ctx: Contexte, org_id: str) -> list[m.Ticket]:
+    q = select(Ressource).where(Ressource.type == "ticket", Ressource.org_id == org_id)
+    return [
+        m.Ticket.model_validate(r.donnees)
+        for r in (await ctx.session.execute(q)).scalars().all()
+    ]
+
+
 async def synthese(ctx: Contexte, org_id: str) -> dict[str, Any]:
     compteurs = {
         cle: await Depot(t, m.EspaceCloud).compter(ctx, org_id=org_id)
@@ -94,6 +134,8 @@ async def synthese(ctx: Contexte, org_id: str) -> dict[str, Any]:
         "depenseMois": int(conso.get("total", 0)),
         "previsionMois": int(conso.get("prevision", 0)),
         "depenseMoisPrecedent": int(conso.get("totalMoisPrecedent", 0)),
-        "facturesEnAttente": 0,
-        "ticketsOuverts": 0,
+        "facturesEnAttente": len(await impayes(ctx, org_id)),
+        "ticketsOuverts": sum(
+            1 for t in await tickets_organisation(ctx, org_id) if t.statut in TICKETS_OUVERTS
+        ),
     }

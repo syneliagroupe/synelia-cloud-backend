@@ -9,8 +9,24 @@ async def _espace_demo(client) -> str:
     return demo["id"]
 
 
+async def _gabarit_id(client, nom: str = "medium") -> str:
+    r = await client.get("/v1/catalogue/gabarits")
+    assert r.status_code == 200
+    return next(g["id"] for g in r.json() if g["nom"] == nom)
+
+
+async def _image_id(client) -> str:
+    r = await client.get("/v1/catalogue/images")
+    assert r.status_code == 200
+    images = r.json()
+    assert images, "No images available in catalogue"
+    return images[0]["id"]
+
+
 async def _creer_vm(client, espace_id: str, nom: str = "vm-test") -> str:
-    corps = {"espaceId": espace_id, "nom": nom, "imageId": "ubuntu-24.04", "gabarit": "g1.medium"}
+    gabarit = await _gabarit_id(client)
+    image_id = await _image_id(client)
+    corps = {"espaceId": espace_id, "nom": nom, "imageId": image_id, "gabarit": gabarit}
     r = await client.post("/v1/vms", json=corps)
     assert r.status_code == 202, r.text
     assert r.json()["statut"] == "done"
@@ -35,12 +51,13 @@ async def test_creer_et_lister_vm(client):
 
 async def test_creer_vm_explicite_et_image_inconnue(client):
     espace_id = await _espace_demo(client)
+    image_id = await _image_id(client)
     r = await client.post(
         "/v1/vms",
         json={
             "espaceId": espace_id,
             "nom": "vm-specs",
-            "imageId": "debian-12",
+            "imageId": image_id,
             "vcpu": 1,
             "ramGo": 2,
             "diskGo": 20,
@@ -68,13 +85,15 @@ async def test_creer_vm_explicite_et_image_inconnue(client):
 async def test_creer_vm_nom_deja_pris(client):
     espace_id = await _espace_demo(client)
     await _creer_vm(client, espace_id, "dup")
+    gabarit = await _gabarit_id(client)
+    image_id = await _image_id(client)
     r = await client.post(
         "/v1/vms",
         json={
             "espaceId": espace_id,
             "nom": "dup",
-            "imageId": "ubuntu-24.04",
-            "gabarit": "g1.medium",
+            "imageId": image_id,
+            "gabarit": gabarit,
         },
     )
     assert r.status_code == 409 and r.json()["erreur"]["code"] == "nom_deja_pris"
@@ -186,13 +205,33 @@ async def test_redimensionner_vm(client):
     assert r.status_code == 422
 
 
+async def test_redimensionner_sans_gabarit_echoue_franchement(client):
+    """Un triplet sans gabarit correspondant est rejeté 422 au routeur (Nova ne sait
+    redimensionner que vers un gabarit existant) — et non plus un travail `done` qui
+    ne touchait que la fiche DB."""
+    espace_id = await _espace_demo(client)
+    vid = await _creer_vm(client, espace_id, "resize-fantome")
+    avant = (await client.get(f"/v1/vms/{vid}")).json()
+    r = await client.post(
+        f"/v1/vms/{vid}/redimensionnement", json={"vcpu": 3, "ramGo": 6, "diskGo": 60}
+    )
+    assert r.status_code == 422
+    apres = (await client.get(f"/v1/vms/{vid}")).json()
+    assert (apres["vcpu"], apres["ramGo"], apres["diskGo"]) == (
+        avant["vcpu"],
+        avant["ramGo"],
+        avant["diskGo"],
+    )
+
+
 async def test_lot_vms(client):
     espace_id = await _espace_demo(client)
+    image_id = await _image_id(client)
     machines = [
         {
             "nom": "compose-web",
             "quantite": 2,
-            "imageId": "ubuntu-24.04",
+            "imageId": image_id,
             "vcpu": 1,
             "ramGo": 2,
             "diskGo": 20,
@@ -225,3 +264,218 @@ async def test_instantanes_vm(client):
     assert r.status_code == 204
     r = await client.get(f"/v1/vms/{vid}/instantanes")
     assert r.json() == []
+
+
+def test_mapper_statut_nova():
+    from synelia.modules.vms.service import _mapper_statut_nova
+
+    assert _mapper_statut_nova("absente") == "error"
+    assert _mapper_statut_nova("ERROR") == "error"
+    # Les transitions vivantes ne sont pas traduites : elles sont portées par les propres
+    # travaux de l'application (et l'amont simulé ne retient aucun état — traduire `ACTIVE`
+    # en `running` annulerait l'arrêt que `vm.power.stop` vient de poser).
+    assert _mapper_statut_nova("ACTIVE") is None
+    assert _mapper_statut_nova("SHUTOFF") is None
+    assert _mapper_statut_nova("BUILDING") is None
+    assert _mapper_statut_nova("PAUSED") is None
+    assert _mapper_statut_nova("SHELVED") is None
+
+
+async def test_reconciliation_statut_vm_orpheline(client, monkeypatch):
+    # La ligne en base peut survivre à son infra réelle : une VM Nova supprimée hors bande
+    # (nettoyage manuel du lab, travail tombé sans compensation) continuait d'afficher
+    # `running` dans les listes et les tableaux de bord, et l'écart ne se voyait qu'au
+    # premier usage (SSH, console…). Décision propriétaire : un orphelin confirmé est
+    # **supprimé** par le chemin métier du DELETE (exécuteur `vm.delete`), pas seulement
+    # marqué en erreur — la ligne disparaît réellement.
+    from synelia.modules.vms import service as vms_service
+
+    espace_id = await _espace_demo(client)
+    vid = await _creer_vm(client, espace_id, "vm-reconcile")
+
+    # Serveur toujours connu de Nova (simulé : ACTIVE) : la lecture ne change rien.
+    r = await client.get(f"/v1/vms/{vid}")
+    assert r.status_code == 200 and r.json()["statut"] == "running"
+
+    # Nova ne connaît plus le serveur : suppression réelle déclenchée à la lecture.
+    supprime = []
+    monkeypatch.setattr(
+        vms_service.ComputeSimule,
+        "statut_serveur",
+        lambda self, serveur_id, identifiants=None: "absente",
+    )
+    monkeypatch.setattr(
+        vms_service.ComputeSimule,
+        "supprimer_serveur",
+        lambda self, serveur_id: supprime.append(serveur_id),
+    )
+    r = await client.get(f"/v1/vms/{vid}")
+    # La lecture répond avec le marquage sincère posé avant le lancement du travail
+    # (en mode en ligne, le travail `vm.delete` a déjà tourné et retiré la ligne).
+    assert r.status_code == 200 and r.json()["statut"] == "error"
+    assert len(supprime) == 1  # le serveur amont restant a bien visé par le chemin métier
+
+    # La ligne a réellement disparu : plus de zombie dans la liste, détail en 404.
+    r = await client.get("/v1/vms", params={"statut": "error"})
+    assert all(v["id"] != vid for v in r.json()["donnees"])
+    r = await client.get(f"/v1/vms/{vid}")
+    assert r.status_code == 404
+
+
+async def test_reconciliation_vm_orpheline_nova_deleted_pas_supprimee_attendu(client, monkeypatch):
+    # Un serveur fraîchement supprimé reste un temps visible de Nova (ligne soft-delete,
+    # statut `DELETED`, purge asynchrone) : c'est déjà un orphelin confirmé (pas
+    # d'hyperviseur, pas d'IP) — la suppression réelle part sans attendre la purge.
+    from synelia.modules.vms import service as vms_service
+
+    espace_id = await _espace_demo(client)
+    vid = await _creer_vm(client, espace_id, "vm-nova-deleted")
+
+    monkeypatch.setattr(
+        vms_service.ComputeSimule,
+        "statut_serveur",
+        lambda self, serveur_id, identifiants=None: "DELETED",
+    )
+    supprime = []
+    monkeypatch.setattr(
+        vms_service.ComputeSimule,
+        "supprimer_serveur",
+        lambda self, serveur_id: supprime.append(serveur_id),
+    )
+    r = await client.get(f"/v1/vms/{vid}")
+    assert r.status_code == 200 and r.json()["statut"] == "error"
+    assert len(supprime) == 1
+    r = await client.get("/v1/vms", params={"statut": "error"})
+    assert all(v["id"] != vid for v in r.json()["donnees"])
+    r = await client.get(f"/v1/vms/{vid}")
+    assert r.status_code == 404
+
+
+async def test_reconciliation_vm_orpheline_nova_error_pas_supprimee(client, monkeypatch):
+    # Nova `ERROR` : le serveur existe toujours (build raté, hyperviseur) — ce n'est PAS un
+    # orphelin : la ligne est marquée `error` mais jamais supprimée automatiquement.
+    from synelia.modules.vms import service as vms_service
+
+    espace_id = await _espace_demo(client)
+    vid = await _creer_vm(client, espace_id, "vm-nova-error")
+
+    def _interdit(self, serveur_id):
+        raise AssertionError("Un serveur Nova `ERROR` existe : jamais supprimé automatiquement")
+
+    monkeypatch.setattr(
+        vms_service.ComputeSimule,
+        "statut_serveur",
+        lambda self, serveur_id, identifiants=None: "ERROR",
+    )
+    monkeypatch.setattr(vms_service.ComputeSimule, "supprimer_serveur", _interdit)
+    r = await client.get(f"/v1/vms/{vid}")
+    assert r.status_code == 200 and r.json()["statut"] == "error"
+    r = await client.get("/v1/vms", params={"statut": "error"})
+    assert any(v["id"] == vid for v in r.json()["donnees"])
+
+
+async def test_reconciliation_vm_orpheline_zone_vps_protegee(client, monkeypatch):
+    # Garde-fou de la décision propriétaire : une VM de l'espace partagé `vps-zone`
+    # (infrastructure de plateforme) n'est jamais supprimée automatiquement — un orphelin
+    # confirmé y reste marqué `error`, requalifiable à la main. On simule la protection en
+    # faisant de l'espace de démo l'espace protégé.
+    from synelia.modules import espaces
+    from synelia.modules.vms import service as vms_service
+
+    espace_id = await _espace_demo(client)
+    vid = await _creer_vm(client, espace_id, "vm-zone-vps")
+
+    def _interdit(self, serveur_id):
+        raise AssertionError("L'espace vps-zone n'est jamais supprimé automatiquement")
+
+    monkeypatch.setattr(espaces.service, "ESPACE_ZONE_VPS_ID", espace_id)
+    monkeypatch.setattr(
+        vms_service.ComputeSimule,
+        "statut_serveur",
+        lambda self, serveur_id, identifiants=None: "absente",
+    )
+    monkeypatch.setattr(vms_service.ComputeSimule, "supprimer_serveur", _interdit)
+    r = await client.get(f"/v1/vms/{vid}")
+    assert r.status_code == 200 and r.json()["statut"] == "error"
+    r = await client.get("/v1/vms", params={"statut": "error"})
+    assert any(v["id"] == vid for v in r.json()["donnees"])
+
+
+async def test_reconciliation_vm_orpheline_suppression_deja_en_vol(client, monkeypatch):
+    # Un travail `vm.delete` est déjà en vol pour cette VM (DELETE utilisateur, lecture
+    # concurrente) : la réconciliation ne redéclenche pas une seconde suppression — elle se
+    # borne au marquage sincère, le travail en vol retirera la ligne.
+    from synelia.modules.vms import service as vms_service
+
+    espace_id = await _espace_demo(client)
+    vid = await _creer_vm(client, espace_id, "vm-delete-en-vol")
+
+    from synelia_db import session as db_session
+    from synelia_db.modeles import Travail
+    from synelia_kernel.ids import nouvel_id
+
+    async with db_session.fabrique()() as s:
+        s.add(
+            Travail(
+                id=nouvel_id(),
+                type="vm.delete",
+                label="vm.delete — en vol",
+                statut="running",
+                cible_id=vid,
+            )
+        )
+        await s.commit()
+
+    def _interdit(self, serveur_id):
+        raise AssertionError("Suppression déjà en vol : la réconciliation ne redéclenche pas")
+
+    monkeypatch.setattr(
+        vms_service.ComputeSimule,
+        "statut_serveur",
+        lambda self, serveur_id, identifiants=None: "absente",
+    )
+    monkeypatch.setattr(vms_service.ComputeSimule, "supprimer_serveur", _interdit)
+    r = await client.get(f"/v1/vms/{vid}")
+    assert r.status_code == 200 and r.json()["statut"] == "error"
+    r = await client.get("/v1/vms", params={"statut": "error"})
+    assert any(v["id"] == vid for v in r.json()["donnees"])
+
+
+async def test_reconciliation_statut_vm_shutoff_pas_un_orphelin(client, monkeypatch):
+    # Un serveur éteint hors bande (SHUTOFF) n'est pas un orphelin : les invités du lab
+    # s'éteignent la nuit et sont redémarrés — la réconciliation ne doit ni le marquer
+    # `error`, ni contredire le statut posé par le propre flux de l'application.
+    from synelia.modules.vms import service as vms_service
+
+    espace_id = await _espace_demo(client)
+    vid = await _creer_vm(client, espace_id, "vm-shutoff")
+    monkeypatch.setattr(
+        vms_service.ComputeSimule,
+        "statut_serveur",
+        lambda self, serveur_id, identifiants=None: "SHUTOFF",
+    )
+    r = await client.get(f"/v1/vms/{vid}")
+    assert r.status_code == 200 and r.json()["statut"] == "running"
+    r = await client.get("/v1/vms", params={"statut": "error"})
+    assert all(v["id"] != vid for v in r.json()["donnees"])
+
+
+async def test_reconciliation_vm_sans_serveur_id(client, monkeypatch):
+    # Une ligne sans secret `serveur_id` (démo, VM antérieure au câblage Nova) n'a jamais
+    # référencé d'infrastructure réelle identifiable : sans cette garde, le contrôle sur
+    # l'id applicatif de repli (que Nova ignore toujours) la marquerait orpheline à tort.
+    from synelia.modules.vms import service as vms_service
+
+    espace_id = await _espace_demo(client)
+    vid = await _creer_vm(client, espace_id, "vm-sans-serveur")
+
+    async def _secrets_vides(ctx, id_, **kw):
+        return {}
+
+    def _interdit(self, serveur_id, identifiants=None):
+        raise AssertionError("Nova ne doit pas être interrogé sans secret serveur_id")
+
+    monkeypatch.setattr(vms_service.depot, "secrets", _secrets_vides)
+    monkeypatch.setattr(vms_service.ComputeSimule, "statut_serveur", _interdit)
+    r = await client.get(f"/v1/vms/{vid}")
+    assert r.status_code == 200 and r.json()["statut"] == "running"

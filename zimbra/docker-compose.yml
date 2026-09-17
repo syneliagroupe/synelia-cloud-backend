@@ -1,0 +1,59 @@
+# Zimbra OSE (Zextras build 9.0.0) — instance globale et partagée, multi-domaine.
+# Sert le module web_emails pour TOUTES les orgs/domaines Synelia (pas une instance par client).
+# Tous les ports sont liés à 127.0.0.1 uniquement (accès admin/API réservé au backend sur dev01).
+# 80/443 hôte déjà pris par Apache (reverse proxy global) -> Zimbra HTTP/HTTPS webmail remappés 8080/8443.
+#
+# Lancement : docker compose -f zimbra/docker-compose.yml --env-file ~/.config/synelia/zimbra-dev01.env up -d
+name: synelia-zimbra-dev01
+
+services:
+  dns-server:
+    image: 4km3/dnsmasq
+    container_name: zimbra-dnsmasq
+    restart: unless-stopped
+    cap_add: [NET_ADMIN]
+    command: --address=/zimbra.synelia.internal/172.30.0.2 --domain=zimbra.synelia.internal --mx-host=zimbra.synelia.internal,mail.zimbra.synelia.internal,0
+    networks:
+      zimbranet:
+        ipv4_address: 172.30.0.2
+
+  zimbra:
+    image: synelia-zimbra-fixed:latest # iwayvietnam/zimbra_all + zimbra/fix/ (build via `docker build -t synelia-zimbra-fixed:latest zimbra/fix/`)
+    container_name: zimbra-all
+    hostname: mail.zimbra.synelia.internal
+    dns: [172.30.0.2]
+    depends_on: [dns-server]
+    volumes:
+      - ./zimbra-storage:/opt/zimbra:rw
+    environment:
+      - PASSWORD=${ZIMBRA_ADMIN_PASSWORD:?}
+    ports:
+      - "127.0.0.1:25:25"
+      - "127.0.0.1:587:587"
+      - "127.0.0.1:465:465"
+      - "127.0.0.1:110:110"
+      - "127.0.0.1:143:143"
+      - "127.0.0.1:993:993"
+      - "127.0.0.1:995:995"
+      - "127.0.0.1:8080:80"
+      - "127.0.0.1:8443:443"
+      - "127.0.0.1:3443:3443"
+      - "127.0.0.1:9071:7071" # admin SOAP (mailboxd) ; l'API backend l'appelle par nom de conteneur, ce port sert au diagnostic depuis l'hôte
+    networks:
+      zimbranet:
+        ipv4_address: 172.30.0.3
+      backend:
+        aliases: [zimbra]
+    restart: unless-stopped
+
+networks:
+  zimbranet:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+  # Réseau du stack backend (docker-compose.dev01.yml) : permet à l'API d'appeler
+  # l'admin SOAP Zimbra par nom de conteneur, sans passer par les ports 127.0.0.1 de l'hôte.
+  backend:
+    name: synelia-backend-dev01_default
+    external: true

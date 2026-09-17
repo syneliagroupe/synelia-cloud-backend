@@ -59,6 +59,18 @@ async def modifier_plan_pra(
     if corps.nom != plan.nom:
         await depot.exiger_nom_libre(ctx, corps.nom)
     service.controles_replication(corps.replication)
+    # `GroupePra.dependances` is optional on the creation contract (clients — the mobile app's
+    # PRA edit form included — routinely omit it) but the stored `Groupe` requires it: without
+    # this default, `Depot.modifier`'s revalidation against `PlanPra` raised an unhandled
+    # `ValidationError` (surfaced to the client as a bare 500), confirmed live 2026-09-08.
+    # `plan_vers_modele` (used by `POST /pra`) already applies the same default on creation.
+    corps = corps.model_copy(
+        update={
+            "groupes": [
+                g.model_copy(update={"dependances": g.dependances or []}) for g in corps.groupes
+            ]
+        }
+    )
     updated = await depot.modifier(ctx, praId, corps)
     await journaliser(
         ctx, action="pra.plan.modification", cible_type="plan_pra", cible_id=praId, cible=plan.nom

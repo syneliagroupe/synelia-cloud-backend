@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from fastapi import APIRouter, Depends, Response, status
@@ -60,6 +61,8 @@ async def supprimer_zone_dns(
 ) -> Any:  # noqa: N803
     z = await depot.obtenir(ctx, zoneId)
     exiger_confirmation(z.domaine, confirmation)
+    zid = await service.zone_id_amont(ctx, z)
+    await asyncio.to_thread(service.amont().supprimer_zone, zid)
     await depot.supprimer(ctx, zoneId, logique=True)
     await journaliser(
         ctx, action="dns.zone_suppression", cible_type="dns_zone", cible_id=zoneId, cible=z.domaine
@@ -76,7 +79,8 @@ async def modifier_dnssec(
     z = await depot.obtenir(ctx, zoneId)
     if z.dnssec == corps.actif:
         raise erreurs.conflit("DNSSEC est déjà dans cet état.", code="dnssec_etat_identique")
-    service.amont().activer_dnssec(zoneId, corps.actif)
+    zid = await service.zone_id_amont(ctx, z)
+    await asyncio.to_thread(service.amont().activer_dnssec, zid, corps.actif)
     await depot.remplacer(ctx, zoneId, z.model_copy(update={"dnssec": corps.actif}))
     await journaliser(
         ctx,
@@ -135,6 +139,7 @@ async def modifier_enregistrement_dns(
     ctx: Contexte = Depends(exige("network.manage")),
 ) -> Any:  # noqa: N803
     z = await depot.obtenir(ctx, zoneId)
+    await service.modifier_enregistrement_amont(ctx, z, enregistrementId, corps)
     modifie = [
         service.enregistrement_vers(z, corps, enregistrementId) if r.id == enregistrementId else r
         for r in z.enregistrements
@@ -155,6 +160,7 @@ async def supprimer_enregistrement_dns(
     zoneId: str, enregistrementId: str, ctx: Contexte = Depends(exige("network.manage"))
 ) -> Any:  # noqa: N803
     z = await depot.obtenir(ctx, zoneId)
+    await service.supprimer_enregistrement_amont(ctx, z, enregistrementId)
     restants = [r for r in z.enregistrements if r.id != enregistrementId]
     await depot.remplacer(ctx, zoneId, z.model_copy(update={"enregistrements": restants}))
     await journaliser(

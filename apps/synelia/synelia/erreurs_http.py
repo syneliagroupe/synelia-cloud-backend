@@ -32,8 +32,10 @@ def _cid(request: Request) -> str:
     return getattr(request.state, "correlation_id", "-")
 
 
-def _reponse(request: Request, err: erreurs.AppError) -> ORJSONResponse:
-    return ORJSONResponse(status_code=err.statut, content=err.corps(_cid(request)))
+def _reponse(
+    request: Request, err: erreurs.AppError, headers: dict[str, str] | None = None
+) -> ORJSONResponse:
+    return ORJSONResponse(status_code=err.statut, content=err.corps(_cid(request)), headers=headers)
 
 
 def installer(app: FastAPI) -> None:
@@ -69,7 +71,7 @@ def installer(app: FastAPI) -> None:
         if exc.status_code == 404:
             message = "Chemin inconnu de l'API."
         err = erreurs.AppError(code, exc.status_code, message)
-        return _reponse(request, err)
+        return _reponse(request, err, headers=exc.headers)
 
     @app.exception_handler(Exception)
     async def _inconnue(request: Request, exc: Exception) -> ORJSONResponse:

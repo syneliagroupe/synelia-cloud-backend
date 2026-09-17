@@ -11,7 +11,11 @@ from synelia_db.base import Base, DateTimeUTC, Identifie
 
 
 class Audit(Base, Identifie):
-    """Append-only : aucune route ne modifie ni ne supprime une ligne ; hash chaîné sur `hash_precedent`."""
+    """Append-only imposé par Postgres : le rôle applicatif (`synelia_app`) n'a que
+    `SELECT, INSERT` sur cette table (propriétaire : `synelia`, hors-ligne) — voir §3 de
+    `docs/PLAN-ARCHITECTURE-SUITE.md`. Hash chaîné par organisation sur `hash_precedent`.
+    Aucune route ne modifie ni ne supprime une ligne : le code le respecte, et depuis ce plan
+    les droits Postgres l'imposent même en cas de code applicatif compromis."""
 
     __tablename__ = "audit"
     __table_args__ = (Index("ix_audit_org_date", "org_id", "date"),)

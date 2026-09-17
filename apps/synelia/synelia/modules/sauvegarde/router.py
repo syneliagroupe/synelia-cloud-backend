@@ -124,6 +124,13 @@ async def executer_plan_sauvegarde(
     planId: str, ctx: Contexte = Depends(exige("backup.plan.write"))
 ) -> Any:  # noqa: N803
     plan = await depot.obtenir(ctx, planId)
+    await journaliser(
+        ctx,
+        action="sauvegarde.plan.execution",
+        cible_type="plan_sauvegarde",
+        cible_id=plan.id,
+        cible=plan.nom,
+    )
     return await demarrer_travail(
         ctx,
         "backup.run",
@@ -170,6 +177,7 @@ async def supprimer_point_restauration(
 ) -> Response:  # noqa: N803
     point = await points.obtenir(ctx, pointId)
     exiger_confirmation(point.resourceNom, confirmation)
+    await service.supprimer_snapshots_reels(ctx, pointId)
     await points.supprimer(ctx, pointId, logique=True)
     await journaliser(
         ctx,
@@ -191,6 +199,13 @@ async def verifier_point_restauration(
     pointId: str, ctx: Contexte = Depends(exige("backup.restore"))
 ) -> Any:  # noqa: N803
     point = await points.obtenir(ctx, pointId)
+    await journaliser(
+        ctx,
+        action="sauvegarde.point.verification",
+        cible_type="point_restauration",
+        cible_id=point.id,
+        cible=point.resourceNom,
+    )
     return await demarrer_travail(
         ctx,
         "backup.verify",

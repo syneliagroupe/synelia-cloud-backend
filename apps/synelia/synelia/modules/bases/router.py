@@ -45,7 +45,7 @@ async def creer_base_managee(
     corps: m.BaseManageeCreation, ctx: Contexte = Depends(exige("vm.create_delete"))
 ) -> Any:
     await depot.exiger_nom_libre(ctx, corps.nom)
-    identifiants = service.amont().durable_identifiants(corps.moteur)
+    identifiants = service.generer_identifiants(corps.moteur)
     base = m.BaseManagee(
         id=nouvel_id(),
         espaceId=corps.espaceId,
@@ -57,16 +57,16 @@ async def creer_base_managee(
         tailleGo=corps.tailleGo or 20,
         connexions=m.Connexions(actives=0, max=_max_connexions(corps.palier)),
         replicas=corps.replicas or 0,
-        statut="running",
+        statut="maintenance",
         pitr=bool(corps.pitr),
-        host=_host(corps.nom),
+        host="",
     )
     await depot.creer(
         ctx,
         base,
         secrets={
             "utilisateur": identifiants["utilisateur"],
-            "mot_de_passe": identifiants["mot_de_passe_persistant"],
+            "mot_de_passe": identifiants["mot_de_passe"],
         },
     )
     await journaliser(
@@ -94,12 +94,6 @@ async def creer_base_managee(
 
 def _max_connexions(palier: str) -> int:
     return {"s1": 25, "s2": 50, "m1": 100, "m2": 200, "l1": 500, "xl1": 1000}.get(palier, 100)
-
-
-def _host(nom: str) -> str:
-    import re
-
-    return f"{re.sub(r'[^a-z0-9-]', '-', nom.lower())}.int.synelia.cloud"
 
 
 @router.get("/{baseId}", response_model=m.BaseManagee, response_model_exclude_none=True)
@@ -194,13 +188,14 @@ async def rotationner_identifiants_base(
     corps: m.BasesBaseIdIdentifiantsRotationPostRequest,
     ctx: Contexte = Depends(exige("secrets.update")),
 ) -> Any:  # noqa: N803
+    # Rotation locale du secret : génère et stocke un nouveau mot de passe réel. Le moteur
+    # tournant dans le conteneur Docker de la VM garde l'ancien tant qu'il n'est pas mis à jour
+    # via une exécution distante (hors périmètre ici, pas d'accès SSH/exec depuis l'API).
     base = await depot.obtenir(ctx, baseId)
-    nouveau = service.amont().rotation_identifiants(baseId, corps.delaiGraceMin)
-    await depot.definir_secrets(
-        ctx,
-        baseId,
-        {"utilisateur": nouveau["utilisateur"], "mot_de_passe": nouveau["mot_de_passe"]},
-    )
+    secrets_actuels = await depot.secrets(ctx, baseId)
+    utilisateur = secrets_actuels.get("utilisateur") or service.utilisateur_pour_moteur(base.moteur)
+    nouveau_mdp = service.nouveau_mot_de_passe()
+    await depot.definir_secrets(ctx, baseId, {"mot_de_passe": nouveau_mdp})
     await journaliser(
         ctx,
         action="base.identifiants.rotation",
@@ -211,8 +206,8 @@ async def rotationner_identifiants_base(
     return m.BasesBaseIdIdentifiantsRotationPostResponse(
         host=base.host,
         port=PORTS.get(base.moteur, 5432),
-        utilisateur=nouveau["utilisateur"],
-        motDePasse=nouveau["mot_de_passe"],
+        utilisateur=utilisateur,
+        motDePasse=nouveau_mdp,
     )
 
 

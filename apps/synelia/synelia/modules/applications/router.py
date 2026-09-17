@@ -461,7 +461,7 @@ async def creer_composant(
         ]
         if corps.ports
         else [m.Port(interne=80, type="ClusterIP")],
-        envVars=[],
+        envVars=corps.envVars or [],
         storage=[
             m.StorageItem(chemin=s.chemin, tailleGo=s.tailleGo, classe=s.classe)
             for s in corps.storage

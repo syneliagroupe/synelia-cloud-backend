@@ -10,17 +10,29 @@ from synelia_kernel.dates import maintenant
 from synelia_kernel.ids import nouvel_id
 
 from synelia.audit import journaliser
-from synelia.depot import Depot
 from synelia.deps import Contexte, Page, exige, exiger_confirmation
 from synelia.modules.reseau.service import (
+    ajouter_regle_amont,
+    associer_ip_amont,
+    attacher_groupe_amont,
+    creer_groupe_amont,
+    creer_reseau_amont,
     depot_groupe,
     depot_ip,
     depot_lb,
     depot_reseau,
     depot_vpn,
+    dissocier_ip_amont,
+    liberer_ip_amont,
     metriques_vides,
-    prochaine_ip,
+    reserver_ip_amont,
+    resoudre_cible_attachement_ip,
     sante_defaut,
+    supprimer_groupe_amont,
+    supprimer_lb_amont,
+    supprimer_regle_amont,
+    supprimer_reseau_amont,
+    synchroniser_pool_amont,
 )
 from synelia.travaux import demarrer_travail
 
@@ -56,6 +68,7 @@ async def creer_reseau(
 ) -> Any:
     await depot_reseau.exiger_nom_libre(ctx, corps.nom)
     _valider_cidr(corps.cidr)
+    secrets_amont = await creer_reseau_amont(ctx, corps.espaceId, corps.nom, corps.cidr)
     reseau = m.Reseau(
         id=nouvel_id(),
         espaceId=corps.espaceId,
@@ -65,7 +78,7 @@ async def creer_reseau(
         workloads=0,
         vlan=corps.vlan,
     )
-    await depot_reseau.creer(ctx, reseau)
+    await depot_reseau.creer(ctx, reseau, secrets=secrets_amont)
     await journaliser(
         ctx, action="reseau.creation", cible_type="reseau", cible_id=reseau.id, cible=reseau.nom
     )
@@ -105,6 +118,7 @@ async def supprimer_reseau(
 ) -> Response:  # noqa: N803
     r = await depot_reseau.obtenir(ctx, reseauId)
     exiger_confirmation(r.nom, confirmation)
+    await supprimer_reseau_amont(ctx, reseauId)
     await journaliser(
         ctx, action="reseau.suppression", cible_type="reseau", cible_id=reseauId, cible=r.nom
     )
@@ -140,16 +154,17 @@ async def lister_ips(
 async def reserver_ip(
     corps: m.IpPubliqueReservation, ctx: Contexte = Depends(exige("network.manage"))
 ) -> Any:
+    amont_ip = await reserver_ip_amont(ctx, corps.espaceId)
     ip = m.IpPublique(
         id=nouvel_id(),
         espaceId=corps.espaceId,
-        adresse=await prochaine_ip(ctx, corps.espaceId),
+        adresse=amont_ip["adresse"],
         ptr=corps.ptr,
         attachedTo=None,
         attachedLabel=None,
         antiDdos=corps.antiDdos,
     )
-    await depot_ip.creer(ctx, ip)
+    await depot_ip.creer(ctx, ip, secrets={"ip_flottante_id": amont_ip["id"]})
     await journaliser(
         ctx, action="ip.reservation", cible_type="ip_publique", cible_id=ip.id, cible=ip.adresse
     )
@@ -183,6 +198,7 @@ async def liberer_ip(
 ) -> Response:  # noqa: N803
     ip = await depot_ip.obtenir(ctx, ipId)
     exiger_confirmation(ip.adresse, confirmation)
+    await liberer_ip_amont(ctx, ipId)
     await journaliser(
         ctx, action="ip.liberation", cible_type="ip_publique", cible_id=ipId, cible=ip.adresse
     )
@@ -198,18 +214,26 @@ async def attacher_ip(
     corps: m.IpsIpIdAttachementPutRequest,
     ctx: Contexte = Depends(exige("network.manage")),
 ) -> Any:  # noqa: N803
-    vm = await Depot("vm", m.Vm).obtenir(ctx, corps.cibleId)
     ip = await depot_ip.obtenir(ctx, ipId)
     if ip.attachedTo:
         raise erreurs.conflit(
             "Cette IP est déjà attachée à une ressource.", code="ip_deja_attachee"
         )
-    changement: dict[str, Any] = {"attachedTo": corps.cibleId, "attachedLabel": vm.nom}
+    cible_type, label = await resoudre_cible_attachement_ip(ctx, corps.cibleId)
+    from synelia_openstack.erreurs import traduire
+
+    try:
+        await associer_ip_amont(ctx, ipId, corps.cibleId, cible_type)
+    except erreurs.AppError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise traduire(exc, "IP publique") from None
+    changement: dict[str, Any] = {"attachedTo": corps.cibleId, "attachedLabel": label}
     if corps.ptr is not None:
         changement["ptr"] = corps.ptr
     await depot_ip.modifier(ctx, ipId, changement)
     await journaliser(
-        ctx, action="ip.attachement", cible_type="ip_publique", cible_id=ipId, cible=vm.nom
+        ctx, action="ip.attachement", cible_type="ip_publique", cible_id=ipId, cible=label
     )
     return await depot_ip.obtenir(ctx, ipId)
 
@@ -219,6 +243,7 @@ async def attacher_ip(
 )
 async def detacher_ip(ipId: str, ctx: Contexte = Depends(exige("network.manage"))) -> Any:  # noqa: N803
     ip = await depot_ip.obtenir(ctx, ipId)
+    await dissocier_ip_amont(ctx, ipId)
     await depot_ip.remplacer(
         ctx, ipId, ip.model_copy(update={"attachedTo": None, "attachedLabel": None})
     )
@@ -267,7 +292,17 @@ async def creer_groupe_securite(
         rules=list(corps.rules or []),
         attaches=0,
     )
-    await depot_groupe.creer(ctx, groupe)
+    from synelia_openstack.erreurs import traduire
+
+    try:
+        gid = await creer_groupe_amont(ctx, corps.espaceId, groupe.nom, groupe.description)
+    except erreurs.AppError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise traduire(exc, "Groupe de sécurité") from None
+    await depot_groupe.creer(ctx, groupe, secrets={"groupe_id": gid})
+    for regle in groupe.rules:
+        await ajouter_regle_amont(ctx, groupe.id, regle)
     await journaliser(
         ctx,
         action="groupe.creation",
@@ -325,6 +360,15 @@ async def supprimer_groupe_securite(
 ) -> Response:  # noqa: N803
     g = await depot_groupe.obtenir(ctx, groupeId)
     exiger_confirmation(g.nom, confirmation)
+    if g.attaches:
+        # Neutron refuse de supprimer un security group encore attaché à un port (constaté en
+        # direct : `ConflictException` brute remontée en 500 sans ce garde-fou) — même famille
+        # de contrôle que `espace_non_vide`/`volume_attache` ailleurs dans l'API.
+        raise erreurs.conflit(
+            "Le groupe de sécurité est encore attaché à une ou plusieurs ressources.",
+            code="groupe_attache",
+        )
+    await supprimer_groupe_amont(ctx, groupeId)
     await journaliser(
         ctx,
         action="groupe.suppression",
@@ -345,6 +389,7 @@ async def attacher_groupe_securite(
     ctx: Contexte = Depends(exige("network.manage")),
 ) -> Any:  # noqa: N803
     await depot_groupe.obtenir(ctx, groupeId)
+    await attacher_groupe_amont(ctx, groupeId, corps.cibles)
     await depot_groupe.modifier(ctx, groupeId, {"attaches": len(corps.cibles)})
     await journaliser(
         ctx, action="groupe.attachement", cible_type="groupe_securite", cible_id=groupeId
@@ -364,6 +409,14 @@ async def ajouter_regle_securite(
     g = await depot_groupe.obtenir(ctx, groupeId)
     if any(r.id == corps.id for r in g.rules):
         raise erreurs.conflit("Une règle porte déjà cet identifiant.", code="regle_existante")
+    from synelia_openstack.erreurs import traduire
+
+    try:
+        await ajouter_regle_amont(ctx, groupeId, corps)
+    except erreurs.AppError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise traduire(exc, "Groupe de sécurité") from None
     regles = [*list(g.rules), corps]
     await depot_groupe.modifier(ctx, groupeId, {"rules": [r.model_dump() for r in regles]})
     await journaliser(
@@ -390,6 +443,9 @@ async def modifier_regle_securite(
     g = await depot_groupe.obtenir(ctx, groupeId)
     if not any(r.id == regleId for r in g.rules):
         raise erreurs.introuvable("Règle de sécurité", regleId)
+    # Une règle Neutron est immuable : « modifier » revient à la remplacer côté amont.
+    await supprimer_regle_amont(ctx, groupeId, regleId)
+    await ajouter_regle_amont(ctx, groupeId, corps)
     regles = [(corps if r.id == regleId else r) for r in g.rules]
     await depot_groupe.modifier(ctx, groupeId, {"rules": [r.model_dump() for r in regles]})
     await journaliser(
@@ -410,6 +466,7 @@ async def supprimer_regle_securite(
     reste = [r for r in g.rules if r.id != regleId]
     if len(reste) == len(g.rules):
         raise erreurs.introuvable("Règle de sécurité", regleId)
+    await supprimer_regle_amont(ctx, groupeId, regleId)
     await depot_groupe.modifier(ctx, groupeId, {"rules": [r.model_dump() for r in reste]})
     await journaliser(
         ctx,
@@ -544,6 +601,7 @@ async def supprimer_load_balancer(
 ) -> Response:  # noqa: N803
     lb = await depot_lb.obtenir(ctx, lbId)
     exiger_confirmation(lb.nom, confirmation)
+    await supprimer_lb_amont(ctx, lbId)
     await journaliser(
         ctx, action="lb.suppression", cible_type="load_balancer", cible_id=lbId, cible=lb.nom
     )
@@ -567,19 +625,8 @@ async def obtenir_metriques_load_balancer(
 async def modifier_pool_load_balancer(
     lbId: str, corps: m.LoadBalancersLbIdPoolPutRequest, ctx: Contexte = Depends(exige("lb.create"))
 ) -> Any:  # noqa: N803
-    await depot_lb.obtenir(ctx, lbId)
-    pool: list[m.PoolItem] = []
-    for c in corps.cibles:
-        vm = await Depot("vm", m.Vm).trouver(ctx, c.targetId)
-        label = vm.nom if vm else c.targetId
-        pool.append(
-            m.PoolItem(
-                targetId=c.targetId,
-                targetLabel=label,
-                poids=c.poids or 1,
-                sante="drain" if c.drain else "ok",
-            )
-        )
+    lb = await depot_lb.obtenir(ctx, lbId)
+    pool = await synchroniser_pool_amont(ctx, lb, corps.cibles)
     await depot_lb.modifier(ctx, lbId, {"pool": [p.model_dump() for p in pool]})
     await journaliser(ctx, action="lb.pool", cible_type="load_balancer", cible_id=lbId)
     return await depot_lb.obtenir(ctx, lbId)

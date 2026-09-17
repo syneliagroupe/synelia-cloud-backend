@@ -5,8 +5,9 @@ from typing import Any
 from fastapi import APIRouter, Body, status
 from sqlalchemy import select
 from synelia_contract import modeles as m
+from synelia_contract import rbac
 from synelia_db.modeles import Invitation, Membership, Organisation, SessionAuth, Utilisateur
-from synelia_kernel import erreurs
+from synelia_kernel import courriel, erreurs
 from synelia_kernel.chiffrement import dechiffrer
 from synelia_kernel.dates import dans, maintenant
 from synelia_kernel.ids import jeton_opaque
@@ -19,6 +20,9 @@ from synelia.securite import (
     emettre_acces,
     hacher_jeton,
     hacher_mot_de_passe,
+    ip_autorisee,
+    politiques_securite,
+    role_effectif_equipe,
     verifier_mot_de_passe,
     verifier_totp,
 )
@@ -42,6 +46,44 @@ async def se_connecter(ctx: CtxPublic, corps: m.DemandeConnexion) -> Any:
     if u.statut == "suspendu":
         raise erreurs.interdit("Compte suspendu.", code="compte_suspendu")
     org = u.org_active_id
+    if org:
+        o = await ctx.session.get(Organisation, org)
+        # Une organisation suspendue coupe l'accès de ses membres — l'équipe Synelia garde
+        # le sien pour pouvoir la consulter/la réactiver (jamais bloquée par sa propre action).
+        if (
+            o is not None
+            and o.statut == "suspendue"
+            and role_effectif_equipe(u.equipe or {}) not in rbac.ROLES_EQUIPE
+        ):
+            await journaliser(
+                ctx,
+                action="auth.connexion_refusee_organisation_suspendue",
+                cible_type="utilisateur",
+                cible_id=u.id,
+                cible=u.email,
+                org_id=org,
+                resultat="refus",
+            )
+            raise erreurs.interdit(
+                "Organisation suspendue : connexion impossible.", code="organisation_suspendue"
+            )
+        restriction = politiques_securite(o.politiques if o else None).get("restrictionIp", {})
+        if restriction.get("actif") and not ip_autorisee(
+            ctx.ip, restriction.get("plages", []), "portail"
+        ):
+            await journaliser(
+                ctx,
+                action="auth.connexion_refusee_ip",
+                cible_type="utilisateur",
+                cible_id=u.id,
+                cible=u.email,
+                org_id=org,
+                resultat="refus",
+                details={"ip": ctx.ip},
+            )
+            raise erreurs.interdit(
+                "Connexion refusée : adresse IP non autorisée.", code="ip_non_autorisee"
+            )
     mfa = await service.mfa_exigee(ctx.session, u, org)
     rep = await service.ouvrir_session(
         ctx.session,
@@ -71,14 +113,41 @@ async def valider_mfa(ctx: CtxPublic, corps: m.AuthMfaPostRequest) -> Any:
     u = await ctx.session.get(Utilisateur, s.utilisateur_id)
     assert u is not None
     secret = dechiffrer(u.mfa_secret_chiffre) if u.mfa_secret_chiffre else None
-    if secret is None or not verifier_totp(secret, corps.code):
+    totp_valide = secret is not None and verifier_totp(secret, corps.code)
+    code_secours_utilise = None
+    if not totp_valide:
+        # `POST /moi/mfa` génère et présente huit codes de secours à usage unique
+        # (hachés dans `preferences.codes_secours_hash`), mais jusqu'ici rien ne les
+        # vérifiait jamais ici : un compte qui perd l'accès à son application TOTP
+        # n'avait donc aucun moyen réel de se reconnecter malgré la promesse de l'UI
+        # (« codes de secours, utilisables une fois chacun »). Chaque code haché est
+        # comparé, puis retiré de la liste (nouveau dict réassigné, pas de mutation
+        # en place, pour que SQLAlchemy détecte le changement sur la colonne JSON).
+        hachages = (u.preferences or {}).get("codes_secours_hash") or []
+        for hachage in hachages:
+            if verifier_mot_de_passe(corps.code, hachage):
+                code_secours_utilise = hachage
+                break
+    if not totp_valide and code_secours_utilise is None:
         raise erreurs.validation(
             "Code invalide.", {"code": "Le code à six chiffres ne correspond pas."}
         )
+    if code_secours_utilise is not None:
+        restants = [h for h in u.preferences["codes_secours_hash"] if h != code_secours_utilise]
+        u.preferences = {**u.preferences, "codes_secours_hash": restants}
     s.mfa_validee = True
     s.mfa_defi = None
     await ctx.session.flush()
     acces = emettre_acces({"sub": u.id, "org": s.org_id, "role": s.role, "sid": s.id})
+    await journaliser(
+        ctx,
+        action="auth.mfa_validee",
+        cible_type="utilisateur",
+        cible_id=u.id,
+        cible=u.email,
+        org_id=s.org_id,
+        details={"codeSecoursUtilise": code_secours_utilise is not None},
+    )
     return {
         "accessToken": acces,
         "refreshToken": jeton_opaque(),  # la rotation réelle passe par /auth/rafraichir
@@ -108,11 +177,20 @@ async def rafraichir_session(ctx: CtxPublic, corps: m.AuthRafraichirPostRequest)
             await ctx.session.execute(select(SessionAuth).where(SessionAuth.famille == s.famille))
         ).scalars():
             autre.revoquee_le = maintenant()
+        await journaliser(
+            ctx,
+            action="auth.rafraichissement_reutilisation",
+            cible_type="utilisateur",
+            cible_id=s.utilisateur_id,
+            org_id=s.org_id,
+            resultat="alerte",
+            details={"famille": s.famille},
+        )
         raise erreurs.non_authentifie("Réutilisation détectée : sessions révoquées.")
     u = await ctx.session.get(Utilisateur, s.utilisateur_id)
     assert u is not None
     s.revoquee_le = maintenant()
-    return await service.ouvrir_session(
+    rep = await service.ouvrir_session(
         ctx.session,
         u,
         ip=ctx.ip,
@@ -121,6 +199,15 @@ async def rafraichir_session(ctx: CtxPublic, corps: m.AuthRafraichirPostRequest)
         famille=s.famille,
         emprunt=s.emprunt,
     )
+    await journaliser(
+        ctx,
+        action="auth.rafraichissement",
+        cible_type="utilisateur",
+        cible_id=u.id,
+        cible=u.email,
+        org_id=s.org_id,
+    )
+    return rep
 
 
 @router.post("/deconnexion", response_model=m.AuthDeconnexionPostResponse)
@@ -293,7 +380,18 @@ async def demander_reinitialisation(ctx: CtxPublic, corps: m.AuthMotDePasseOubli
         brut = jeton_opaque()
         u.reinit_jeton_hash = hacher_jeton(brut)
         u.reinit_expire_le = dans(3600)
-        # ponytail: pas d'envoi de courriel encore — le jeton est journalisé côté serveur (dev)
+        lien = f"{ctx.reglages.url_frontend}/reinitialiser-mot-de-passe?jeton={brut}"
+        await courriel.envoyer(
+            u.email,
+            "Réinitialiser votre mot de passe Synelia Cloud",
+            f"Bonjour {u.nom},",
+            [
+                "Une réinitialisation de mot de passe a été demandée pour votre compte. "
+                "Ce lien est valable une heure.",
+            ],
+            bouton_texte="Réinitialiser mon mot de passe",
+            bouton_url=lien,
+        )
         await journaliser(
             ctx,
             action="auth.reinitialisation_demandee",
@@ -333,9 +431,13 @@ async def reinitialiser_mot_de_passe(
         )
     ).scalars():
         s.revoquee_le = maintenant()
-    return await service.ouvrir_session(
+    rep = await service.ouvrir_session(
         ctx.session, u, ip=ctx.ip, user_agent=ctx.entete("user-agent")
     )
+    await journaliser(
+        ctx, action="auth.reinitialisation", cible_type="utilisateur", cible_id=u.id, cible=u.email
+    )
+    return rep
 
 
 @router.get("/sso/decouverte", response_model=m.DecouverteSso, response_model_exclude_none=True)

@@ -455,23 +455,6 @@
       }
     },
     {
-      "id": "ia.endpoint.deploy",
-      "libelle": "Déployer un point d'inférence dédié",
-      "groupe": "Intelligence artificielle",
-      "perms": {
-        "super_admin": "full",
-        "platform_operator": "full",
-        "org_admin": "full",
-        "espace_admin": "full",
-        "project_owner": "none",
-        "operator": "none",
-        "service_admin": "none",
-        "billing_manager": "none",
-        "compliance": "none",
-        "read_only": "none"
-      }
-    },
-    {
       "id": "ia.knowledge.write",
       "libelle": "Créer / réindexer une base de connaissances",
       "groupe": "Intelligence artificielle",

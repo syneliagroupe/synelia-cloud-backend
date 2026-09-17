@@ -56,5 +56,19 @@ services:
       SYNELIA_DATABASE_URL: postgresql+asyncpg://synelia:synelia@postgres:5432/synelia
       SYNELIA_TEMPORAL_ADRESSE: temporal:7233
 
+  relais-smtp:
+    build: .
+    command: ["relais-smtp"]
+    depends_on: { postgres: { condition: service_healthy } }
+    environment:
+      SYNELIA_DATABASE_URL: postgresql+asyncpg://synelia:synelia@postgres:5432/synelia
+      SYNELIA_SMTP_RELAIS_HOTE: "0.0.0.0"
+      SYNELIA_SMTP_RELAIS_PORT: "587"
+      # En local, l'amont est Mailpit (aucune auth, tout est accepté) : pratique pour vérifier
+      # de bout en bout AUTH + quota + relais sans dépendre de Zimbra.
+      SYNELIA_SMTP_RELAIS_AMONT_HOTE: mailpit
+      SYNELIA_SMTP_RELAIS_AMONT_PORT: "1025"
+    ports: ["587:587"]
+
 volumes:
   pgdata: {}

@@ -55,8 +55,16 @@ async def test_commander_cycle(client):
     r = await client.post(f"/v1/web/domaines/{did}/code-auth")
     assert r.status_code == 200 and r.json()["code"]
 
+    r = await client.get(f"/v1/web/domaines/{did}")
+    expiration_avant = r.json()["domaine"]["expiration"]
+
     r = await client.post(f"/v1/web/domaines/{did}/renouvellement", json={"dureeAnnees": 2})
     assert r.status_code == 202 and r.json()["type"] == "domaine.renouveler"
+
+    # Le renouvellement prolonge depuis l'échéance existante, pas depuis aujourd'hui.
+    r = await client.get(f"/v1/web/domaines/{did}")
+    expiration_apres = r.json()["domaine"]["expiration"]
+    assert expiration_apres[:4] == str(int(expiration_avant[:4]) + 2)
 
 
 async def test_transfert(client):
@@ -69,3 +77,24 @@ async def test_transfert(client):
     assert r.status_code == 200 and any(
         d["nom"] == "transfert-demo.com" for d in r.json()["donnees"]
     )
+
+
+async def test_travail_entree_persisted(client):
+    """Verify that the entree field is properly persisted in travail records."""
+    # This test verifies the fix for the bug where entree was not being saved to the database
+    from synelia_db.session import fabrique
+    from synelia_db.modeles import Travail
+
+    corps = {"nom": "entree-test-domain.ci", "dureeAnnees": 3, "renouvellementAuto": True, "whoisProtege": True, "titulaire": TITULAIRE}
+    r = await client.post("/v1/web/domaines", json=corps)
+    assert r.status_code == 202, r.text
+    travail = r.json()
+    travail_id = travail["id"]
+
+    # Verify entree is persisted in the database
+    async with fabrique()() as session:
+        db_travail = await session.get(Travail, travail_id)
+        assert db_travail is not None
+        assert db_travail.entree is not None, "entree field should not be null"
+        assert db_travail.entree.get("dureeAnnees") == 3, f"entree should contain dureeAnnees=3, got {db_travail.entree}"
+        assert db_travail.entree.get("nom") == "entree-test-domain.ci"

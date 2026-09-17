@@ -383,33 +383,25 @@
     "id": "projet.create",
     "portee": "client",
     "libelle": "Création du projet {cible}",
-    "lancement": "Build, analyse DevSecOps, provisioning puis déploiement.",
-    "fin": "Le projet est déployé et son URL de production répond.",
+    "lancement": "Le cluster est rattaché, puis le load balancer et la zone applicative sont provisionnés.",
+    "fin": "Le projet est prêt à recevoir son premier service.",
     "href": "/app/applications/projets",
     "etapes": [
       {
-        "nom": "Cloner le dépôt et détecter la pile",
-        "dureeS": 24
+        "nom": "Réserver le projet et ses métadonnées",
+        "dureeS": 6
       },
       {
-        "nom": "Construire l’image",
-        "dureeS": 214
+        "nom": "Rattacher le cluster Kubernetes",
+        "dureeS": 14
       },
       {
-        "nom": "Analyser l’image — dépendances et secrets",
-        "dureeS": 86
+        "nom": "Provisionner le load balancer L7 dédié",
+        "dureeS": 34
       },
       {
-        "nom": "Provisionner l’environnement",
-        "dureeS": 112
-      },
-      {
-        "nom": "Déployer et attendre les sondes",
-        "dureeS": 74
-      },
-      {
-        "nom": "Router le domaine et émettre le certificat",
-        "dureeS": 58
+        "nom": "Émettre le certificat et publier la zone applicative",
+        "dureeS": 28
       }
     ]
   },

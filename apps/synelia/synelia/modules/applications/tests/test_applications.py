@@ -105,6 +105,7 @@ async def test_environnements_et_composants(client):
             "version": "1.27",
             "ressources": {"cpu": 2, "ramMo": 2048, "diskGo": 20},
             "ports": [{"interne": 80, "type": "ClusterIP"}],
+            "envVars": [{"cle": "PORT", "valeur": "8080", "secret": False, "scope": "runtime"}],
         },
     )
     assert r.status_code == 202, r.text
@@ -114,6 +115,11 @@ async def test_environnements_et_composants(client):
     composants = r.json()
     assert len(composants) == 1 and composants[0]["statut"] == "deployed"
     comp_id = composants[0]["id"]
+    # Régression : `envVars` fourni à la création ne doit pas être jeté au sol
+    # (creer_composant forçait `envVars=[]` sans lire `corps.envVars`).
+    assert composants[0]["envVars"] == [
+        {"cle": "PORT", "valeur": "8080", "secret": False, "scope": "runtime"}
+    ]
 
     r = await client.get(f"/v1/composants/{comp_id}")
     assert r.status_code == 200 and r.json()["image"] == "nginx:alpine"

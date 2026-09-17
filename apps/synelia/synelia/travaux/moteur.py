@@ -21,6 +21,7 @@ Un module enregistre son exécuteur par type :
 from __future__ import annotations
 
 import asyncio
+import copy
 import os
 from collections.abc import Callable
 from typing import Any
@@ -34,11 +35,33 @@ from synelia_kernel.dates import maintenant
 from synelia_kernel.ids import nouvel_id
 from synelia_kernel.journal import journal
 
+from synelia import otel
 from synelia.deps.contexte import Contexte
 
 log = journal("travaux")
 
+
+def _enregistrer_metriques(travail: Travail) -> None:
+    """Émission temps réel (OTel) en plus de la ligne `travaux` en base — no-op tant que
+    `SYNELIA_OTEL_ENDPOINT` n'est pas configuré (cf. `synelia.otel`)."""
+    otel.compteur_travaux.add(1, {"type": travail.type, "statut": travail.statut})
+    if travail.duree_s is not None:
+        otel.histogramme_duree_travaux.record(travail.duree_s, {"type": travail.type})
+
+
 _EXECUTEURS: dict[str, type[Executeur]] = {}
+
+
+class PauseHumaine(Exception):
+    """Une étape lève ceci pour mettre le travail en pause — pas un échec, une attente réelle
+    d'une décision humaine (validation d'un flux d'orchestration, par exemple). `_executer` la
+    traite à part : le travail reste `running`, la tâche courante ne passe ni `ok` ni `failed`,
+    et rien n'avance tant que `reprendre_apres_pause` n'est pas appelé."""
+
+    def __init__(self, message: str, donnees: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.message = message
+        self.donnees = donnees or {}
 
 
 class Executeur:
@@ -112,6 +135,14 @@ def _en_ligne() -> bool:
     return bool(os.environ.get("VERCEL")) or reglages().env == "test"
 
 
+def _mode_worker() -> bool:
+    """Vrai quand ce processus API délègue l'exécution des travaux à `synelia worker`
+    (`travaux/local.py`) plutôt que de les exécuter lui-même (`create_task`) — dev01 seulement,
+    voir `docker-compose.dev01.yml`. Lu à l'appel (pas mis en cache) pour que les tests puissent
+    le basculer par `monkeypatch.setenv`, comme `_en_ligne()`."""
+    return os.environ.get("SYNELIA_TRAVAUX_WORKER", "").lower() in {"1", "true", "oui"}
+
+
 async def demarrer_travail(
     ctx: Contexte,
     type_travail: str,
@@ -152,6 +183,28 @@ async def demarrer_travail(
 
     if _en_ligne():
         await _executer(ctx, travail, depuis=0)
+    elif _mode_worker():
+        # `synelia worker` (travaux/local.py) rejoue ce travail hors requête HTTP : il a besoin
+        # du même acteur que `create_task` aujourd'hui pour que les lignes d'audit écrites par
+        # les exécuteurs portent l'e-mail de l'utilisateur, pas un principal générique
+        # « worker ». Aucun secret dans ce qui est sérialisé (pas de jeton, pas de mot de
+        # passe). `vers_contrat` n'expose pas `contexte` — le principal reste interne.
+        p = ctx.principal
+        if p is not None:
+            travail.contexte = {
+                **travail.contexte,
+                "principal": {
+                    "utilisateur_id": p.utilisateur_id,
+                    "email": p.email,
+                    "nom": p.nom,
+                    "org_id": p.org_id,
+                    "role": p.role,
+                    "equipe": p.equipe,
+                    "role_equipe": p.role_equipe,
+                },
+            }
+        travail.statut = "queued"
+        await ctx.session.commit()
     else:
         await ctx.session.commit()
         asyncio.get_running_loop().create_task(_executer_detache(travail.id, ctx))
@@ -182,16 +235,35 @@ async def _executer(ctx: Contexte, travail: Travail, depuis: int) -> None:
     debut = maintenant()
     for i in range(depuis, len(taches)):
         taches[i]["statut"] = "running"
-        travail.taches = list(taches)
-        await ctx.session.flush()
+        travail.taches = copy.deepcopy(taches)
+        # `commit`, pas `flush` : ce travail tourne dans sa propre transaction/session
+        # (`_executer_detache`) qui ne se termine qu'à la toute fin de `_executer` — sans
+        # commit intermédiaire, un `GET /travaux/{id}` sur une autre connexion (tout appelant
+        # HTTP normal) ne voit RIEN bouger tant que le travail entier n'est pas fini : un
+        # redimensionnement ou une création de cluster de plusieurs minutes affiche « queued »
+        # figé de bout en bout, sans la progression étape par étape pourtant promise par
+        # l'écran (constaté en direct via `vm.resize`). `expire_on_commit=False` sur la
+        # session (`synelia_db.session.fabrique`) rend ce commit sûr : les attributs déjà
+        # chargés sur `travail`/`ctx` restent lisibles ensuite sans requête implicite.
+        await ctx.session.commit()
         try:
             message = await ex.etape(ctx, travail, i, taches[i]["nom"])
         except asyncio.CancelledError:
             taches[i]["statut"] = "failed"
-            travail.taches = list(taches)
+            travail.taches = copy.deepcopy(taches)
             travail.statut = "rolled_back"
             await ctx.session.flush()
+            _enregistrer_metriques(travail)
             raise
+        except PauseHumaine as pause:
+            # Ni un succès ni un échec : le travail reste `running`, la tâche courante affiche
+            # le message d'attente, et `attente` (interne, absent du contrat `TravailProvisioning`)
+            # porte de quoi reprendre exactement là où l'exécution s'est arrêtée.
+            taches[i]["message"] = pause.message
+            travail.taches = copy.deepcopy(taches)
+            travail.contexte = {**travail.contexte, "attente": {"etapeIndex": i, **pause.donnees}}
+            await ctx.session.flush()
+            return
         except Exception as exc:  # noqa: BLE001
             message = (
                 exc.message if isinstance(exc, erreurs.AppError) else str(exc) or type(exc).__name__
@@ -205,7 +277,7 @@ async def _executer(ctx: Contexte, travail: Travail, depuis: int) -> None:
             )
             taches[i]["statut"] = "failed"
             taches[i]["message"] = message
-            travail.taches = list(taches)
+            travail.taches = copy.deepcopy(taches)
             travail.statut = "failed"
             travail.erreur = {
                 "message": f"Étape {i + 1} « {taches[i]['nom']} » : {message}",
@@ -221,21 +293,40 @@ async def _executer(ctx: Contexte, travail: Travail, depuis: int) -> None:
             travail.termine_le = maintenant()
             travail.duree_s = int((travail.termine_le - debut).total_seconds())
             await ctx.session.flush()
+            _enregistrer_metriques(travail)
             return
         taches[i]["statut"] = "ok"
         if message:
             taches[i]["message"] = message
-        travail.taches = list(taches)
-        await ctx.session.flush()
+        travail.taches = copy.deepcopy(taches)
+        await ctx.session.commit()  # même motif que ci-dessus : rend l'étape « ok » visible tout de suite.
     try:
         await ex.terminer(ctx, travail)
     except Exception as exc:  # noqa: BLE001
-        log.error("travail.terminaison_echouee", travail=travail.id, erreur=str(exc))
+        # Toutes les étapes affichées (progression UI à durée fixe) ont réussi, mais
+        # `terminer()` est l'endroit où l'effet réel a lieu (ex. appliquer un déploiement K8s,
+        # supprimer un namespace) : une erreur ici ne doit jamais être avalée en un simple log
+        # pendant que le travail se déclare quand même « done » — l'appelant croirait l'opération
+        # effectuée alors qu'elle a échoué. Même traitement que l'échec d'une étape.
+        message = exc.message if isinstance(exc, erreurs.AppError) else str(exc) or type(exc).__name__
+        log.error("travail.terminaison_echouee", travail=travail.id, erreur=message)
+        travail.statut = "failed"
+        travail.erreur = {
+            "message": f"Finalisation « {travail.label} » : {message}",
+            "correlationId": ctx.correlation_id,
+            "suggestion": "Corrigez la cause puis relancez.",
+        }
+        travail.termine_le = maintenant()
+        travail.duree_s = int((travail.termine_le - travail.started_at).total_seconds())
+        await ctx.session.flush()
+        _enregistrer_metriques(travail)
+        return
     travail.statut = "done"
     travail.erreur = None
     travail.termine_le = maintenant()
     travail.duree_s = int((travail.termine_le - travail.started_at).total_seconds())
     await ctx.session.flush()
+    _enregistrer_metriques(travail)
 
 
 async def relancer(ctx: Contexte, travail: Travail) -> Travail:
@@ -248,7 +339,7 @@ async def relancer(ctx: Contexte, travail: Travail) -> Travail:
     for t in taches[depuis:]:
         t["statut"] = "pending"
         t.pop("message", None)
-    travail.taches = taches
+    travail.taches = copy.deepcopy(taches)
     travail.erreur = None
     travail.statut = "queued"
     await ctx.session.flush()
@@ -259,21 +350,54 @@ async def relancer(ctx: Contexte, travail: Travail) -> Travail:
         return travail
     if _en_ligne():
         await _executer(ctx, travail, depuis=depuis)
+    elif _mode_worker():
+        travail.statut = "queued"
+        await ctx.session.commit()
     else:
         await ctx.session.commit()
         asyncio.get_running_loop().create_task(_executer_detache(travail.id, ctx))
     return travail
 
 
-async def annuler(ctx: Contexte, travail: Travail) -> Travail:
+async def reprendre_apres_pause(ctx: Contexte, travail: Travail, depuis: int) -> Travail:
+    """Ré-entre dans l'étape `depuis` après une `PauseHumaine` — contrairement à `relancer`, le
+    travail n'est pas en échec : il est resté `running`. L'appelant (le domaine, pas le moteur)
+    a déjà écrit la décision quelque part que l'étape saura relire pour ne pas se repauser."""
+    if reglages().temporal_adresse:
+        from synelia.travaux import temporal
+
+        await temporal.relancer(travail)
+        return travail
+    if _en_ligne():
+        await _executer(ctx, travail, depuis=depuis)
+    elif _mode_worker():
+        # La présence de `attente` dans `contexte` signifie « en pause » pour le worker (1.4) ;
+        # elle doit disparaître dès que l'humain a tranché. Réassignation d'un nouveau dict :
+        # `contexte` est une colonne JSON, une mutation en place n'est pas détectée par
+        # SQLAlchemy. La tâche courante reste `running` — le worker recalcule le point de
+        # reprise (`executer_un`, règle 1.4).
+        travail.contexte = {k: v for k, v in travail.contexte.items() if k != "attente"}
+        travail.statut = "queued"
+        await ctx.session.commit()
+    else:
+        await ctx.session.commit()
+        asyncio.get_running_loop().create_task(_executer_detache(travail.id, ctx))
+    return travail
+
+
+async def annuler(ctx: Contexte, travail: Travail, *, motif: str | None = None) -> Travail:
+    """`motif` : raison métier précise à afficher (ex. suppression de la ressource référencée
+    pendant que ce travail était en cours/en pause) — par défaut le message générique
+    d'annulation utilisateur, inchangé pour l'appel existant (`POST /travaux/{id}/annulation`)."""
     if travail.statut in {"done", "rolled_back"}:
         raise erreurs.conflit("Ce travail est déjà terminé.", code="travail_termine")
+    message_tache = motif or "Annulé à la demande de l'utilisateur."
     taches = [dict(t) for t in travail.taches]
     for t in taches:
         if t["statut"] in {"pending", "running"}:
             t["statut"] = "failed"
-            t["message"] = "Annulé à la demande de l'utilisateur."
-    travail.taches = taches
+            t["message"] = message_tache
+    travail.taches = copy.deepcopy(taches)
     ex = executeur_pour(travail.type)
     if ex.compensable:
         idx = next((i for i, t in enumerate(taches) if t["statut"] == "failed"), len(taches) - 1)
@@ -283,10 +407,11 @@ async def annuler(ctx: Contexte, travail: Travail) -> Travail:
             log.error("travail.compensation_echouee", travail=travail.id, erreur=str(exc))
     travail.statut = "rolled_back"
     travail.erreur = {
-        "message": "Travail annulé.",
+        "message": motif or "Travail annulé.",
         "correlationId": ctx.correlation_id,
         "suggestion": "Relancez l'opération depuis l'écran d'origine si nécessaire.",
     }
     travail.termine_le = maintenant()
     await ctx.session.flush()
+    _enregistrer_metriques(travail)
     return travail

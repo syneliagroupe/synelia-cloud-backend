@@ -8,7 +8,7 @@ from fastapi import APIRouter, Response, status
 from sqlalchemy import select
 from synelia_contract import modeles as m
 from synelia_contract.rbac import permissions_effectives
-from synelia_db.modeles import SessionAuth, Utilisateur
+from synelia_db.modeles import Organisation, SessionAuth, Utilisateur
 from synelia_kernel import erreurs
 from synelia_kernel.chiffrement import chiffrer
 from synelia_kernel.dates import maintenant
@@ -41,7 +41,12 @@ async def obtenir_mon_compte(ctx: Ctx) -> Any:
     u = await _moi(ctx)
     apps = await auth.appartenances(ctx.session, u)
     role = ctx.role
-    perms = [a for a, p in permissions_effectives(role).items() if p != "none"]
+    p = ctx.principal
+    if p and p.est_admin_plateforme:
+        role = (
+            p.role_equipe or role
+        )  # l'équipe Synelia voit ses droits plateforme, pas ceux du rôle d'org
+    perms = [a for a, perm in permissions_effectives(role).items() if perm != "none"]
     return {
         "utilisateur": auth.utilisateur_contrat(u),
         "organisations": apps,
@@ -60,6 +65,7 @@ async def modifier_mon_compte(ctx: Ctx, corps: m.MoiPatchRequest) -> Any:
         u.fonction = corps.fonction
     if corps.telephone is not None:
         u.preferences = {**(u.preferences or {}), "telephone": corps.telephone}
+    await journaliser(ctx, action="compte.modification", cible_type="utilisateur", cible_id=u.id)
     return auth.utilisateur_contrat(u)
 
 
@@ -81,11 +87,24 @@ async def choisir_organisation_active(ctx: Ctx, corps: m.MoiOrganisationActivePu
         raise erreurs.validation(
             "Vous n'appartenez pas à cette organisation.", {"orgId": "inconnue"}
         )
+    if p.est_admin_plateforme and await ctx.session.get(Organisation, corps.orgId) is None:
+        # L'équipe Synelia n'est pas bornée à `roles_par_org` (elle peut ouvrir n'importe
+        # quelle organisation cliente), mais un identifiant inexistant filait quand même
+        # jusqu'à l'insertion de la session, où la RLS Postgres le refusait en 500 brut.
+        raise erreurs.validation("Organisation introuvable.", {"orgId": "inconnue"})
     if corps.memoriser:
         u.org_active_id = corps.orgId
-    return await auth.ouvrir_session(
+    rep = await auth.ouvrir_session(
         ctx.session, u, ip=ctx.ip, user_agent=ctx.entete("user-agent"), org_id=corps.orgId
     )
+    await journaliser(
+        ctx,
+        action="compte.organisation_active_changee",
+        cible_type="organisation",
+        cible_id=corps.orgId,
+        org_id=corps.orgId,
+    )
+    return rep
 
 
 @router.get("/preferences", response_model=m.Preferences, response_model_exclude_none=True)

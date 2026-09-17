@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 from datetime import timedelta
 from typing import Any
 
@@ -14,6 +16,13 @@ from synelia_openstack.backup import BackupOpenStack, BackupSimule
 
 from synelia.depot import Depot
 from synelia.deps.contexte import Contexte
+from synelia.modules.stockage.service import (
+    amont_cinder,
+    depot_volume,
+    identifiants_espace,
+    volume_id_reel,
+)
+from synelia.modules.vms.service import depot as depot_vms
 from synelia.travaux import Executeur, executeur
 
 depot = Depot(
@@ -78,6 +87,16 @@ def _nouveau_point(ctx: Contexte, plan: m.PlanSauvegarde) -> m.PointRestauration
     )
 
 
+async def _volumes_du_scope(ctx: Contexte, plan: m.PlanSauvegarde) -> list[m.Volume]:
+    """Volumes réels attachés à la ressource visée, si `scope.valeur` désigne une VM connue.
+    Sinon `[]` : le scope couvre autre chose qu'une VM (tag, espace, service), pas encore
+    câblé sur du stockage bloc réel."""
+    vm = await depot_vms.trouver(ctx, plan.scope.valeur)
+    if vm is None:
+        return []
+    return [v for v in await depot_volume.tous(ctx) if v.attachedTo == vm.id]
+
+
 @executeur("backup.run")
 class ExecuteurSauvegarde(Executeur):
     async def etape(self, ctx: Contexte, travail: Travail, index: int, nom: str) -> str | None:
@@ -85,28 +104,129 @@ class ExecuteurSauvegarde(Executeur):
         if index == 0:
             return f"Plan « {plan.nom} » validé, {plan.ressourcesProtegees} ressources couvertes."
         if index == 1:
-            a = amont().executer_plan(plan.nom, plan.ressourcesProtegees)
-            travail.contexte = {**dict(travail.contexte), "taille_go": a["taille_go"]}
-            return f"Snapshot créé ({a['taille_go']} Go)."
+            volumes = await _volumes_du_scope(ctx, plan)
+            if not volumes:
+                a = await asyncio.to_thread(amont().executer_plan, plan.nom, plan.ressourcesProtegees)
+                travail.contexte = {**dict(travail.contexte), "taille_go": a["taille_go"]}
+                return f"Snapshot créé ({a['taille_go']} Go)."
+            snapshot_ids: list[str] = []
+            volume_ids: list[str] = []
+            taille_go = 0.0
+            for vol in volumes:
+                vid = await volume_id_reel(ctx, vol.id)
+                identifiants = await identifiants_espace(ctx, vol.espaceId)
+                # `amont_cinder()` (Cinder, openstacksdk synchrone) est déchargé via
+                # `asyncio.to_thread` : même garde que `vms.service`, sans quoi un appel amont
+                # lent gèlerait la boucle asyncio — donc l'API entière, tous tenants confondus.
+                snap = await asyncio.to_thread(
+                    amont_cinder().creer_snapshot,
+                    vid,
+                    f"backup-{plan.nom}-{nouvel_id()[:8]}",
+                    identifiants=identifiants,
+                )
+                snapshot_ids.append(snap["id"])
+                volume_ids.append(vol.id)
+                taille_go += vol.tailleGo or 10
+            travail.contexte = {
+                **dict(travail.contexte),
+                "taille_go": round(taille_go, 1),
+                "snapshot_ids": snapshot_ids,
+                "volume_ids": volume_ids,
+            }
+            return f"{len(snapshot_ids)} snapshot(s) réel(s) créé(s) ({round(taille_go, 1)} Go)."
         return None
 
     async def terminer(self, ctx: Contexte, travail: Travail) -> None:
         plan = await depot.obtenir(ctx, travail.cible_id or "")
         point = _nouveau_point(ctx, plan)
+        if travail.contexte.get("taille_go"):
+            point.tailleGo = float(travail.contexte["taille_go"])
         await points.creer(ctx, point)
+        if travail.contexte.get("snapshot_ids"):
+            # `definir_secrets` chiffre des chaînes (`chiffrer(clair: str)`) : les identifiants
+            # sont une liste, donc sérialisés en JSON avant chiffrement, désérialisés à la lecture
+            # (`supprimer_snapshots_reels`, `ExecuteurVerification`, `ExecuteurRestauration`).
+            await points.definir_secrets(
+                ctx,
+                point.id,
+                {
+                    "snapshot_ids": json.dumps(travail.contexte["snapshot_ids"]),
+                    "volume_ids": json.dumps(travail.contexte.get("volume_ids", [])),
+                },
+            )
         await depot.modifier(ctx, plan.id, {"dernierResultat": "ok"})
+
+
+async def supprimer_snapshots_reels(ctx: Contexte, point_id: str) -> None:
+    """Purge les snapshots Cinder réels d'un point de restauration avant que sa ligne ne
+    disparaisse — sans quoi `DELETE /sauvegarde/points/{id}` ne fait qu'un soft-delete côté base
+    et laisse les instantanés réels orphelins sur le lab (fuite de stockage silencieuse, jamais
+    facturée ni nettoyée). Best-effort : un volume déjà supprimé ou un snapshot déjà absent ne
+    doit pas empêcher la suppression du point côté application."""
+    secrets = await points.secrets(ctx, point_id)
+    snapshot_ids = json.loads(secrets.get("snapshot_ids") or "[]")
+    volume_ids = json.loads(secrets.get("volume_ids") or "[]")
+    if not snapshot_ids or not volume_ids:
+        return
+    try:
+        vol = await depot_volume.obtenir(ctx, volume_ids[0])
+    except Exception:  # noqa: BLE001
+        return
+    identifiants = await identifiants_espace(ctx, vol.espaceId)
+    for sid in snapshot_ids:
+        try:
+            await asyncio.to_thread(amont_cinder().supprimer_snapshot, sid, identifiants=identifiants)
+        except Exception:  # noqa: BLE001
+            continue
 
 
 @executeur("backup.verify")
 class ExecuteurVerification(Executeur):
     async def terminer(self, ctx: Contexte, travail: Travail) -> None:
-        await points.modifier(ctx, travail.cible_id or "", {"verifie": True})
+        point_id = travail.cible_id or ""
+        secrets = await points.secrets(ctx, point_id)
+        snapshot_ids = json.loads(secrets.get("snapshot_ids") or "[]")
+        volume_ids = json.loads(secrets.get("volume_ids") or "[]")
+        verifie = True
+        if snapshot_ids and volume_ids:
+            vol = await depot_volume.obtenir(ctx, volume_ids[0])
+            identifiants = await identifiants_espace(ctx, vol.espaceId)
+            statuts = [
+                await asyncio.to_thread(
+                    amont_cinder().statut_snapshot, sid, identifiants=identifiants
+                )
+                for sid in snapshot_ids
+            ]
+            verifie = all(s == "available" for s in statuts)
+        await points.modifier(ctx, point_id, {"verifie": verifie})
 
 
 @executeur("backup.restore")
 class ExecuteurRestauration(Executeur):
     async def terminer(self, ctx: Contexte, travail: Travail) -> None:
         restauration_id = travail.cible_id or ""
+        restauration = await restaurations.obtenir(ctx, restauration_id)
+        point = await points.obtenir(ctx, restauration.pointId)
+        secrets = await points.secrets(ctx, point.id)
+        snapshot_ids = json.loads(secrets.get("snapshot_ids") or "[]")
+        volume_ids = json.loads(secrets.get("volume_ids") or "[]")
+        if snapshot_ids and volume_ids:
+            vol = await depot_volume.obtenir(ctx, volume_ids[0])
+            identifiants = await identifiants_espace(ctx, vol.espaceId)
+            restaures = [
+                await asyncio.to_thread(
+                    amont_cinder().restaurer_snapshot,
+                    sid,
+                    f"restore-{point.id[:8]}",
+                    identifiants=identifiants,
+                )
+                for sid in snapshot_ids
+            ]
+            await restaurations.definir_secrets(
+                ctx,
+                restauration_id,
+                {"volumes_restaures": json.dumps([r["id"] for r in restaures])},
+            )
         await restaurations.definir_statut(ctx, restauration_id, "done")
 
 

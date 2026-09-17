@@ -19,6 +19,13 @@ async def test_copilote(client):
     assert "vm" in corps["reponse"].lower() or "machine" in corps["reponse"].lower()
 
 
+async def test_copilote_accents(client):
+    # « dépense » (accentué) doit matcher le même mot-clé que « depense ».
+    r = await client.post("/v1/copilote", json={"question": "Combien je dépense ce mois ?"})
+    assert r.status_code == 200, r.text
+    assert "FCFA" in r.json()["reponse"]
+
+
 async def test_copilote_suggestions(client):
     r = await client.get("/v1/copilote/suggestions")
     assert r.status_code == 200

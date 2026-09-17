@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from fastapi import APIRouter, Depends, status
@@ -143,6 +144,16 @@ async def modifier_quota_espace(
     u = await service.usage(ctx, espaceId)
     if u["vcpu"] > corps.vcpu or u["ramGo"] > corps.ramGo or u["stockageTo"] > corps.stockageTo:
         raise erreurs.quota_depasse("L'usage actuel dépasse le nouveau quota.", detail=str(u))
+    secrets = await depot.secrets(ctx, espaceId)
+    projet_id = secrets.get("projet_id")
+    if projet_id:
+        # Sans cet appel, le quota n'est modifié que côté application : Nova/Cinder gardent
+        # l'ancienne limite (constaté en direct — `openstack quota show` inchangé après un
+        # PUT réussi), ce qui laisse le client croire à une augmentation qui n'existe pas
+        # réellement côté amont.
+        await asyncio.to_thread(
+            service.amont().poser_quotas, projet_id, corps.vcpu, corps.ramGo, corps.stockageTo
+        )
     await depot.modifier(ctx, espaceId, {"quota": corps.model_dump()})
     await journaliser(
         ctx,

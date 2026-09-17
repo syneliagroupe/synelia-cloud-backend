@@ -12,7 +12,7 @@ from synelia_kernel.dates import maintenant
 from synelia_kernel.ids import nouvel_id
 
 from synelia.audit import journaliser
-from synelia.deps import Contexte, Page, exige
+from synelia.deps import Contexte, Page, exige, exiger_confirmation
 from synelia.modules.web_drive import service
 from synelia.modules.web_drive.service import depot, depot_siege
 from synelia.travaux import demarrer_travail
@@ -28,7 +28,7 @@ def _nouveau(domaine: str, palier: str, sieges: int | None) -> m.Drive:
         actif=False,
         palier=palier,
         solutionOSS="nextcloud",
-        hote="cloud.synelia.cloud",
+        hote=f"drive.{domaine}",
         sieges=m.Sieges(attribues=0, souscrits=sieges or p["sieges"]),
         quota=m.Quota1(utiliseGo=0.0, totalGo=100.0),
         partage=m.Partage(
@@ -84,6 +84,47 @@ async def activer_drive(
         cible_type="web_drive",
         cible_id=drive.id,
         entree=corps.model_dump(mode="json"),
+        # Libellés alignés sur `ExecuteurDriveActivate.etape` (indices 0 et 1) depuis le
+        # rework « pas de VM dédiée » : l'ancien libellé « Créer le serveur Nextcloud
+        # (OpenStack) » décrivait encore l'ancienne architecture (une VM par Drive) alors que
+        # l'exécuteur installe désormais Nextcloud par SSH sur le VPS déjà en service.
+        etapes=[
+            {"nom": "Installer Nextcloud sur le VPS de l'hébergement (SSH)", "dureeS": 40},
+            {"nom": "Router le domaine sur le load balancer partagé (Octavia)", "dureeS": 10},
+        ],
+    )
+
+
+@router.delete(
+    "/{driveId}",
+    response_model=m.TravailProvisioning,
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model_exclude_none=True,
+)
+async def desactiver_drive(
+    driveId: str,  # noqa: N803
+    confirmation: str | None = None,
+    ctx: Contexte = Depends(exige("service.admin")),
+) -> Any:
+    drive = await depot.obtenir(ctx, driveId)
+    exiger_confirmation(drive.domaine, confirmation)
+    await journaliser(
+        ctx,
+        action="web.drive.desactivation",
+        cible_type="web_drive",
+        cible_id=driveId,
+        cible=drive.domaine,
+    )
+    return await demarrer_travail(
+        ctx,
+        "web.drive.desactiver",
+        drive.domaine,
+        cible_type="web_drive",
+        cible_id=driveId,
+        etapes=[
+            {"nom": "Supprimer le serveur Nextcloud", "dureeS": 8},
+            {"nom": "Retirer la route du load balancer", "dureeS": 6},
+        ],
     )
 
 
@@ -121,7 +162,9 @@ async def modifier_drive(
 )
 async def ouvrir_drive(driveId: str, ctx: Contexte = Depends(exige("service.open"))) -> Any:  # noqa: N803
     drive = await depot.obtenir(ctx, driveId)
-    url = service.amont().ouvrir(utilisateur=ctx.principal.email if ctx.principal else None)
+    # Pas de SSO applicatif (hors périmètre) : on ouvre directement l'instance Nextcloud
+    # réelle de ce domaine, routée par le load balancer partagé sur son `Host()` dédié.
+    url = f"https://{drive.hote}/"
     await journaliser(
         ctx,
         action="web.drive.ouverture",
@@ -165,7 +208,8 @@ async def attribuer_siege_drive(
         quotaUtilise=0.0,
         quotaTotal=corps.quotaTotal,
     )
-    service.amont().attribuer_siege(corps.userId, corps.quotaTotal)
+    # Pas de provisioning applicatif du compte Nextcloud (hors périmètre) : le siège n'est
+    # ici qu'un droit d'accès facturé, pas encore un compte réellement créé côté Nextcloud.
     await depot_siege.creer(ctx, siege, parent_id=driveId)
     await depot.modifier(
         ctx,

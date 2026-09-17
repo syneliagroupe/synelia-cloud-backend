@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
 from collections.abc import AsyncIterator
 from typing import Any
@@ -14,7 +15,7 @@ ADMIN_EMAIL = "admin@synelia.cloud"
 ADMIN_MDP = "Synelia!2026"
 
 
-def configurer_env() -> None:
+def configurer_env() -> str:
     d = tempfile.mkdtemp(prefix="synelia-test-")
     os.environ["SYNELIA_ENV"] = "test"
     os.environ["SYNELIA_DATABASE_URL"] = f"sqlite+aiosqlite:///{d}/test.sqlite3"
@@ -22,6 +23,7 @@ def configurer_env() -> None:
     os.environ["SYNELIA_SEED_ADMIN_MOT_DE_PASSE"] = ADMIN_MDP
     os.environ["SYNELIA_TRAVAUX_EN_LIGNE"] = "1"
     os.environ.setdefault("SYNELIA_SEED_DEMO", "true")
+    return d
 
 
 class ClientApi(httpx.AsyncClient):
@@ -53,7 +55,7 @@ def anyio_backend() -> str:
 @pytest.fixture
 async def client() -> AsyncIterator[ClientApi]:
     """Application neuve (base SQLite éphémère), admin connecté."""
-    configurer_env()
+    d = configurer_env()
     from synelia_kernel import config
 
     config.reglages.cache_clear()
@@ -64,10 +66,13 @@ async def client() -> AsyncIterator[ClientApi]:
     await db.fermer()
     from synelia.app import creer_app
 
-    app = creer_app()
-    async with app.router.lifespan_context(app):
-        transport = httpx.ASGITransport(app=app)
-        async with ClientApi(transport=transport, base_url="http://test") as c:
-            await c.connecter()
-            yield c
-    await db.fermer()
+    try:
+        app = creer_app()
+        async with app.router.lifespan_context(app):
+            transport = httpx.ASGITransport(app=app)
+            async with ClientApi(transport=transport, base_url="http://test") as c:
+                await c.connecter()
+                yield c
+        await db.fermer()
+    finally:
+        shutil.rmtree(d, ignore_errors=True)

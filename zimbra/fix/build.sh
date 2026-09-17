@@ -1,0 +1,539 @@
+#<one line to give the program's name and a brief idea of what it does.>
+#    Copyright (C) 2021 iWayVietnam
+#
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+#!/bin/sh
+
+## BEGIN. Check if Zimbra already installed?
+if [ -e /opt/zimbra-install/install-autoKeys ]
+then ## Zimbra NOT installed yet.
+
+cp /etc/rsyslog.conf /etc/rsyslog.conf.bak
+sed -i 's|SysSock.Use="off")|SysSock.Use="on")|g' /etc/rsyslog.conf
+sed -i 's|module(load="imjournal"|#module(load="imjournal"|g' /etc/rsyslog.conf
+sed -i 's|StateFile="imjournal.state"|#StateFile="imjournal.state"|g' /etc/rsyslog.conf
+sed -i 's|*.info;mail.none;authpriv.none;cron.none|*.info;local0.none;local1.none;mail.none;auth.none;authpriv.none;cron.none|g' /etc/rsyslog.conf
+echo -e "\nlocal0.*                -/var/log/zimbra.log\nlocal1.*                -/var/log/zimbra-stats.log\nauth.*                  -/var/log/zimbra.log\nmail.*                -/var/log/zimbra.log" >> /etc/rsyslog.conf
+rsyslogd
+
+## Preparing all the variables like IP, Hostname, etc, all of them from the container
+HOSTNAME=$(hostname -a)
+DOMAIN=$(hostname -d)
+CONTAINERIP=$(ip addr | grep 'state UP' -A2 | tail -n1 | awk '{print $2}' | cut -f1  -d'/')
+RANDOMHAM=$(date +%s|sha256sum|base64|head -c 10)
+RANDOMSPAM=$(date +%s|sha256sum|base64|head -c 10)
+RANDOMVIRUS=$(date +%s|sha256sum|base64|head -c 10)
+
+# Add Zimbra 9 RPM repo
+cat > /etc/yum.repos.d/zimbra.repo <<EOF
+[zimbra-90-oss]
+name=Zimbra New RPM Repository
+baseurl=https://repo.zimbra.com/rpm/90/rhel8
+gpgcheck=1
+enabled=1
+EOF
+rpm --import https://files.zimbra.com/downloads/security/public.key 2>&1
+
+##Install the Zimbra Collaboration ##
+#echo "Downloading Zimbra 9 built by Zextras"
+#wget -O zcs-9.0.0_OSE_RHEL8_latest-zextras.tgz https://download.zextras.com/zcs-9.0.0_OSE_RHEL8_latest-zextras.tgz
+
+echo "Extracting files from the archive"
+tar xzvf /opt/zimbra-install/zcs-9.0.0_OSE_RHEL8_latest-zextras.tgz -C /opt/zimbra-install/
+
+echo "Installing Zimbra Collaboration just the Software"
+cd /opt/zimbra-install/zimbra-installer
+
+if [ $INSTALLED-SERVICES = "LDAP" ]
+then
+  ./install.sh -s --platform-override < /opt/zimbra-install/install-autoKeys-ldap
+  if [ $LDAPHOST = "" ]
+  then #the first LDAP server
+    cat <<EOF >/opt/zimbra-install/installParameters
+CREATEADMIN="admin@$DOMAIN"
+CREATEADMINPASS="$PASSWORD"
+CREATEDOMAIN="$DOMAIN"
+DOCREATEADMIN="yes"
+DOCREATEDOMAIN="yes"
+EXPANDMENU="no"
+HOSTNAME="$HOSTNAME.$DOMAIN"
+JAVAHOME="/opt/zimbra/common/lib/jvm/java"
+LDAPAMAVISPASS="$PASSWORD"
+LDAPPOSTPASS="$PASSWORD"
+LDAPROOTPASS="$PASSWORD"
+LDAPADMINPASS="$PASSWORD"
+LDAPREPPASS="$PASSWORD"
+LDAPBESSEARCHSET="set"
+LDAPDEFAULTSLOADED="1"
+LDAPHOST="$HOSTNAME.$DOMAIN"
+LDAPPORT="389"
+LDAPREPLICATIONTYPE="master"
+LDAPSERVERID="1"
+REMOVE="no"
+STARTSERVERS="yes"
+SYSTEMMEMORY="3.8"
+UPGRADE="yes"
+VERSIONUPDATECHECKS="FALSE"
+ZIMBRA_REQ_SECURITY="yes"
+ldap_bes_searcher_password="$PASSWORD"
+ldap_dit_base_dn_config="cn=zimbra"
+ldap_nginx_password="$PASSWORD"
+ldap_url="ldap://$HOSTNAME.$DOMAIN:389"
+ssl_default_digest="sha256"
+zimbraDefaultDomainName="$DOMAIN"
+zimbraIPMode="ipv4"
+zimbraPrefTimeZoneId="Asia/Ho_Chi_Minh"
+zimbraVersionCheckNotificationEmail="admin@$DOMAIN"
+zimbraVersionCheckNotificationEmailFrom="admin@$DOMAIN"
+zimbraVersionCheckSendNotifications="FALSE"
+zimbra_ldap_userdn="uid=zimbra,cn=admins,cn=zimbra"
+zimbra_require_interprocess_security="1"
+zimbra_server_hostname="$HOSTNAME.$DOMAIN"
+INSTALL_PACKAGES="zimbra-core zimbra-ldap"
+EOF
+  else #the additional LDAP servers
+    cat <<EOF >/opt/zimbra-install/installParameters
+EXPANDMENU="no"
+HOSTNAME="$HOSTNAME.$DOMAIN"
+JAVAHOME="/opt/zimbra/common/lib/jvm/java"
+LDAPAMAVISPASS="$PASSWORD"
+LDAPPOSTPASS="$PASSWORD"
+LDAPROOTPASS="$PASSWORD"
+LDAPADMINPASS="$PASSWORD"
+LDAPREPPASS="$PASSWORD"
+LDAPBESSEARCHSET="set"
+LDAPDEFAULTSLOADED="1"
+LDAPHOST="$LDAPHOST"
+LDAPPORT="389"
+LDAPREPLICATIONTYPE="master"
+REMOVE="no"
+STARTSERVERS="yes"
+SYSTEMMEMORY="3.8"
+UPGRADE="yes"
+VERSIONUPDATECHECKS="FALSE"
+ZIMBRA_REQ_SECURITY="yes"
+ldap_bes_searcher_password="$PASSWORD"
+ldap_dit_base_dn_config="cn=zimbra"
+ldap_nginx_password="$PASSWORD"
+ldap_master_url="ldap://$LDAPHOST:389"
+ldap_url="ldap://LDAPHOST:389"
+ssl_default_digest="sha256"
+zimbraDefaultDomainName="$DOMAIN"
+zimbraIPMode="ipv4"
+zimbraPrefTimeZoneId="Asia/Ho_Chi_Minh"
+zimbraVersionCheckNotificationEmail="admin@$DOMAIN"
+zimbraVersionCheckNotificationEmailFrom="admin@$DOMAIN"
+zimbraVersionCheckSendNotifications="FALSE"
+zimbra_ldap_userdn="uid=zimbra,cn=admins,cn=zimbra"
+zimbra_require_interprocess_security="1"
+zimbra_server_hostname="$HOSTNAME.$DOMAIN"
+INSTALL_PACKAGES="zimbra-core zimbra-ldap"
+EOF
+  fi
+
+elif [ $INSTALLED-SERVICES = "MTA" ]
+then
+  ./install.sh -s --platform-override < /opt/zimbra-install/install-autoKeys-mta
+  cat <<EOF >/opt/zimbra-install/installParameters
+AVDOMAIN="$DOMAIN"
+AVUSER="admin@$DOMAIN"
+DOTRAINSA="yes"
+EXPANDMENU="no"
+HOSTNAME="$HOSTNAME.$DOMAIN"
+JAVAHOME="/opt/zimbra/common/lib/jvm/java"
+LDAPAMAVISPASS="$PASSWORD"
+LDAPPOSTPASS="$PASSWORD"
+LDAPROOTPASS="$PASSWORD"
+LDAPADMINPASS="$PASSWORD"
+LDAPREPPASS="$PASSWORD"
+LDAPBESSEARCHSET="set"
+LDAPDEFAULTSLOADED="1"
+LDAPHOST="$LDAPHOST"
+LDAPPORT="389"
+LDAPREPLICATIONTYPE="master"
+LDAPSERVERID="1"
+REMOVE="no"
+RUNAV="yes"
+RUNCBPOLICYD="no"
+RUNDKIM="yes"
+RUNSA="yes"
+RUNVMHA="no"
+SMTPDEST="admin@$DOMAIN"
+SMTPHOST="$HOSTNAME.$DOMAIN"
+SMTPNOTIFY="yes"
+SMTPSOURCE="admin@$DOMAIN"
+STARTSERVERS="yes"
+SYSTEMMEMORY="3.8"
+TRAINSAHAM="ham.$RANDOMHAM@$DOMAIN"
+TRAINSASPAM="spam.$RANDOMSPAM@$DOMAIN"
+UPGRADE="yes"
+VERSIONUPDATECHECKS="FALSE"
+VIRUSQUARANTINE="virus-quarantine.$RANDOMVIRUS@$DOMAIN"
+ZIMBRA_REQ_SECURITY="yes"
+ldap_bes_searcher_password="$PASSWORD"
+ldap_dit_base_dn_config="cn=zimbra"
+ldap_nginx_password="$PASSWORD"
+ldap_url="ldap://$LDAPHOST:389"
+postfix_mail_owner="postfix"
+postfix_setgid_group="postdrop"
+ssl_default_digest="sha256"
+av_notify_user="admin@$DOMAIN"
+zimbraDNSMasterIP="8.8.8.8"
+zimbraDNSTCPUpstream="no"
+zimbraDNSUseTCP="yes"
+zimbraDNSUseUDP="yes"
+zimbraDefaultDomainName="$DOMAIN"
+zimbraIPMode="ipv4"
+zimbraMtaMyNetworks="127.0.0.0/8 $CONTAINERIP/32 [::1]/128 [fe80::]/64"
+zimbraPrefTimeZoneId="Asia/Ho_Chi_Minh"
+zimbraVersionCheckNotificationEmail="admin@$DOMAIN"
+zimbraVersionCheckNotificationEmailFrom="admin@$DOMAIN"
+zimbraVersionCheckSendNotifications="FALSE"
+zimbra_ldap_userdn="uid=zimbra,cn=admins,cn=zimbra"
+zimbra_require_interprocess_security="1"
+zimbra_server_hostname="$HOSTNAME.$DOMAIN"
+INSTALL_PACKAGES="zimbra-core zimbra-mta zimbra-dnscache"
+EOF
+
+elif [ $INSTALLED-SERVICES = "PROXY" ]
+then
+  ./install.sh -s --platform-override < /opt/zimbra-install/install-autoKeys-proxy
+  cat <<EOF >/opt/zimbra-install/installParameters
+AVDOMAIN="$DOMAIN"
+AVUSER="admin@$DOMAIN"
+EXPANDMENU="no"
+HOSTNAME="$HOSTNAME.$DOMAIN"
+HTTPPORT="8080"
+HTTPPROXY="TRUE"
+HTTPPROXYPORT="80"
+HTTPSPORT="8443"
+HTTPSPROXYPORT="443"
+IMAPPORT="7143"
+IMAPPROXYPORT="143"
+IMAPSSLPORT="7993"
+IMAPSSLPROXYPORT="993"
+JAVAHOME="/opt/zimbra/common/lib/jvm/java"
+LDAPAMAVISPASS="$PASSWORD"
+LDAPPOSTPASS="$PASSWORD"
+LDAPROOTPASS="$PASSWORD"
+LDAPADMINPASS="$PASSWORD"
+LDAPREPPASS="$PASSWORD"
+LDAPBESSEARCHSET="set"
+LDAPDEFAULTSLOADED="1"
+LDAPHOST="$LDAPHOST"
+LDAPPORT="389"
+LDAPREPLICATIONTYPE="master"
+LDAPSERVERID="1"
+MAILPROXY="TRUE"
+MODE="https"
+POPPORT="7110"
+POPPROXYPORT="110"
+POPSSLPORT="7995"
+POPSSLPROXYPORT="995"
+PROXYMODE="https"
+REMOVE="no"
+RUNVMHA="no"
+SMTPDEST="admin@$DOMAIN"
+SMTPHOST="$HOSTNAME.$DOMAIN"
+SMTPNOTIFY="yes"
+SMTPSOURCE="admin@$DOMAIN"
+STARTSERVERS="yes"
+SYSTEMMEMORY="3.8"
+UPGRADE="yes"
+VERSIONUPDATECHECKS="FALSE"
+ZIMBRA_REQ_SECURITY="yes"
+ldap_bes_searcher_password="$PASSWORD"
+ldap_dit_base_dn_config="cn=zimbra"
+ldap_nginx_password="$PASSWORD"
+ldap_url="ldap://$LDAPHOST:389"
+ssl_default_digest="sha256"
+zimbraDefaultDomainName="$DOMAIN"
+zimbraIPMode="ipv4"
+zimbraMailProxy="TRUE"
+zimbraPrefTimeZoneId="Asia/Ho_Chi_Minh"
+zimbraReverseProxyLookupTarget="TRUE"
+zimbraVersionCheckNotificationEmail="admin@$DOMAIN"
+zimbraVersionCheckNotificationEmailFrom="admin@$DOMAIN"
+zimbraVersionCheckSendNotifications="FALSE"
+zimbraWebProxy="TRUE"
+zimbra_ldap_userdn="uid=zimbra,cn=admins,cn=zimbra"
+zimbra_require_interprocess_security="1"
+zimbra_server_hostname="$HOSTNAME.$DOMAIN"
+INSTALL_PACKAGES="zimbra-core zimbra-proxy zimbra-memcached"
+EOF
+
+elif [ $INSTALLED-SERVICES = "MAILSTORE" ]
+then
+  ./install.sh -s --platform-override < /opt/zimbra-install/install-autoKeys-mailstore
+  cat <<EOF >/opt/zimbra-install/installParameters
+AVDOMAIN="$DOMAIN"
+AVUSER="admin@$DOMAIN"
+CREATEADMIN="admin@$DOMAIN"
+CREATEADMINPASS="$PASSWORD"
+CREATEDOMAIN="$DOMAIN"
+DOCREATEADMIN="no"
+DOCREATEDOMAIN="no"
+EXPANDMENU="no"
+HOSTNAME="$HOSTNAME.$DOMAIN"
+HTTPPORT="8080"
+HTTPPROXY="TRUE"
+HTTPPROXYPORT="80"
+HTTPSPORT="8443"
+HTTPSPROXYPORT="443"
+IMAPPORT="7143"
+IMAPPROXYPORT="143"
+IMAPSSLPORT="7993"
+IMAPSSLPROXYPORT="993"
+INSTALL_WEBAPPS="service zimlet zimbra zimbraAdmin"
+JAVAHOME="/opt/zimbra/common/lib/jvm/java"
+LDAPAMAVISPASS="$PASSWORD"
+LDAPPOSTPASS="$PASSWORD"
+LDAPROOTPASS="$PASSWORD"
+LDAPADMINPASS="$PASSWORD"
+LDAPREPPASS="$PASSWORD"
+LDAPBESSEARCHSET="set"
+LDAPDEFAULTSLOADED="1"
+LDAPHOST="$LDAPHOST"
+LDAPPORT="389"
+LDAPREPLICATIONTYPE="master"
+LDAPSERVERID="1"
+MAILBOXDMEMORY="1024"
+MAILPROXY="TRUE"
+MODE="https"
+MYSQLMEMORYPERCENT="30"
+POPPORT="7110"
+POPPROXYPORT="110"
+POPSSLPORT="7995"
+POPSSLPROXYPORT="995"
+PROXYMODE="https"
+REMOVE="no"
+RUNARCHIVING="no"
+RUNVMHA="no"
+SERVICEWEBAPP="yes"
+SMTPDEST="admin@$DOMAIN"
+SMTPHOST="$HOSTNAME.$DOMAIN"
+SMTPNOTIFY="yes"
+SMTPSOURCE="admin@$DOMAIN"
+SNMPNOTIFY="yes"
+SNMPTRAPHOST="$HOSTNAME.$DOMAIN"
+SPELLURL="http://$HOSTNAME.$DOMAIN:7780/aspell.php"
+STARTSERVERS="yes"
+SYSTEMMEMORY="3.8"
+UIWEBAPPS="yes"
+UPGRADE="yes"
+USEKBSHORTCUTS="TRUE"
+USESPELL="yes"
+VERSIONUPDATECHECKS="FALSE"
+ZIMBRA_REQ_SECURITY="yes"
+ldap_bes_searcher_password="$PASSWORD"
+ldap_dit_base_dn_config="cn=zimbra"
+ldap_nginx_password="$PASSWORD"
+ldap_url="ldap://$LDAPHOST:389"
+mailboxd_directory="/opt/zimbra/mailboxd"
+mailboxd_keystore="/opt/zimbra/mailboxd/etc/keystore"
+mailboxd_keystore_password="$PASSWORD"
+mailboxd_server="jetty"
+mailboxd_truststore="/opt/zimbra/common/lib/jvm/java/lib/security/cacerts"
+mailboxd_truststore_password="changeit"
+ssl_default_digest="sha256"
+zimbraDefaultDomainName="$DOMAIN"
+zimbraFeatureBriefcasesEnabled="Enabled"
+zimbraFeatureTasksEnabled="Enabled"
+zimbraIPMode="ipv4"
+zimbraMailProxy="TRUE"
+zimbraPrefTimeZoneId="Asia/Ho_Chi_Minh"
+zimbraReverseProxyLookupTarget="TRUE"
+zimbraVersionCheckNotificationEmail="admin@$DOMAIN"
+zimbraVersionCheckNotificationEmailFrom="admin@$DOMAIN"
+zimbraVersionCheckSendNotifications="FALSE"
+zimbraWebProxy="TRUE"
+zimbra_ldap_userdn="uid=zimbra,cn=admins,cn=zimbra"
+zimbra_require_interprocess_security="1"
+zimbra_server_hostname="$HOSTNAME.$DOMAIN"
+INSTALL_PACKAGES="zimbra-core zimbra-logger zimbra-snmp zimbra-store zimbra-apache zimbra-spell zimbra-drive zimbra-chat"
+EOF
+
+else # All Services
+  ./install.sh -s --platform-override < /opt/zimbra-install/install-autoKeys
+  cat <<EOF >/opt/zimbra-install/installParameters
+AVDOMAIN="$DOMAIN"
+AVUSER="admin@$DOMAIN"
+CREATEADMIN="admin@$DOMAIN"
+CREATEADMINPASS="$PASSWORD"
+CREATEDOMAIN="$DOMAIN"
+DOCREATEADMIN="yes"
+DOCREATEDOMAIN="yes"
+DOTRAINSA="yes"
+EXPANDMENU="no"
+HOSTNAME="$HOSTNAME.$DOMAIN"
+HTTPPORT="8080"
+HTTPPROXY="TRUE"
+HTTPPROXYPORT="80"
+HTTPSPORT="8443"
+HTTPSPROXYPORT="443"
+IMAPPORT="7143"
+IMAPPROXYPORT="143"
+IMAPSSLPORT="7993"
+IMAPSSLPROXYPORT="993"
+INSTALL_WEBAPPS="service zimlet zimbra zimbraAdmin"
+JAVAHOME="/opt/zimbra/common/lib/jvm/java"
+LDAPAMAVISPASS="$PASSWORD"
+LDAPPOSTPASS="$PASSWORD"
+LDAPROOTPASS="$PASSWORD"
+LDAPADMINPASS="$PASSWORD"
+LDAPREPPASS="$PASSWORD"
+LDAPBESSEARCHSET="set"
+LDAPDEFAULTSLOADED="1"
+LDAPHOST="$HOSTNAME.$DOMAIN"
+LDAPPORT="389"
+LDAPREPLICATIONTYPE="master"
+LDAPSERVERID="2"
+MAILBOXDMEMORY="1024"
+MAILPROXY="TRUE"
+MODE="https"
+MYSQLMEMORYPERCENT="30"
+POPPORT="7110"
+POPPROXYPORT="110"
+POPSSLPORT="7995"
+POPSSLPROXYPORT="995"
+PROXYMODE="https"
+REMOVE="no"
+RUNARCHIVING="no"
+RUNAV="yes"
+RUNCBPOLICYD="no"
+RUNDKIM="yes"
+RUNSA="yes"
+RUNVMHA="no"
+SERVICEWEBAPP="yes"
+SMTPDEST="admin@$DOMAIN"
+SMTPHOST="$HOSTNAME.$DOMAIN"
+SMTPNOTIFY="yes"
+SMTPSOURCE="admin@$DOMAIN"
+SNMPNOTIFY="yes"
+SNMPTRAPHOST="$HOSTNAME.$DOMAIN"
+SPELLURL="http://$HOSTNAME.$DOMAIN:7780/aspell.php"
+STARTSERVERS="yes"
+SYSTEMMEMORY="3.8"
+TRAINSAHAM="ham.$RANDOMHAM@$DOMAIN"
+TRAINSASPAM="spam.$RANDOMSPAM@$DOMAIN"
+UIWEBAPPS="yes"
+UPGRADE="yes"
+USEKBSHORTCUTS="TRUE"
+USESPELL="yes"
+VERSIONUPDATECHECKS="FALSE"
+VIRUSQUARANTINE="virus-quarantine.$RANDOMVIRUS@$DOMAIN"
+ZIMBRA_REQ_SECURITY="yes"
+ldap_bes_searcher_password="$PASSWORD"
+ldap_dit_base_dn_config="cn=zimbra"
+ldap_nginx_password="$PASSWORD"
+ldap_url="ldap://$HOSTNAME.$DOMAIN:389"
+mailboxd_directory="/opt/zimbra/mailboxd"
+mailboxd_keystore="/opt/zimbra/mailboxd/etc/keystore"
+mailboxd_keystore_password="$PASSWORD"
+mailboxd_server="jetty"
+mailboxd_truststore="/opt/zimbra/common/lib/jvm/java/lib/security/cacerts"
+mailboxd_truststore_password="changeit"
+postfix_mail_owner="postfix"
+postfix_setgid_group="postdrop"
+ssl_default_digest="sha256"
+zimbraDNSMasterIP=""
+zimbraDNSTCPUpstream="no"
+zimbraDNSUseTCP="yes"
+zimbraDNSUseUDP="yes"
+zimbraDefaultDomainName="$DOMAIN"
+zimbraFeatureBriefcasesEnabled="Enabled"
+zimbraFeatureTasksEnabled="Enabled"
+zimbraIPMode="ipv4"
+zimbraMailProxy="TRUE"
+zimbraMtaMyNetworks="127.0.0.0/8 $CONTAINERIP/32 [::1]/128 [fe80::]/64"
+zimbraPrefTimeZoneId="Asia/Ho_Chi_Minh"
+zimbraReverseProxyLookupTarget="TRUE"
+zimbraVersionCheckNotificationEmail="admin@$DOMAIN"
+zimbraVersionCheckNotificationEmailFrom="admin@$DOMAIN"
+zimbraVersionCheckSendNotifications="FALSE"
+zimbraWebProxy="TRUE"
+zimbra_ldap_userdn="uid=zimbra,cn=admins,cn=zimbra"
+zimbra_require_interprocess_security="1"
+zimbra_server_hostname="$HOSTNAME.$DOMAIN"
+INSTALL_PACKAGES="zimbra-core zimbra-ldap zimbra-logger zimbra-mta zimbra-dnscache zimbra-snmp zimbra-store zimbra-apache zimbra-spell zimbra-memcached zimbra-proxy zimbra-drive zimbra-chat"
+EOF
+
+fi
+
+# Synelia fix: the RPM-shipped openssl.cnf explicitly activates the FIPS provider
+# (`default_properties = fips=yes` under [openssl_init]/[provider_sect]) and pulls in
+# fipsmodule.cnf. On this bundled OpenSSL 3.0.9, that combination not only breaks the
+# PKCS12 export zmsetup.pl needs for the mailboxd keystore (PKCS12KDF isn't
+# FIPS-approved) but also silently breaks the built-in "file" STORE loader used by
+# `openssl x509 -hash` for CA deployment. The package ships an unmodified
+# openssl.cnf.dist (providers left on OpenSSL's implicit default) that doesn't hit
+# either failure — use that instead, matching a known ZCS-9-on-modern-OpenSSL issue.
+if [ -f /opt/zimbra/common/etc/ssl/openssl.cnf.dist ]; then
+  cp /opt/zimbra/common/etc/ssl/openssl.cnf.dist /opt/zimbra/common/etc/ssl/openssl.cnf
+fi
+
+# Synelia fix #2: this build's zimbra-store package ships jetty's setuid module
+# pinned to jetty-setuid-java-1.0.3.jar (see mailboxd/modules/setuid.mod) but only
+# bundles jetty-setuid-java-1.0.4.jar on disk, so mailboxd (the core mail store /
+# admin SOAP webapp) fails to start with ClassNotFoundException:
+# org.eclipse.jetty.setuid.SetUIDListener. Symlink the expected name to the jar
+# that's actually present.
+if [ -f /opt/zimbra/common/jetty_home/lib/setuid/jetty-setuid-java-1.0.4.jar ] &&
+   [ ! -e /opt/zimbra/common/jetty_home/lib/setuid/jetty-setuid-java-1.0.3.jar ]; then
+  ln -s jetty-setuid-java-1.0.4.jar /opt/zimbra/common/jetty_home/lib/setuid/jetty-setuid-java-1.0.3.jar
+fi
+
+# Synelia fix #3: amavisd.conf.in's LDAP block enables StartTLS
+# (tls => @@ldap_starttls_supported@@) but never sets `verify`, so Net::LDAP's
+# start_tls() defaults to strict certificate verification against slapd's
+# self-signed cert and fails ("connect_to_ldap: start TLS failed:
+# LDAP_OPERATIONS_ERROR" in amavis' log), which makes Postfix's smtp-amavis content
+# filter refuse every message (421, deferred) — mail is accepted over SMTP/AUTH but
+# never actually delivered to the mailbox. Zimbra's own cert is unrelated to any
+# external CA here, so skip verification.
+if [ -f /opt/zimbra/conf/amavisd.conf.in ]; then
+  sed -i "s/tls           => @@ldap_starttls_supported@@,/tls           => @@ldap_starttls_supported@@,\n\tverify        => 'none',/" /opt/zimbra/conf/amavisd.conf.in
+fi
+
+echo "Installing Zimbra Collaboration injecting the configuration"
+/opt/zimbra/libexec/zmsetup.pl -c /opt/zimbra-install/installParameters
+
+# Synelia fix #4: the bundled JVM is OpenJDK 17 (fetched live at install time), but this
+# 2020-era ZCS/zal code does raw reflection into JDK internals (e.g.
+# org.openzal.zal.extension.StoreManagerImpl calls
+# ClassLoader.defineClass(...).setAccessible(true)), which JDK 16+'s strong
+# encapsulation (JEP 396) rejects with InaccessibleObjectException. That exception
+# during webapp init silently breaks the admin SOAP document dispatch (every
+# AdminService action then 404s even though mailboxd "starts" fine). Add the
+# --add-opens the old reflection needs.
+su - zimbra -c "zmlocalconfig -e mailboxd_java_options='-server -Dhttps.protocols=TLSv1.2 -Djdk.tls.client.protocols=TLSv1.2 -Djava.awt.headless=true -Dsun.net.inetaddr.ttl=\${networkaddress_cache_ttl} -Dorg.apache.jasper.compiler.disablejsr199=true -XX:+UseG1GC -XX:SoftRefLRUPolicyMSPerMB=1 -XX:+UnlockExperimentalVMOptions -XX:G1NewSizePercent=15 -XX:G1MaxNewSizePercent=45 -XX:-OmitStackTraceInFastThrow -verbose:gc -Xlog:gc*=info,safepoint=info:file=/opt/zimbra/log/gc.log:time:filecount=20,filesize=10m -Djava.net.preferIPv4Stack=true --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.net=ALL-UNNAMED --add-opens=java.base/sun.security.x509=ALL-UNNAMED --add-opens=java.base/sun.security.util=ALL-UNNAMED --add-opens=java.base/java.util.concurrent=ALL-UNNAMED --add-opens=java.base/java.text=ALL-UNNAMED --add-opens=java.desktop/java.awt.font=ALL-UNNAMED'"
+
+su - zimbra -c 'zmcontrol restart'
+echo "You can access now to your Zimbra Collaboration Server https://$HOSTNAME.$DOMAIN"
+
+rm -Rf /opt/zimbra-install
+
+else ## Zimbra already installed. Just need to start Zimbra services.
+  rsyslogd
+  su - zimbra -c 'zmcontrol restart'
+fi ## END. Check if Zimbra already installed?
+
+if [[ $1 == "-d" ]]; then
+  while true; do sleep 1000; done
+fi
+
+if [[ $1 == "-bash" ]]; then
+  /bin/bash
+fi

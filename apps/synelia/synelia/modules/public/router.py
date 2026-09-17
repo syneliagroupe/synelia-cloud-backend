@@ -9,7 +9,7 @@ from synelia_contract import modeles as m
 from synelia_kernel import erreurs
 from synelia_kernel.argent import arrondi_fcfa, ttc
 from synelia_kernel.dates import maintenant
-from synelia_kernel.ids import nouvel_id
+from synelia_kernel.ids import nouvel_id, slug_court
 
 from synelia.audit import journaliser
 from synelia.depot import Depot
@@ -115,9 +115,9 @@ async def obtenir_fiche_catalogue_publique(slug: str, ctx: CtxPublic) -> Any:
     response_model_exclude_none=True,
 )
 async def envoyer_demande_contact(corps: m.DemandeContact, ctx: CtxPublic) -> Any:
-    await _deposer_lead(ctx, "contact", corps)
+    lead = await _deposer_lead(ctx, "contact", corps)
     return {
-        "reference": nouvel_id()[:8],
+        "reference": slug_court(lead.id),
         "message": ACCUSES["contact"]["message"],
         "delaiReponseHeures": 24,
     }
@@ -142,9 +142,9 @@ async def lister_datacenters(ctx: CtxPublic) -> Any:
     response_model_exclude_none=True,
 )
 async def envoyer_demande_devis(corps: m.DemandeDevis, ctx: CtxPublic) -> Any:
-    await _deposer_lead(ctx, "devis", corps.contact, configuration_simulee=corps.estimation)
+    lead = await _deposer_lead(ctx, "devis", corps.contact, configuration_simulee=corps.estimation)
     return {
-        "reference": nouvel_id()[:8],
+        "reference": slug_court(lead.id),
         "message": ACCUSES["devis"]["message"],
         "delaiReponseHeures": 48,
     }
