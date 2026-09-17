@@ -182,7 +182,7 @@ Without `SYNELIA_DATABASE_URL`: SQLite file `./synelia.sqlite3`. Seed: `SYNELIA_
 
 ### 2.3 Docker / Dokploy / Kubernetes (production near the lab)
 
-Single `Dockerfile`: `python:3.13-slim` plus MinIO `mc`, `uv sync --frozen --no-dev --extra temporal --extra openstack`, non-root `synelia`, `ENTRYPOINT ["synelia"]`, `CMD ["api"]`. Worker: `command: ["worker"]`.
+Single `Dockerfile`: `python:3.13-slim` plus MinIO `mc`, `uv sync --frozen --no-dev --extra temporal --extra openstack`, non-root `synelia`, `ENTRYPOINT ["synelia"]`, `CMD ["api"]`. Worker: `command: ["worker"]`. OpenStack credentials stay in guest env (`SYNELIA_*`), never in the image.
 
 ### 2.4 CI (`.github/workflows/ci.yml`)
 
@@ -243,7 +243,7 @@ Intentional or current deltas (not a commitment to fix in this PR):
 | Contract tests | Schemathesis + oasdiff in CI | schemathesis in **dev deps only**; coverage is path presence, not response property tests |
 | Types | pyright strict in CI | pyright in pyproject, **not** a CI step; mode `basic` |
 | Lint | ruff green | **green after this briefing land** (`PLR0917` ignored like `PLR0913`; remaining UP/E/S/RUF issues fixed) |
-| Docker extra | temporal + openstack in image | Root `optional-dependencies` forward `temporal`/`openstack` to `synelia[...]` so `uv sync --extra temporal --extra openstack` in the Dockerfile installs `temporalio` and `openstacksdk` |
+| Docker extra | temporal + openstack in image | Root extras forward to `synelia[temporal]` and `synelia[openstack]`; `uv sync --frozen --no-dev --extra temporal --extra openstack` installs `temporalio` and `openstacksdk`. Credentials remain env-only on the guest. |
 | IA domain | last phase, needs frontend contract | 9 `ia.*` RBAC actions, zero paths |
 | Tests | testcontainers Postgres/Temporal | SQLite per test + inline jobs; no live OpenStack |
 | CI branch | `main` | clone default **`master`**; `main` also exists on origin |
@@ -267,7 +267,7 @@ First pass on `master` (`ddfbd4b`): pytest and `contrat_diff --strict` already p
 | Format | `uv run ruff format --check .` (CI) | **PASS** |
 | Tests | `uv run pytest -q` | **PASS** — **201 passed**, 845 warnings, **333 s**. Warnings: FastAPI `ORJSONResponse` deprecation (per-request noise). |
 | Contract | `uv run python tools/contrat_diff.py --strict` | **PASS** — **514/514 (100 %)** all 40 tags. |
-| Docker extra | `uv sync --frozen --no-dev --extra temporal` | **PASS** locally after forwarding extras; Docker daemon not available in this VM |
+| Docker extra | `uv sync --frozen --no-dev --extra temporal --extra openstack` | **PASS** locally after forwarding extras; Docker daemon not available in this VM |
 
 Pytest collection: 201 tests under `apps/synelia` (module `tests/` plus `synelia/tests/test_socle.py` and `test_espaces.py`). Harness: `conftest.py` loads `synelia_testing`; each `client` fixture gets a fresh SQLite file, schema + seed, admin session, inline jobs.
 

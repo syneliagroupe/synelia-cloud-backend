@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Dockerfile uses `uv sync --extra temporal --extra openstack` on this root package.
+# Dockerfile / compose use `uv sync --extra temporal --extra openstack` on this root package.
 # The extras themselves live on workspace member `synelia`.
 temporal = ["synelia[temporal]"]
 openstack = ["synelia[openstack]"]
