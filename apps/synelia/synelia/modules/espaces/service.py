@@ -286,3 +286,81 @@ async def _provisionner_zone_vps(session: AsyncSession, espace_id: str, org_id: 
     # comblé automatiquement ; un vrai nouvel environnement devrait encore créer ce LB à la
     # main et poser `lb_id` via `depot_plateforme.definir_secrets` avant le premier hébergement.
     log.warning("zone_vps.lb_id_non_provisionne", espace_id=espace_id)
+
+
+ESPACE_DEMO_ABJ_ID = "espace-demo-abj"
+
+
+async def assurer_secrets_openstack_espace(
+    session: AsyncSession,
+    espace_id: str = ESPACE_DEMO_ABJ_ID,
+) -> dict[str, str] | None:
+    """Idempotent : si l'Espace seed `espace-demo-abj` existe sans `projet_id`/`reseau_id`
+    et que `SYNELIA_FOURNISSEUR=openstack`, provisionne (ou réutilise) le projet Keystone,
+    le réseau Neutron et l'application credential — même contrat que `ExecuteurEspaceCreate`.
+
+    Nécessaire parce que le peupleur démo insère la ligne en base sans passer par
+    `espace.create` (maquette UI). Sans ce branchement, `POST /reseaux` / `POST /vms` voient
+    `tenant_id=None` / `reseau_id` vide sur le lab réel."""
+    from synelia_kernel.chiffrement import chiffrer
+
+    r = reglages()
+    if r.fournisseur != "openstack":
+        return None
+    ligne = await session.get(Ressource, espace_id)
+    if ligne is None or ligne.type != "espace" or ligne.supprime_le is not None:
+        return None
+    secrets_bruts = dict(ligne.secrets or {})
+    # Secrets chiffrés : présence de la clé suffit pour considérer déjà branché.
+    if secrets_bruts.get("projet_id") and secrets_bruts.get("reseau_id"):
+        return None
+
+    e = m.EspaceCloud.model_validate(ligne.donnees)
+    a = amont()
+    # Domaine stable pour l'Espace seed démo : chaque pytest crée une org ULID neuve ; un
+    # domaine `org-{ulid}` par test multipliait les projets Keystone `espace-demo-abj` orphelins.
+    domaine_nom = "synelia-demo" if espace_id == ESPACE_DEMO_ABJ_ID else f"org-{e.orgId}"
+    domaine_id = await asyncio.to_thread(a.creer_domaine, domaine_nom)
+    projet_id = await asyncio.to_thread(
+        a.creer_projet,
+        domaine_id,
+        f"espace-{e.code}",
+        "RegionOne" if e.site == "ABJ" else "GBM",
+    )
+    await asyncio.to_thread(a.poser_quotas, projet_id, e.quota.vcpu, e.quota.ramGo, e.quota.stockageTo)
+
+    net_name = f"{e.code}-net"
+    c = a._conn()
+    existing_net = next(
+        (n for n in c.network.networks(project_id=projet_id) if n.name == net_name),
+        None,
+    )
+    if existing_net is not None:
+        routers = list(c.network.routers(project_id=projet_id))
+        reseau = {
+            "reseau_id": existing_net.id,
+            "routeur_id": routers[0].id if routers else "",
+        }
+    else:
+        reseau = await asyncio.to_thread(a.creer_reseau, projet_id, net_name, e.cidr)
+
+    # AC : `creer_application_credential` remplace désormais l'AC homonyme (secret one-shot).
+    ac = await asyncio.to_thread(a.creer_application_credential, projet_id, domaine_id)
+
+    clairs = {
+        "projet_id": projet_id,
+        "reseau_id": reseau["reseau_id"],
+        "routeur_id": reseau.get("routeur_id") or "",
+        "application_credential_id": ac["id"],
+        "application_credential_secret": ac["secret"],
+    }
+    ligne.secrets = {**(ligne.secrets or {}), **{k: chiffrer(v) for k, v in clairs.items()}}
+    await session.flush()
+    log.info(
+        "demo_espace.openstack_branche",
+        espace_id=espace_id,
+        projet_id=projet_id,
+        reseau_id=reseau["reseau_id"],
+    )
+    return clairs
+

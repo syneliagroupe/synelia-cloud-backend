@@ -30,9 +30,13 @@ x-env-backend: &env-backend
   # /certificates (RPC conductor + Barbican) une fois traversé depuis dev01 — l'endpoint
   # interne répond en ~1s pour cette même route. Voir k8s_workload.py::_kubeconfig.
   SYNELIA_OS_ENDPOINT_OVERRIDES: '{"container_infra": "http://192.168.26.234:9511/v1"}'
-  # Zone VPS partagée (web_hebergement) : bootstrap manuel one-shot, voir docs/runbooks.
-  SYNELIA_VPS_ZONE_ESPACE_ID: 01a072e1-e303-76c2-bb8a-c3142f1e8f01
-  SYNELIA_VPS_ZONE_ORG_ID: 01a06d82-5e1a-72d3-913b-f3d2c3f13081
+  # Zone VPS partagée (web_hebergement) : bootstrap auto au démarrage, voir
+  # espaces.service.semer_zone_vps. Cet id a été régénéré le 2026-09-18 : l'ancien
+  # (01a072e1-...) était resté avec org_id NULL et secrets vides après un échec de
+  # provisioning jamais rejoué par semer_zone_vps (idempotence court-circuitée dès que
+  # la ligne existe) — pointer un id neuf force une reprovision propre au redémarrage.
+  SYNELIA_VPS_ZONE_ESPACE_ID: 0eb31cb1-2ca7-4387-a555-02e640ca8ba9
+  SYNELIA_VPS_ZONE_ORG_ID: 01a0b10b-8f4d-7633-bd9a-75379da461a3
   SYNELIA_TRAVAUX_EN_LIGNE: "false"
   SYNELIA_SEED_DEMO: "false"
   SYNELIA_LITELLM_URL: http://litellm:4000

@@ -89,8 +89,18 @@ async def amorcer() -> None:
         # fin de cette fonction. Sur un environnement neuf, lancer `synelia amorcer` une fois
         # avant de démarrer plusieurs processus (API + worker + relais SMTP) pour ne pas courir
         # ce chemin sous concurrence. Ne pas réécrire cette branche pour ce seul cas jamais vécu.
-        from synelia.modules.espaces.service import semer_zone_vps
+        from synelia.modules.espaces.service import (
+            assurer_secrets_openstack_espace,
+            semer_zone_vps,
+        )
 
         await semer_zone_vps(s)
+        await s.flush()
+        # Espace seed démo : s'il existe déjà (admin déjà amorcé) avec secrets vides sous
+        # fournisseur openstack, le brancher maintenant — peupler() ne rejoue pas.
+        try:
+            await assurer_secrets_openstack_espace(s)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("amorcage.demo_espace_openstack_echoue", erreur=str(exc))
         await s.commit()
     _AMORCE = True

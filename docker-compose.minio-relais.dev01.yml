@@ -1,0 +1,98 @@
+# Overlay for vm-admin: MinIO + Real connectors env + relais SMTP → Zimbra
+# Usage: docker compose -f docker-compose.yml -f docker-compose.minio-relais.dev01.yml --env-file .env up -d
+services:
+  minio:
+    image: quay.io/minio/minio:latest
+    environment:
+      MINIO_ROOT_USER: ${SYNELIA_MINIO_ROOT_USER:?}
+      MINIO_ROOT_PASSWORD: ${SYNELIA_MINIO_ROOT_PASSWORD:?}
+    command: ["server", "/data", "--console-address", ":9001"]
+    volumes: [minio-data:/data]
+    ports: ["127.0.0.1:9000:9000", "127.0.0.1:9001:9001"]
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      retries: 20
+    restart: unless-stopped
+    networks:
+      default:
+        aliases: [minio]
+
+  api:
+    env_file: .env
+    depends_on:
+      postgres: { condition: service_healthy }
+      minio: { condition: service_healthy }
+    environment:
+      SYNELIA_ENV: local
+      SYNELIA_DATABASE_URL: postgresql+asyncpg://synelia:synelia@postgres:5432/synelia
+      SYNELIA_TEMPORAL_ADRESSE: temporal:7233
+      SYNELIA_VALKEY_URL: redis://valkey:6379/0
+      SYNELIA_CORS_ORIGINES: '["https://app.cloud.dev01.ovh.smile.ci","http://192.168.121.138:3000","http://localhost:3000"]'
+      SYNELIA_URL_PUBLIQUE: https://api.cloud.dev01.ovh.smile.ci
+      SYNELIA_FOURNISSEUR: openstack
+      SYNELIA_MINIO_URL: http://minio:9000
+      SYNELIA_MINIO_ROOT_USER: ${SYNELIA_MINIO_ROOT_USER:?}
+      SYNELIA_MINIO_ROOT_PASSWORD: ${SYNELIA_MINIO_ROOT_PASSWORD:?}
+      SYNELIA_ZIMBRA_URL: https://zimbra:7071
+      SYNELIA_ZIMBRA_ADMIN_USER: ${SYNELIA_ZIMBRA_ADMIN_USER:-admin@zimbra.synelia.internal}
+      SYNELIA_ZIMBRA_ADMIN_PASSWORD: ${SYNELIA_ZIMBRA_ADMIN_PASSWORD:?}
+      SYNELIA_RELAIS_SMTP_HOTE: relais-smtp
+      SYNELIA_RELAIS_SMTP_PORT: "587"
+      SYNELIA_SMTP_ADMIN_HOTE: ${SYNELIA_SMTP_ADMIN_HOTE:-}
+      SYNELIA_SMTP_ADMIN_UTILISATEUR: ${SYNELIA_SMTP_ADMIN_UTILISATEUR:-}
+      SYNELIA_SMTP_ADMIN_MOT_DE_PASSE: ${SYNELIA_SMTP_ADMIN_MOT_DE_PASSE:-}
+    restart: unless-stopped
+
+  worker:
+    env_file: .env
+    depends_on:
+      api: { condition: service_started }
+      temporal: { condition: service_started }
+      minio: { condition: service_healthy }
+    environment:
+      SYNELIA_DATABASE_URL: postgresql+asyncpg://synelia:synelia@postgres:5432/synelia
+      SYNELIA_TEMPORAL_ADRESSE: temporal:7233
+      SYNELIA_FOURNISSEUR: openstack
+      SYNELIA_MINIO_URL: http://minio:9000
+      SYNELIA_MINIO_ROOT_USER: ${SYNELIA_MINIO_ROOT_USER:?}
+      SYNELIA_MINIO_ROOT_PASSWORD: ${SYNELIA_MINIO_ROOT_PASSWORD:?}
+      SYNELIA_ZIMBRA_URL: https://zimbra:7071
+      SYNELIA_ZIMBRA_ADMIN_USER: ${SYNELIA_ZIMBRA_ADMIN_USER:-admin@zimbra.synelia.internal}
+      SYNELIA_ZIMBRA_ADMIN_PASSWORD: ${SYNELIA_ZIMBRA_ADMIN_PASSWORD:?}
+      SYNELIA_RELAIS_SMTP_HOTE: relais-smtp
+      SYNELIA_RELAIS_SMTP_PORT: "587"
+    restart: unless-stopped
+
+  relais-smtp:
+    env_file: .env
+    command: ["relais-smtp"]
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      SYNELIA_DATABASE_URL: postgresql+asyncpg://synelia:synelia@postgres:5432/synelia
+      SYNELIA_SMTP_RELAIS_HOTE: "0.0.0.0"
+      SYNELIA_SMTP_RELAIS_PORT: "587"
+      SYNELIA_SMTP_RELAIS_AMONT_HOTE: zimbra
+      SYNELIA_SMTP_RELAIS_AMONT_PORT: "587"
+      SYNELIA_SMTP_RELAIS_AMONT_IDENTIFIANT: ${SYNELIA_SMTP_RELAIS_AMONT_IDENTIFIANT:-}
+      SYNELIA_SMTP_RELAIS_AMONT_MOT_DE_PASSE: ${SYNELIA_SMTP_RELAIS_AMONT_MOT_DE_PASSE:-}
+    ports: ["127.0.0.1:2587:587"]
+    networks:
+      default:
+        aliases: [relais-smtp]
+    restart: unless-stopped
+
+  postgres:
+    restart: unless-stopped
+  valkey:
+    restart: unless-stopped
+  temporal:
+    restart: unless-stopped
+  temporal-ui:
+    restart: unless-stopped
+  mailpit:
+    restart: unless-stopped
+
+volumes:
+  minio-data: {}
