@@ -229,6 +229,42 @@ nettoyé : 0 VM/LB/volume/FIP résiduels).
   (`free_disk_gb` ≥ flavor master + worker + 5 amphora) et les claims
   placement par consumer pour trouver le squatteur.
 
+## Stack PaaS du cluster Kubernetes (Zot + opérateurs) — 2026-09-18
+
+Procédure ordonnée complète : [[paas-bootstrap]] (`docs/runbooks/paas-bootstrap.md`)
++ script `tools/paas-bootstrap.sh`. Pièges vérifiés en direct :
+
+- **Endpoints publics incomplets** : seuls keystone/neutron/nova/cinder avaient été
+  basculés sur les vhosts. `octavia`, `placement` et `glance` pointaient encore sur
+  `192.168.26.x` → le CCM du cluster (qui lit le catalogue **public**) ne pouvait pas
+  créer de LB (`dial tcp 192.168.26.234:9876: i/o timeout`). Les 3 sont maintenant
+  basculés. Après tout redémarrage du lab, revérifier
+  `openstack endpoint list --interface public | grep 192.168.26` (doit être vide).
+- **`octavia_provider`** : le driver `magnum-cluster-api` défaut à `amphorav2`
+  (`utils.py`, lu dans les **labels du cluster**), provider absent de cet Octavia →
+  400 `Provider 'amphorav2' is not enabled`. Ce lab n'a que `amphora`. Le backend
+  (`packages/openstack/synelia_openstack/magnum.py`) passe désormais
+  `octavia_provider=amphora` à la création (surchargeable par
+  `SYNELIA_PAAS_OCTAVIA_PROVIDER`). Un cluster créé avant ce correctif doit être
+  corrigé à la main : secret workload `kube-system/cloud-config` →
+  `lb-provider=amphora` + `rollout restart ds/openstack-cloud-controller-manager`.
+- **Registre Zot** : `oci://ghcr.io/project-zot/helm-charts/zot`, VIP Octavia
+  (adresse stable), PVC sur `block-ssd` (volume Cinder réel). En HTTP → il faut
+  `certs.d/<vip>:5000/hosts.toml` **et** `config_path = '/etc/containerd/certs.d'`
+  sous `[plugins.'io.containerd.cri.v1.images'.registry]` (containerd 2.x ne lit
+  `certs.d` que si `config_path` est posé, sinon HTTPS only), puis redémarrer
+  containerd. Pousser sans redémarrer le Docker de ctrl1 : `crane copy … --insecure`.
+- **Capacité** : le cluster 1 master + 1 worker sature vite (`Insufficient cpu` pour
+  le dernier opérateur). Retirer le taint control-plane du master, ou ajouter un
+  worker si la capacité compute du lab le permet (`os-hypervisors/statistics`).
+- **Opérateurs** : CNPG, MariaDB, Redis (OT-container-kit), ECK, MongoDB Community.
+  ECK/MongoDB posent leurs CRDs via un chart séparé → conflit d'ownership Helm,
+  réattribuer les annotations `meta.helm.sh/release-*` avant d'installer l'opérateur.
+  MongoDB Community exige `watchNamespace="*"` pour réconcilier hors de son namespace.
+- **stakater/application** (déploiement d'apps) : défauts `runAsNonRoot: true` +
+  `readOnlyRootFilesystem: true` (cassent nginx/nixpacks → désactiver), ports en
+  listes, `env` en map. Build GitHub : `nixpacks build` → push Zot (`railpack` = alternative).
+
 ## État réel vs simulé de l'univers Infrastructure
 
 Voir [[infra-universe-real-vs-simulated]] (mémoire de session) pour le détail à jour — au 2026-09-07,
@@ -285,3 +321,24 @@ dev01, `127.0.0.1:8443 → 443`, cf. `zimbra/docker-compose.yml`) :
 depuis Internet (login Zimbra), puis `POST /v1/web/emails/{id}/ouverture` doit rendre un lien
 `https://webmail.cloud.dev01.ovh.smile.ci/service/preauth?authtoken=…` qui connecte sans mot de
 passe (jeton 60 s, `expire` dans la réponse).
+
+## Comptes FTP/SFTP d'un hébergement (`POST /web/hebergements/{id}/comptes-fichiers`)
+
+Les accès fichiers sont provisionnés par **conteneurs Docker sur le VPS** de l'hébergement
+(projet Compose dédié `/srv/synelia/fichiers`, même logique que les moteurs de bases et les
+sites) — deux services :
+- `sftp` : `atmoz/sftp`, port `2222`, chaque compte **chrooté dans son dossier** (montage
+  hôte → `/home/<utilisateur>`, jamais l'arborescence entière du VPS) ;
+- `ftp` : `delfer/alpine-ftp-server`, port `21` (+ passif `21000-21010`), comptes via `USERS`.
+
+`web_hebergement.service.appliquer_comptes_fichiers()` régénère `users.conf`/`docker-compose.yml`
+depuis la base après chaque création/modification/suppression de compte, les **écrit par SFTP**
+(`ecrire_fichier` — aucun mot de passe en ligne de commande distante), puis lance
+`docker compose up -d` (idempotent). En simulation : no-op ; en réel sans SSH/IP : échec franc
+424, jamais un compte annoncé « actif » sans serveur.
+
+**À valider en lab** (non prouvable depuis le poste de test, le VPS n'est pas routable) :
+`ssh <vps> 'docker compose -f /srv/synelia/fichiers/docker-compose.yml ps'` (deux conteneurs
+`running`) puis un vrai login `sftp -P 2222 <utilisateur>@<ip>` / `ftp <ip>`.
+Images et formats d'env retenus d'après leur documentation publique — à confirmer au premier
+déploiement réel (un `docker logs` tranche).

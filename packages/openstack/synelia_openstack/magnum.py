@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from synelia_kernel.ids import nouvel_id
@@ -65,6 +66,15 @@ class MagnumOpenStack(MagnumSimule):
         # par défaut obsolète s'ils sont absents) : on hérite ceux du modèle, qui
         # suivent la version Kubernetes réellement bakée dans l'image (`v1.33.12`).
         etiquettes = dict(getattr(tpl, "labels", None) or {})
+        # Provider Octavia réellement activé sur le cloud cible. Le driver CAPI
+        # (`magnum_cluster_api/utils.py`) défaut à `amphorav2` — provider VEXXHOST
+        # absent d'un Octavia vanilla : chaque `Service type=LoadBalancer` échoue
+        # alors en 400 « Provider 'amphorav2' is not enabled » (constaté en direct
+        # sur ce lab, où seul `amphora` est activé). Surchargeable par label de
+        # modèle, ou par `SYNELIA_PAAS_OCTAVIA_PROVIDER`.
+        etiquettes.setdefault(
+            "octavia_provider", os.environ.get("SYNELIA_PAAS_OCTAVIA_PROVIDER", "amphora")
+        )
         attrs: dict[str, Any] = {
             "name": kw["nom"],
             "cluster_template_id": modele_id,
