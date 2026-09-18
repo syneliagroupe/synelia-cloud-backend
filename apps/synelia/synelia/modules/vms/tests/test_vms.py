@@ -210,7 +210,9 @@ async def test_redimensionner_vm(client):
         json={"espaceId": espace_id, "nom": "resize", "imageId": image_id, "gabarit": gabarit},
     )
     assert r.status_code == 202 and r.json()["statut"] == "done"
-    vid = next(v["id"] for v in (await client.get("/v1/vms")).json()["donnees"] if v["nom"] == "resize")
+    vid = next(
+        v["id"] for v in (await client.get("/v1/vms")).json()["donnees"] if v["nom"] == "resize"
+    )
     r = await client.post(
         f"/v1/vms/{vid}/redimensionnement", json={"vcpu": 1, "ramGo": 2, "diskGo": 20}
     )

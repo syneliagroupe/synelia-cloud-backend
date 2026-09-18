@@ -327,7 +327,9 @@ async def assurer_secrets_openstack_espace(
         f"espace-{e.code}",
         "RegionOne" if e.site == "ABJ" else "GBM",
     )
-    await asyncio.to_thread(a.poser_quotas, projet_id, e.quota.vcpu, e.quota.ramGo, e.quota.stockageTo)
+    await asyncio.to_thread(
+        a.poser_quotas, projet_id, e.quota.vcpu, e.quota.ramGo, e.quota.stockageTo
+    )
 
     net_name = f"{e.code}-net"
     c = a._conn()
@@ -363,4 +365,3 @@ async def assurer_secrets_openstack_espace(
         reseau_id=reseau["reseau_id"],
     )
     return clairs
-
