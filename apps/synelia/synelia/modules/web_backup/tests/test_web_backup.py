@@ -50,10 +50,16 @@ async def test_cycle_sauvegarde(client):
 
 
 async def test_erreurs_backup(client):
-    # Branches d'erreur simule-couvrables : 404 sur les endpoints détail.
+    # Branches d'erreur simule-couvrables : 404 sur les endpoints détail. Le corps PATCH
+    # est volontairement valide (`quotidienne`) : avec un corps invalide, la validation
+    # Pydantic répondrait 422 avant même le contrôle d'existence — autre branche.
     for methode, chemin, kwargs in [
         ("get", "/v1/web/backup/sauvegarde-inexistante", {}),
-        ("patch", "/v1/web/backup/sauvegarde-inexistante", {"json": {"frequence": "x"}}),
+        (
+            "patch",
+            "/v1/web/backup/sauvegarde-inexistante",
+            {"json": {"frequence": "quotidienne"}},
+        ),
         ("post", "/v1/web/backup/sauvegarde-inexistante/execution", {}),
         (
             "post",
