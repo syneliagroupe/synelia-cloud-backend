@@ -1,5 +1,28 @@
 """Stockage : volumes (bloc), buckets (objets), clés S3."""
 
+from synelia_testing import connexion_lab, ignorer_si_vm_demo_absente, sur_lab_reel
+
+
+def _affirmer_volume_cinder(nom: str):
+    """Le volume doit exister pour de vrai côté Cinder (retrouvé par son nom)."""
+    if not sur_lab_reel():
+        return
+    c = connexion_lab()
+    assert c is not None, "lab réel injoignable"
+    assert c.block_storage.find_volume(nom, ignore_missing=True) is not None, (
+        f"volume Cinder {nom!r} introuvable : création sans impact OpenStack"
+    )
+
+
+def _affirmer_volume_cinder_absent(nom: str):
+    if not sur_lab_reel():
+        return
+    c = connexion_lab()
+    assert c is not None, "lab réel injoignable"
+    assert c.block_storage.find_volume(nom, ignore_missing=True) is None, (
+        f"volume Cinder {nom!r} toujours présent : suppression sans impact OpenStack"
+    )
+
 
 async def _espace(client) -> str:
     existants = (await client.get("/v1/espaces")).json()["donnees"]
@@ -21,6 +44,7 @@ async def _espace(client) -> str:
 
 
 async def test_cycle_volume(client):
+    ignorer_si_vm_demo_absente()
     espace_id = await _espace(client)
     vid = None
     corps = {
@@ -40,6 +64,7 @@ async def test_cycle_volume(client):
     vols = [v for v in r.json()["donnees"] if v["nom"] == "data-01"]
     assert len(vols) == 1 and vols[0]["nom"] == "data-01"
     vid = vols[0]["id"]
+    _affirmer_volume_cinder("data-01")
 
     r = await client.get(f"/v1/volumes/{vid}")
     assert r.status_code == 200 and r.json()["classe"] == "ssd"
@@ -65,6 +90,7 @@ async def test_cycle_volume(client):
 
     r = await client.get("/v1/volumes")
     assert all(v["id"] != vid for v in r.json()["donnees"])
+    _affirmer_volume_cinder_absent("data-01")
 
 
 async def test_volume_quota_depasse(client):

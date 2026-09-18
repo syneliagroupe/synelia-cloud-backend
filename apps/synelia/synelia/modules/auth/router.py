@@ -1,13 +1,21 @@
 from __future__ import annotations
 
+import secrets as _secrets
 from typing import Any
 
 from fastapi import APIRouter, Body, status
 from sqlalchemy import select
 from synelia_contract import modeles as m
 from synelia_contract import rbac
-from synelia_db.modeles import Invitation, Membership, Organisation, SessionAuth, Utilisateur
-from synelia_kernel import courriel, erreurs
+from synelia_db.modeles import (
+    Invitation,
+    Membership,
+    Organisation,
+    SessionAuth,
+    Utilisateur,
+    VerificationEmail,
+)
+from synelia_kernel import agentmail, courriel, erreurs
 from synelia_kernel.chiffrement import dechiffrer
 from synelia_kernel.dates import dans, maintenant
 from synelia_kernel.ids import jeton_opaque
@@ -45,6 +53,11 @@ async def se_connecter(ctx: CtxPublic, corps: m.DemandeConnexion) -> Any:
         raise erreurs.non_authentifie("Identifiants incorrects.")
     if u.statut == "suspendu":
         raise erreurs.interdit("Compte suspendu.", code="compte_suspendu")
+    if u.statut == "verification_requise":
+        raise erreurs.interdit(
+            "Email non vérifié : saisissez le code reçu par email pour activer le compte.",
+            code="email_non_verifie",
+        )
     org = u.org_active_id
     if org:
         o = await ctx.session.get(Organisation, org)
@@ -224,8 +237,8 @@ async def se_deconnecter(ctx: Ctx) -> Any:
 
 @router.post(
     "/inscription",
-    response_model=m.Session,
-    status_code=status.HTTP_201_CREATED,
+    response_model=m.VerificationEmailEtat,
+    status_code=status.HTTP_202_ACCEPTED,
     response_model_exclude_none=True,
 )
 async def s_inscrire(ctx: CtxPublic, corps: m.Inscription) -> Any:
@@ -238,12 +251,15 @@ async def s_inscrire(ctx: CtxPublic, corps: m.Inscription) -> Any:
     mdp = corps.motDePasse.get_secret_value()
     if len(mdp) < 8:
         raise erreurs.validation("Mot de passe trop court.", {"motDePasse": "8 caractères minimum"})
+    # Le compte naît non vérifié : aucune session n'est ouverte tant que l'email
+    # n'est pas prouvé (POST /auth/verification-email). Les comptes existants
+    # (statut `actif`, seed admin, invitations acceptées) ne sont pas concernés.
     u = Utilisateur(
         email=str(corps.email).lower(),
         nom=corps.nom,
         mot_de_passe_hash=hacher_mot_de_passe(mdp),
         idp_source="local",
-        statut="actif",
+        statut="verification_requise",
     )
     ctx.session.add(u)
     await ctx.session.flush()
@@ -269,10 +285,8 @@ async def s_inscrire(ctx: CtxPublic, corps: m.Inscription) -> Any:
         )
         u.org_active_id = org.id
         org_id = org.id
+    etat = await _emettre_code(ctx, u)
     await ctx.session.flush()
-    rep = await service.ouvrir_session(
-        ctx.session, u, ip=ctx.ip, user_agent=ctx.entete("user-agent"), org_id=org_id
-    )
     await journaliser(
         ctx,
         action="auth.inscription",
@@ -281,7 +295,156 @@ async def s_inscrire(ctx: CtxPublic, corps: m.Inscription) -> Any:
         cible=u.email,
         org_id=org_id,
     )
+    return etat
+
+
+CODE_VERIFICATION_DUREE_S = 900
+CODE_VERIFICATION_ESSAIS_MAX = 5
+CODE_VERIFICATION_RENVOI_DELAI_S = 60
+
+
+def _nouveau_code() -> str:
+    return f"{_secrets.randbelow(900000) + 100000:06d}"
+
+
+async def _envoyer_code_verification(ctx: CtxPublic, u: Utilisateur, code: str) -> None:
+    """AgentMail en priorité, repli SMTP admin (`courriel`), best-effort dans tous
+    les cas : un échec d'envoi ne fait jamais échouer l'inscription (le renvoi
+    permet de réessayer), il est seulement journalisé."""
+    try:
+        await agentmail.envoyer_code(u.email, code)
+        return
+    except Exception as exc:  # noqa: BLE001 — repli ci-dessous
+        await journaliser(
+            ctx,
+            action="auth.code_envoi_agentmail_echec",
+            cible_type="utilisateur",
+            cible_id=u.id,
+            cible=u.email,
+            resultat="echec",
+            details={"erreur": str(exc)[:200]},
+        )
+    try:
+        await courriel.envoyer(
+            u.email,
+            "Synelia Cloud — vérifiez votre email",
+            "Vérifiez votre email",
+            [f"Votre code de vérification : {code}", "Ce code expire dans 15 minutes."],
+        )
+    except Exception as exc:  # noqa: BLE001 — best-effort, renvoi possible
+        await journaliser(
+            ctx,
+            action="auth.code_envoi_smtp_echec",
+            cible_type="utilisateur",
+            cible_id=u.id,
+            cible=u.email,
+            resultat="echec",
+            details={"erreur": str(exc)[:200]},
+        )
+
+
+async def _emettre_code(ctx: CtxPublic, u: Utilisateur) -> dict[str, Any]:
+    """Invalide les codes précédents encore actifs, émet un code frais, l'envoie."""
+    precedents = (
+        await ctx.session.execute(
+            select(VerificationEmail).where(
+                VerificationEmail.utilisateur_id == u.id,
+                VerificationEmail.consommee_le.is_(None),
+            )
+        )
+    ).scalars()
+    for p in precedents:
+        p.consommee_le = maintenant()
+    code = _nouveau_code()
+    v = VerificationEmail(
+        utilisateur_id=u.id,
+        code_hash=hacher_jeton(code),
+        expire_le=dans(CODE_VERIFICATION_DUREE_S),
+    )
+    ctx.session.add(v)
+    await _envoyer_code_verification(ctx, u, code)
+    return {
+        "email": u.email,
+        "expire": v.expire_le,
+        "essaisRestants": CODE_VERIFICATION_ESSAIS_MAX,
+    }
+
+
+async def _verification_active(ctx: CtxPublic, u: Utilisateur) -> VerificationEmail | None:
+    return (
+        (
+            await ctx.session.execute(
+                select(VerificationEmail)
+                .where(
+                    VerificationEmail.utilisateur_id == u.id,
+                    VerificationEmail.consommee_le.is_(None),
+                )
+                .order_by(VerificationEmail.cree_le.desc())
+            )
+        )
+        .scalars()
+        .first()
+    )
+
+
+@router.post(
+    "/verification-email",
+    response_model=m.Session,
+    response_model_exclude_none=True,
+)
+async def verifier_email(ctx: CtxPublic, corps: m.VerificationEmailConfirmation) -> Any:
+    u = await _utilisateur_par_email(ctx, str(corps.email))
+    if u is None:
+        raise erreurs.non_authentifie("Identifiants incorrects.")
+    if u.statut != "verification_requise":
+        raise erreurs.conflit("Email déjà vérifié.", code="email_deja_verifie")
+    v = await _verification_active(ctx, u)
+    if v is None or v.expire_le < maintenant():
+        raise erreurs.validation("Code expiré : demandez un nouveau code.", {"code": "code_expire"})
+    if v.essais >= CODE_VERIFICATION_ESSAIS_MAX:
+        raise erreurs.interdit("Trop de tentatives : demandez un nouveau code.", code="code_bloque")
+    if hacher_jeton(corps.code.strip()) != v.code_hash:
+        v.essais += 1
+        await ctx.session.flush()
+        raise erreurs.interdit("Code incorrect.", code="code_invalide")
+    v.consommee_le = maintenant()
+    u.statut = "actif"
+    await ctx.session.flush()
+    rep = await service.ouvrir_session(
+        ctx.session, u, ip=ctx.ip, user_agent=ctx.entete("user-agent"), org_id=u.org_active_id
+    )
+    await journaliser(
+        ctx,
+        action="auth.email_verifie",
+        cible_type="utilisateur",
+        cible_id=u.id,
+        cible=u.email,
+        org_id=u.org_active_id,
+    )
     return rep
+
+
+@router.post(
+    "/verification-email/renvoi",
+    response_model=m.VerificationEmailEtat,
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model_exclude_none=True,
+)
+async def renvoyer_code_verification(ctx: CtxPublic, corps: m.VerificationEmailDemande) -> Any:
+    u = await _utilisateur_par_email(ctx, str(corps.email))
+    if u is None:
+        raise erreurs.non_authentifie("Identifiants incorrects.")
+    if u.statut != "verification_requise":
+        raise erreurs.conflit("Email déjà vérifié.", code="email_deja_verifie")
+    v = await _verification_active(ctx, u)
+    if v is not None:
+        delai = (maintenant() - v.cree_le).total_seconds()
+        if delai < CODE_VERIFICATION_RENVOI_DELAI_S:
+            raise erreurs.interdit(
+                f"Patientez {int(CODE_VERIFICATION_RENVOI_DELAI_S - delai)} s avant un renvoi.",
+                code="renvoi_trop_tot",
+            )
+    return await _emettre_code(ctx, u)
 
 
 def _invitation_contrat(i: Invitation, org_nom: str | None) -> dict[str, Any]:

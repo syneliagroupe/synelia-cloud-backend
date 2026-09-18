@@ -81,6 +81,21 @@ class Invitation(Base, Identifie, Horodate):
     message: Mapped[str | None] = mapped_column(String(1000))
 
 
+class VerificationEmail(Base, Identifie, Horodate):
+    """Code à 6 chiffres de vérification d'email (inscription) : hash stocké, 15 min,
+    5 essais max, un seul code actif par utilisateur (les précédents sont consommés)."""
+
+    __tablename__ = "verifications_email"
+
+    utilisateur_id: Mapped[str] = mapped_column(
+        ForeignKey("utilisateurs.id", ondelete="CASCADE"), index=True
+    )
+    code_hash: Mapped[str] = mapped_column(String(128))
+    expire_le: Mapped[datetime] = mapped_column(DateTimeUTC)
+    essais: Mapped[int] = mapped_column(Integer, default=0)
+    consommee_le: Mapped[datetime | None] = mapped_column(DateTimeUTC)
+
+
 class SessionAuth(Base, Identifie, Horodate):
     """Rafraîchissement opaque rotatif ; l'accès reste sans état (JWT 15 min)."""
 

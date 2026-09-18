@@ -130,13 +130,20 @@ class IdentiteOpenStack(IdentiteSimule):
         self._conn().network.delete_network(reseau_id, ignore_missing=True)
 
     def creer_ip_flottante(self, projet_id: str | None) -> dict[str, Any]:
+        from synelia_openstack.erreurs import traduire
+
         c = self._conn()
         ext = self._reseau_externe(c)
         if ext is None:
             from synelia_kernel import erreurs
 
             raise erreurs.amont_indisponible("réseau externe")
-        fip = c.network.create_ip(floating_network_id=ext.id, project_id=projet_id)
+        try:
+            fip = c.network.create_ip(floating_network_id=ext.id, project_id=projet_id)
+        except Exception as exc:
+            # Sans traduction, le 409 Neutron (« No more IP addresses ») remontait en
+            # 500 `erreur_interne` opaque (constaté en direct pendant la batterie demo).
+            raise traduire(exc, "IP flottante") from None
         return {"id": fip.id, "adresse": fip.floating_ip_address}
 
     def supprimer_ip_flottante(self, ip_id: str) -> None:

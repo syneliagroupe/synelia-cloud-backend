@@ -6228,6 +6228,21 @@ class Inscription(BaseModel):
     accepteConditions: bool
 
 
+class VerificationEmailDemande(BaseModel):
+    email: EmailStr
+
+
+class VerificationEmailConfirmation(BaseModel):
+    email: EmailStr
+    code: str
+
+
+class VerificationEmailEtat(BaseModel):
+    email: EmailStr
+    expire: AwareDatetime
+    essaisRestants: int
+
+
 class Membre(BaseModel):
     id: str
     userId: str

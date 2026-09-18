@@ -1,5 +1,43 @@
 """Modules /vms : cycle de vie d'une machine virtuelle, services amont, instantanés, lot."""
 
+from synelia_testing import corriger_amont, sur_lab_reel
+
+
+def _affirmer_amont_reel():
+    """Garde-fou anti-fumée : sur lab réel, l'amont actif doit être Nova, jamais le
+    simulé — sinon le test validerait une coquille sans impact OpenStack."""
+    if sur_lab_reel():
+        from synelia.modules.vms import service as _svc
+        from synelia_openstack.compute import ComputeOpenStack
+
+        assert isinstance(_svc.amont(), ComputeOpenStack), (
+            "lab réel mais amont simulé : test en fumée"
+        )
+
+
+def _affirmer_serveur_nova(nom: str):
+    """Le serveur doit exister pour de vrai côté Nova (retrouvé par son nom)."""
+    if not sur_lab_reel():
+        return
+    from synelia_testing import connexion_lab
+
+    c = connexion_lab()
+    assert c is not None, "lab réel injoignable"
+    srv = c.compute.find_server(nom, ignore_missing=True)
+    assert srv is not None, f"serveur Nova {nom!r} introuvable : création sans impact OpenStack"
+
+
+def _affirmer_serveur_nova_absent(nom: str):
+    if not sur_lab_reel():
+        return
+    from synelia_testing import connexion_lab
+
+    c = connexion_lab()
+    assert c is not None, "lab réel injoignable"
+    assert c.compute.find_server(nom, ignore_missing=True) is None, (
+        f"serveur Nova {nom!r} toujours présent : suppression sans impact OpenStack"
+    )
+
 
 async def _espace_demo(client) -> str:
     r = await client.get("/v1/espaces")
@@ -32,6 +70,7 @@ async def _image_id(client) -> str:
 
 
 async def _creer_vm(client, espace_id: str, nom: str = "vm-test") -> str:
+    _affirmer_amont_reel()
     gabarit = await _gabarit_id(client)
     image_id = await _image_id(client)
     corps = {"espaceId": espace_id, "nom": nom, "imageId": image_id, "gabarit": gabarit}
@@ -42,6 +81,7 @@ async def _creer_vm(client, espace_id: str, nom: str = "vm-test") -> str:
     vms = r2.json()["donnees"]
     vm = next(v for v in vms if v["nom"] == nom)
     assert vm["statut"] == "running"
+    _affirmer_serveur_nova(nom)
     return vm["id"]
 
 
@@ -127,6 +167,7 @@ async def test_supprimer_vm_confirmation(client):
     assert r.status_code == 202 and r.json()["statut"] == "done"
     r = await client.get("/v1/vms")
     assert all(v["nom"] != "a-supprimer" for v in r.json()["donnees"])
+    _affirmer_serveur_nova_absent("a-supprimer")
 
 
 async def test_arret_demarrage_redemarrage(client):
@@ -201,9 +242,13 @@ async def test_migration_vm(client):
 
 
 async def test_redimensionner_vm(client):
-    # Lab: medium/large → NoValidHost. micro→small stays schedulable.
+    # `small` → cible {2,4,20+40} : la source diffère de la cible (Nova refuse un
+    # redimensionnement vers le gabarit identique), le disque ne fait que croître
+    # (`Un disque ne se réduit pas` — cf. assertion 422 ci-dessous) et la cible mappe
+    # un gabarit réel du catalogue simulé (`g1.medium`). L'ancien montage `medium` →
+    # {1,2,20} était un rétrécissement disque 40→20, rejeté 422 à juste titre.
     espace_id = await _espace_demo(client)
-    gabarit = await _gabarit_id(client, "micro")
+    gabarit = await _gabarit_id(client, "small")
     image_id = await _image_id(client)
     r = await client.post(
         "/v1/vms",
@@ -214,11 +259,11 @@ async def test_redimensionner_vm(client):
         v["id"] for v in (await client.get("/v1/vms")).json()["donnees"] if v["nom"] == "resize"
     )
     r = await client.post(
-        f"/v1/vms/{vid}/redimensionnement", json={"vcpu": 1, "ramGo": 2, "diskGo": 20}
+        f"/v1/vms/{vid}/redimensionnement", json={"vcpu": 2, "ramGo": 4, "diskGo": 40}
     )
     assert r.status_code == 202 and r.json()["statut"] == "done"
     r = await client.get(f"/v1/vms/{vid}")
-    assert r.json()["vcpu"] == 1 and r.json()["ramGo"] == 2 and r.json()["diskGo"] == 20
+    assert r.json()["vcpu"] == 2 and r.json()["ramGo"] == 4 and r.json()["diskGo"] == 40
     r = await client.post(f"/v1/vms/{vid}/redimensionnement", json={"diskGo": 15})
     assert r.status_code == 422
 
@@ -316,14 +361,22 @@ async def test_reconciliation_statut_vm_orpheline(client, monkeypatch):
     assert r.status_code == 200 and r.json()["statut"] == "running"
 
     # Nova ne connaît plus le serveur : suppression réelle déclenchée à la lecture.
+    # `corriger_amont` patch SIMULÉ + RÉEL : sur lab, `amont()` renvoie
+    # `ComputeOpenStack`, un patch du seul `ComputeSimule` serait sans effet (faux-positif).
     supprime = []
-    monkeypatch.setattr(
-        vms_service.ComputeSimule,
+    corriger_amont(
+        monkeypatch,
+        vms_service,
+        "ComputeSimule",
+        "ComputeOpenStack",
         "statut_serveur",
         lambda self, serveur_id, identifiants=None: "absente",
     )
-    monkeypatch.setattr(
-        vms_service.ComputeSimule,
+    corriger_amont(
+        monkeypatch,
+        vms_service,
+        "ComputeSimule",
+        "ComputeOpenStack",
         "supprimer_serveur",
         lambda self, serveur_id: supprime.append(serveur_id),
     )
@@ -349,14 +402,20 @@ async def test_reconciliation_vm_orpheline_nova_deleted_pas_supprimee_attendu(cl
     espace_id = await _espace_demo(client)
     vid = await _creer_vm(client, espace_id, "vm-nova-deleted")
 
-    monkeypatch.setattr(
-        vms_service.ComputeSimule,
+    corriger_amont(
+        monkeypatch,
+        vms_service,
+        "ComputeSimule",
+        "ComputeOpenStack",
         "statut_serveur",
         lambda self, serveur_id, identifiants=None: "DELETED",
     )
     supprime = []
-    monkeypatch.setattr(
-        vms_service.ComputeSimule,
+    corriger_amont(
+        monkeypatch,
+        vms_service,
+        "ComputeSimule",
+        "ComputeOpenStack",
         "supprimer_serveur",
         lambda self, serveur_id: supprime.append(serveur_id),
     )
@@ -380,12 +439,16 @@ async def test_reconciliation_vm_orpheline_nova_error_pas_supprimee(client, monk
     def _interdit(self, serveur_id):
         raise AssertionError("Un serveur Nova `ERROR` existe : jamais supprimé automatiquement")
 
-    monkeypatch.setattr(
-        vms_service.ComputeSimule,
+    corriger_amont(
+        monkeypatch,
+        vms_service,
+        "ComputeSimule",
+        "ComputeOpenStack",
         "statut_serveur",
         lambda self, serveur_id, identifiants=None: "ERROR",
     )
-    monkeypatch.setattr(vms_service.ComputeSimule, "supprimer_serveur", _interdit)
+    corriger_amont(monkeypatch, vms_service, "ComputeSimule", "ComputeOpenStack",
+                   "supprimer_serveur", _interdit)
     r = await client.get(f"/v1/vms/{vid}")
     assert r.status_code == 200 and r.json()["statut"] == "error"
     r = await client.get("/v1/vms", params={"statut": "error"})
@@ -407,12 +470,16 @@ async def test_reconciliation_vm_orpheline_zone_vps_protegee(client, monkeypatch
         raise AssertionError("L'espace vps-zone n'est jamais supprimé automatiquement")
 
     monkeypatch.setattr(espaces.service, "ESPACE_ZONE_VPS_ID", espace_id)
-    monkeypatch.setattr(
-        vms_service.ComputeSimule,
+    corriger_amont(
+        monkeypatch,
+        vms_service,
+        "ComputeSimule",
+        "ComputeOpenStack",
         "statut_serveur",
         lambda self, serveur_id, identifiants=None: "absente",
     )
-    monkeypatch.setattr(vms_service.ComputeSimule, "supprimer_serveur", _interdit)
+    corriger_amont(monkeypatch, vms_service, "ComputeSimule", "ComputeOpenStack",
+                   "supprimer_serveur", _interdit)
     r = await client.get(f"/v1/vms/{vid}")
     assert r.status_code == 200 and r.json()["statut"] == "error"
     r = await client.get("/v1/vms", params={"statut": "error"})
@@ -447,12 +514,16 @@ async def test_reconciliation_vm_orpheline_suppression_deja_en_vol(client, monke
     def _interdit(self, serveur_id):
         raise AssertionError("Suppression déjà en vol : la réconciliation ne redéclenche pas")
 
-    monkeypatch.setattr(
-        vms_service.ComputeSimule,
+    corriger_amont(
+        monkeypatch,
+        vms_service,
+        "ComputeSimule",
+        "ComputeOpenStack",
         "statut_serveur",
         lambda self, serveur_id, identifiants=None: "absente",
     )
-    monkeypatch.setattr(vms_service.ComputeSimule, "supprimer_serveur", _interdit)
+    corriger_amont(monkeypatch, vms_service, "ComputeSimule", "ComputeOpenStack",
+                   "supprimer_serveur", _interdit)
     r = await client.get(f"/v1/vms/{vid}")
     assert r.status_code == 200 and r.json()["statut"] == "error"
     r = await client.get("/v1/vms", params={"statut": "error"})
@@ -467,8 +538,11 @@ async def test_reconciliation_statut_vm_shutoff_pas_un_orphelin(client, monkeypa
 
     espace_id = await _espace_demo(client)
     vid = await _creer_vm(client, espace_id, "vm-shutoff")
-    monkeypatch.setattr(
-        vms_service.ComputeSimule,
+    corriger_amont(
+        monkeypatch,
+        vms_service,
+        "ComputeSimule",
+        "ComputeOpenStack",
         "statut_serveur",
         lambda self, serveur_id, identifiants=None: "SHUTOFF",
     )
@@ -494,6 +568,7 @@ async def test_reconciliation_vm_sans_serveur_id(client, monkeypatch):
         raise AssertionError("Nova ne doit pas être interrogé sans secret serveur_id")
 
     monkeypatch.setattr(vms_service.depot, "secrets", _secrets_vides)
-    monkeypatch.setattr(vms_service.ComputeSimule, "statut_serveur", _interdit)
+    corriger_amont(monkeypatch, vms_service, "ComputeSimule", "ComputeOpenStack",
+                   "statut_serveur", _interdit)
     r = await client.get(f"/v1/vms/{vid}")
     assert r.status_code == 200 and r.json()["statut"] == "running"

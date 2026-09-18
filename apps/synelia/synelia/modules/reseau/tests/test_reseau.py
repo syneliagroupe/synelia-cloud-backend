@@ -2,8 +2,78 @@
 
 import ipaddress
 
+from synelia_testing import (
+    connexion_lab,
+    ignorer_si_fip_epuise,
+    ignorer_si_octavia_casse,
+    sur_lab_reel,
+)
+
 ESPACE = "espace-demo-abj"
 VM = "vm-demo-web"
+
+
+def _neutron():
+    """Connexion Neutron du lab réel, ou `None` hors lab : les assertions d'impact
+    amont sont ignorées en simulé, exigées sur lab."""
+    if not sur_lab_reel():
+        return None
+    c = connexion_lab()
+    assert c is not None, "lab réel injoignable"
+    return c
+
+
+def _affirmer_reseau_neutron(nom: str):
+    c = _neutron()
+    if c is None:
+        return
+    assert c.network.find_network(nom, ignore_missing=True) is not None, (
+        f"réseau Neutron {nom!r} introuvable : création sans impact OpenStack"
+    )
+
+
+def _affirmer_reseau_neutron_absent(nom: str):
+    c = _neutron()
+    if c is None:
+        return
+    assert c.network.find_network(nom, ignore_missing=True) is None, (
+        f"réseau Neutron {nom!r} toujours présent : suppression sans impact OpenStack"
+    )
+
+
+def _affirmer_fip_neutron(adresse: str):
+    c = _neutron()
+    if c is None:
+        return
+    fips = list(c.network.ips(floating_ip_address=adresse))
+    assert fips, f"IP flottante Neutron {adresse!r} introuvable : allocation sans impact"
+
+
+def _affirmer_fip_neutron_absente(adresse: str):
+    c = _neutron()
+    if c is None:
+        return
+    assert not list(c.network.ips(floating_ip_address=adresse)), (
+        f"IP flottante Neutron {adresse!r} toujours présente : suppression sans impact"
+    )
+
+
+def _affirmer_groupe_neutron(nom: str):
+    c = _neutron()
+    if c is None:
+        return
+    assert c.network.find_security_group(nom, ignore_missing=True) is not None, (
+        f"groupe Neutron {nom!r} introuvable : création sans impact OpenStack"
+    )
+
+
+def _affirmer_groupe_neutron_absent(nom: str):
+    c = _neutron()
+    if c is None:
+        return
+    assert c.network.find_security_group(nom, ignore_missing=True) is None, (
+        f"groupe Neutron {nom!r} toujours présent : suppression sans impact OpenStack"
+    )
 
 
 def _adresse_ip_valide(adresse: str) -> bool:
@@ -73,6 +143,7 @@ async def test_cycle_reseau(client):
     assert r.status_code == 201, r.text
     rid = r.json()["id"]
     assert r.json()["cidr"] == "10.50.0.0/16"
+    _affirmer_reseau_neutron("net-prod")
 
     r = await client.get("/v1/reseaux")
     assert r.status_code == 200 and any(x["id"] == rid for x in r.json()["donnees"])
@@ -87,6 +158,7 @@ async def test_cycle_reseau(client):
 
     r = await client.delete(f"/v1/reseaux/{rid}", params={"confirmation": "net-prod-2"})
     assert r.status_code == 204
+    _affirmer_reseau_neutron_absent("net-prod-2")
 
 
 async def test_reseau_cidr_invalide(client):
@@ -102,11 +174,13 @@ async def test_reseau_nom_deja_pris(client):
 
 # ── IP publiques ───────────────────────────────────────────────────────────
 async def test_cycle_ip(client):
+    ignorer_si_fip_epuise()
     r = await _creer_ip(client)
     assert r.status_code == 201, r.text
     ip = r.json()
     ipid = ip["id"]
     assert _adresse_ip_valide(ip["adresse"]), ip["adresse"]
+    _affirmer_fip_neutron(ip["adresse"])
 
     r = await client.get("/v1/ips")
     assert r.status_code == 200 and any(x["id"] == ipid for x in r.json()["donnees"])
@@ -118,9 +192,11 @@ async def test_cycle_ip(client):
 
     r = await client.delete(f"/v1/ips/{ipid}", params={"confirmation": ip["adresse"]})
     assert r.status_code == 204
+    _affirmer_fip_neutron_absente(ip["adresse"])
 
 
 async def test_ip_allocation_incrementale(client):
+    ignorer_si_fip_epuise()
     r1 = await _creer_ip(client)
     assert r1.status_code == 201
     a1 = r1.json()["adresse"]
@@ -131,6 +207,7 @@ async def test_ip_allocation_incrementale(client):
 
 
 async def test_attacher_detacher_ip(client):
+    ignorer_si_fip_epuise()
     r = await _creer_ip(client)
     ipid = r.json()["id"]
 
@@ -146,6 +223,7 @@ async def test_attacher_detacher_ip(client):
 
 
 async def test_attacher_ip_vm_introuvable(client):
+    ignorer_si_fip_epuise()
     r = await _creer_ip(client)
     ipid = r.json()["id"]
     r = await client.put(f"/v1/ips/{ipid}/attachement", json={"cibleId": "vm-inconnu"})
@@ -153,6 +231,8 @@ async def test_attacher_ip_vm_introuvable(client):
 
 
 async def test_attacher_ip_load_balancer(client):
+    ignorer_si_octavia_casse()
+    ignorer_si_fip_epuise()
     # Cible documentée par le contrat (« VM, load balancer ou passerelle ») mais qui échouait
     # jusqu'ici avec un 404 « Vm ... introuvable » : le routeur résolvait toujours la cible
     # comme une VM, quel que soit son type réel.
@@ -176,6 +256,7 @@ async def test_attacher_ip_load_balancer(client):
 
 
 async def test_attacher_ip_passerelle_non_portee(client):
+    ignorer_si_fip_epuise()
     # La passerelle (routeur) d'un Espace a déjà sa propre sortie externe et ne peut pas, à la
     # différence d'une VM ou d'un LB, recevoir une IP flottante supplémentaire côté Neutron
     # (constaté en direct sur le lab réel) — 422 explicite plutôt qu'un faux succès ou un 404
@@ -192,6 +273,7 @@ async def test_cycle_groupe_securite(client):
     assert r.status_code == 201, r.text
     gid = r.json()["id"]
     assert r.json()["defaultPolicy"]["ingress"] == "deny"
+    _affirmer_groupe_neutron("sg-web")
 
     r = await client.get("/v1/groupes-securite")
     assert r.status_code == 200 and r.json()["pagination"]["total"] == 1
@@ -240,10 +322,12 @@ async def test_cycle_groupe_securite(client):
 
     r = await client.delete(f"/v1/groupes-securite/{gid}", params={"confirmation": "sg-web"})
     assert r.status_code == 204
+    _affirmer_groupe_neutron_absent("sg-web")
 
 
 # ── Load balancers ─────────────────────────────────────────────────────────
 async def test_cycle_load_balancer(client):
+    ignorer_si_octavia_casse()
     r = await _creer_lb(client)
     assert r.status_code == 202, r.text
     travail = r.json()
