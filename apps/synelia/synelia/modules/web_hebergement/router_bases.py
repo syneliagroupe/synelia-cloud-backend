@@ -16,12 +16,12 @@ from synelia.modules.web_hebergement.service import (
     depot_bases,
     executer_commande_vps,
     executer_sql_bases,
-    sql_creer_base,
-    sql_creer_utilisateur,
-    sql_mot_de_passe_utilisateur,
-    sql_rotation_root,
-    sql_supprimer_base,
-    sql_supprimer_utilisateur,
+    ordres_creer_base,
+    ordres_creer_utilisateur,
+    ordres_mot_de_passe_utilisateur,
+    ordres_rotation_root,
+    ordres_supprimer_base,
+    ordres_supprimer_utilisateur,
 )
 from synelia.travaux import demarrer_travail
 
@@ -93,9 +93,9 @@ async def creer_base_hebergement(
     # ne laisse jamais une ligne fantôme (424 franc) ; en simulation (`SshSimule`),
     # no-op documenté et la ligne est posée comme avant. Redis n'a pas de bases
     # nommées : 422 franc via `sql_creer_base`.
-    ordres = sql_creer_base(s.moteur, corps.nom, corps.jeuCaracteres)
+    ordres = ordres_creer_base(s.moteur, corps.nom, corps.jeuCaracteres)
     if corps.utilisateur:
-        ordres += sql_creer_utilisateur(
+        ordres += ordres_creer_utilisateur(
             s.moteur,
             corps.utilisateur.nom,
             corps.utilisateur.motDePasse,
@@ -113,7 +113,7 @@ async def creer_base_hebergement(
         id=nouvel_id(),
         hebergementId=s.hebergementId,
         nom=corps.nom,
-        moteur="mariadb" if s.moteur == "mariadb" else "postgresql",
+        moteur=s.moteur,
         version=s.version,
         tailleMo=0.0,
         jeuCaracteres=corps.jeuCaracteres or "utf8mb4",
@@ -164,7 +164,9 @@ async def supprimer_base_hebergement(
     exiger_confirmation(baseNom, confirmation)
     if not any(b.nom == baseNom for b in s.bases):
         raise erreurs.introuvable("Base", baseNom)
-    await executer_sql_bases(ctx, s.hebergementId, s.moteur, sql_supprimer_base(s.moteur, baseNom))
+    await executer_sql_bases(
+        ctx, s.hebergementId, s.moteur, ordres_supprimer_base(s.moteur, baseNom)
+    )
     reste = [b for b in s.bases if b.nom != baseNom]
     await depot_bases.remplacer(
         ctx,
@@ -219,6 +221,7 @@ async def exporter_base_hebergement(
         baseNom,
         cible_type="web_serveur_bases",
         cible_id=serveurId,
+        entree={"base": baseNom, "format": corps.format or "sql"},
         etapes=[
             {"nom": "Dump de la base", "dureeS": 8},
             {"nom": "Compresser et archiver", "dureeS": 5},
@@ -252,7 +255,7 @@ async def rotation_mot_de_passe_serveur(
         await executer_commande_vps(ctx, s.hebergementId, commande_redis_rotation(ancien, nouveau))
     else:
         await executer_sql_bases(
-            ctx, s.hebergementId, s.moteur, sql_rotation_root(s.moteur, nouveau)
+            ctx, s.hebergementId, s.moteur, ordres_rotation_root(s.moteur, nouveau)
         )
     await depot.definir_secrets(ctx, s.hebergementId, {f"mdp_bases_{s.moteur}": nouveau})
     await journaliser(
@@ -295,6 +298,7 @@ async def importer_base_hebergement(
         baseNom,
         cible_type="web_serveur_bases",
         cible_id=serveurId,
+        entree={"base": baseNom, "archiveId": corps.archiveId},
         etapes=[
             {"nom": "Télécharger l'archive", "dureeS": 6},
             {"nom": "Restaurer dans la base", "dureeS": 25},
@@ -326,7 +330,7 @@ async def creer_utilisateur_base_hebergement(
         ctx,
         s.hebergementId,
         s.moteur,
-        sql_creer_utilisateur(s.moteur, corps.nom, corps.motDePasse, corps.base, corps.droits),
+        ordres_creer_utilisateur(s.moteur, corps.nom, corps.motDePasse, corps.base, corps.droits),
     )
     utilisateur = m.Utilisateur2(nom=corps.nom, droits=corps.droits, base=corps.base)
     maj = s.model_copy(update={"utilisateurs": [*s.utilisateurs, utilisateur]})
@@ -366,7 +370,7 @@ async def modifier_utilisateur_base_hebergement(
             ctx,
             s.hebergementId,
             s.moteur,
-            sql_mot_de_passe_utilisateur(s.moteur, utilisateurNom, corps.motDePasse),
+            ordres_mot_de_passe_utilisateur(s.moteur, utilisateurNom, corps.motDePasse),
         )
     if corps.droits:
         cible = cible.model_copy(update={"droits": corps.droits})
@@ -398,7 +402,7 @@ async def supprimer_utilisateur_base_hebergement(
     if not any(u.nom == utilisateurNom for u in s.utilisateurs):
         raise erreurs.introuvable("Utilisateur", utilisateurNom)
     await executer_sql_bases(
-        ctx, s.hebergementId, s.moteur, sql_supprimer_utilisateur(s.moteur, utilisateurNom)
+        ctx, s.hebergementId, s.moteur, ordres_supprimer_utilisateur(s.moteur, utilisateurNom)
     )
     maj = s.model_copy(
         update={"utilisateurs": [u for u in s.utilisateurs if u.nom != utilisateurNom]}

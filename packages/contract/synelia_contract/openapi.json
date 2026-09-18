@@ -41809,7 +41809,9 @@
             "type": "string",
             "enum": [
               "mariadb",
-              "postgresql"
+              "mysql",
+              "postgresql",
+              "mongodb"
             ]
           },
           "version": {
@@ -52534,7 +52536,9 @@
             "type": "string",
             "enum": [
               "mariadb",
+              "mysql",
               "postgresql",
+              "mongodb",
               "redis"
             ]
           },

@@ -330,9 +330,16 @@ async def test_bases(client_org):
     r = await client_org.get(f"{DES}/web/bases", params={"hebergementId": hid})
     assert r.status_code == 200
     serveurs = r.json()["donnees"]
-    # Un serveur par moteur partagé du VPS (mariadb + postgresql + redis), tous
+    # Un serveur par moteur partagé du VPS (mariadb + mysql + postgresql + mongodb
+    # + redis), tous
     # boucle locale, jamais exposés.
-    assert {s["moteur"] for s in serveurs} == {"mariadb", "postgresql", "redis"}
+    assert {s["moteur"] for s in serveurs} == {
+        "mariadb",
+        "mysql",
+        "postgresql",
+        "mongodb",
+        "redis",
+    }
     assert all(s["hoteInterne"] == "localhost" for s in serveurs)
     sid = next(s["id"] for s in serveurs if s["moteur"] == "mariadb")
 
@@ -349,10 +356,15 @@ async def test_bases(client_org):
     r = await client_org.post(f"{DES}/web/bases/{sid}/bases/wpdb/export", json={"format": "sql"})
     assert r.status_code == 202, r.text
     assert r.json()["statut"] == "done"
+    archive = (
+        " ".join(t.get("message") or "" for t in r.json()["taches"])
+        .split("Archive déposée :", 1)[1]
+        .strip()
+    )
 
     r = await client_org.post(
         f"{DES}/web/bases/{sid}/bases/wpdb/import",
-        json={"archiveId": "arch-123"},
+        json={"archiveId": archive},
         params={"confirmation": "wpdb"},
     )
     assert r.status_code == 202, r.text
@@ -443,13 +455,19 @@ async def test_comptes_fichiers_builders_ftp_sftp():
 
 
 async def test_rotation_mot_de_passe_serveurs(client_org):
-    # Chaque moteur (mariadb + postgresql + redis) expose une rotation du mot de passe
+    # Chaque moteur (mariadb + mysql + postgresql + mongodb + redis) expose une rotation
     # root, renvoyé une seule fois. En simulation : secret renouvelé sans SSH.
     hid = (await _creer_hebergement(client_org))["id"]
     serveurs = (await client_org.get(f"{DES}/web/bases", params={"hebergementId": hid})).json()[
         "donnees"
     ]
-    assert {s["moteur"] for s in serveurs} == {"mariadb", "postgresql", "redis"}
+    assert {s["moteur"] for s in serveurs} == {
+        "mariadb",
+        "mysql",
+        "postgresql",
+        "mongodb",
+        "redis",
+    }
     for s in serveurs:
         r = await client_org.post(f"{DES}/web/bases/{s['id']}/rotation-mot-de-passe")
         assert r.status_code == 200, r.text
@@ -465,10 +483,12 @@ def test_compose_bases_moteurs_partages():
     from synelia.modules.web_hebergement.service import _compose_bases, construire_cloud_init
 
     assert _compose_bases(None) == ""
-    mdp = {"mariadb": "m1", "postgresql": "m2", "redis": "m3"}
+    mdp = {"mariadb": "m1", "mysql": "m4", "postgresql": "m2", "mongodb": "m5", "redis": "m3"}
     texte = _compose_bases(mdp)
     assert "image: mariadb:11" in texte and "MARIADB_ROOT_PASSWORD: m1" in texte
+    assert "image: mysql:8" in texte and "MYSQL_ROOT_PASSWORD" in texte
     assert "image: postgres:16" in texte and "POSTGRES_PASSWORD: m2" in texte
+    assert "image: mongo:7" in texte and "MONGO_INITDB_ROOT_PASSWORD" in texte
     # Redis : mot de passe dans le fichier mono-usage, jamais en variable (cf. F841).
     assert "image: redis:7" in texte and "redis-server /etc/redis/redis.conf" in texte
     assert "requirepass" not in texte
@@ -533,6 +553,12 @@ def test_sql_bases_moteurs():
         "IDENTIFIED BY 'it''s';"
         in heb.sql_creer_utilisateur("mariadb", "u", "it's", "b", "complet")[0]
     )
+    # MySQL : mêmes ordres que MariaDB (même dialecte), moteur déployé à part.
+    assert heb.sql_creer_base("mysql", "wpdb") == [
+        "CREATE DATABASE `wpdb` CHARACTER SET = 'utf8mb4';"
+    ]
+    assert heb.sql_rotation_root("mysql", "n3w") == heb.sql_rotation_root("mariadb", "n3w")
+    assert "bases-mysql" in heb.commande_sql_bases("mysql", "r00t", ["SELECT 1;"])
     # Redis n'a pas de bases nommées : 422 franc, pas de faux succès.
     try:
         heb.sql_creer_base("redis", "cache")
@@ -556,6 +582,108 @@ def test_sql_bases_moteurs():
     rot = heb.commande_redis_rotation("old", "new")
     assert "CONFIG SET requirepass 'new'" in rot and "CONFIG REWRITE" in rot
     assert "redis.conf" in rot
+
+
+def test_mongodb_ordres_et_export_import_builders():
+    # MongoDB : pas de SQL — ordres mongosh (JS) ; identifiants bornés, littéraux échappés.
+    # Export/import : dump et restore réels par moteur (base64 sur le canal SSH).
+    from synelia.modules.web_hebergement import service as heb
+    from synelia_kernel import erreurs as _e
+
+    assert heb.mongo_creer_base("mongodb", "appdb") == [
+        "db.getSiblingDB(\"appdb\").createCollection('_synelia');"
+    ]
+    assert heb.mongo_supprimer_base("mongodb", "appdb") == [
+        'db.getSiblingDB("appdb").dropDatabase();'
+    ]
+    u = heb.mongo_creer_utilisateur("mongodb", "userdb", "s3cret", "appdb", "complet")[0]
+    assert 'user: "userdb"' in u and 'role: "readWrite"' in u and 'db: "appdb"' in u
+    assert 'role: "read"' in heb.mongo_creer_utilisateur("mongodb", "u", "p", "b", "lecture")[0]
+    # Guillemet dans un mot de passe : échappé en JS (pas de fuite hors littéral).
+    assert '\\"' in heb.mongo_mot_de_passe_utilisateur("mongodb", "u", 'a"b')[0]
+
+    # Dispatch générique : les routeurs ne connaissent pas le dialecte.
+    assert heb.ordres_creer_base("mysql", "b")[0].startswith("CREATE DATABASE")
+    assert heb.ordres_creer_base("mongodb", "b")[0].startswith("db.getSiblingDB")
+    assert "mongosh" in heb.commande_bases("mongodb", "r00t", ["db.version();"])
+    assert "mariadb-dump" in heb.commande_export_base("mariadb", "b", "r00t")
+    assert "mysqldump" in heb.commande_export_base("mysql", "b", "r00t")
+    assert "pg_dump" in heb.commande_export_base("postgresql", "b", "r00t")
+    assert "mongodump" in heb.commande_export_base("mongodb", "b", "r00t")
+    assert "base64 -w0" in heb.commande_export_base("mariadb", "b", "r00t")
+    assert "createdb" in heb.commande_import_base("postgresql", "b", "r00t")
+    assert "mongorestore" in heb.commande_import_base("mongodb", "b", "r00t")
+    # Redis : export/import sans objet (pas de bases nommées) → 422 franc.
+    for appel in (
+        lambda: heb.commande_export_base("redis", "b", "r00t"),
+        lambda: heb.commande_import_base("redis", "b", "r00t"),
+    ):
+        try:
+            appel()
+        except _e.AppError as exc:
+            assert exc.code == "non_porte"
+        else:
+            raise AssertionError("redis accepté en export/import")
+    # Identifiant de base invalide : 422, jamais interpolé.
+    try:
+        heb.commande_export_base("mariadb", "a;b", "r00t")
+    except _e.AppError as exc:
+        assert exc.code == "validation"
+    else:
+        raise AssertionError("identifiant invalide accepté")
+
+
+async def test_export_import_base_reels_simules(client_org):
+    # Flux export → archive → import, de bout en bout sans infra : en simulé, le dump est
+    # factice mais réellement déposé/relu dans le stockage objet (MinioSimule en mémoire).
+    from synelia.modules.web_hebergement.service import BUCKET_SAUVEGARDES_BASES
+
+    hid = (await _creer_hebergement(client_org))["id"]
+    serveurs = (await client_org.get(f"{DES}/web/bases", params={"hebergementId": hid})).json()[
+        "donnees"
+    ]
+    sid = next(s["id"] for s in serveurs if s["moteur"] == "mariadb")
+    r = await client_org.post(f"{DES}/web/bases/{sid}/bases", json={"nom": "exportdb"})
+    assert r.status_code == 201, r.text
+
+    r = await client_org.post(
+        f"{DES}/web/bases/{sid}/bases/exportdb/export", json={"format": "sql"}
+    )
+    assert r.status_code == 202, r.text
+    travail = r.json()
+    assert travail["statut"] == "done", travail
+    messages = " ".join(t.get("message") or "" for t in travail["taches"])
+    assert "Archive déposée" in messages, travail
+    archive = messages.split("Archive déposée :", 1)[1].strip()
+    assert archive.startswith(f"bases/{hid}/exportdb-")
+
+    from synelia.modules.stockage.service import amont_objet
+
+    contenu = amont_objet().recuperer_objet(BUCKET_SAUVEGARDES_BASES, archive)
+    assert contenu, "archive absente du stockage objet"
+
+    r = await client_org.post(
+        f"{DES}/web/bases/{sid}/bases/exportdb/import",
+        json={"archiveId": archive},
+        params={"confirmation": "exportdb"},
+    )
+    assert r.status_code == 202, r.text
+    assert r.json()["statut"] == "done", r.json()
+
+    # Archive inconnue : 404 franc, pas un faux succès.
+    r = await client_org.post(
+        f"{DES}/web/bases/{sid}/bases/exportdb/import",
+        json={"archiveId": "bases/inexistante.sql"},
+        params={"confirmation": "exportdb"},
+    )
+    assert r.status_code == 202, r.text
+    assert r.json()["statut"] == "failed", r.json()
+
+    # Redis : pas de bases nommées — l'API refuse la base inconnue (404) ; le refus
+    # franc « non_porte » est vérifié au niveau des builders ci-dessus.
+    sid_redis = next(s["id"] for s in serveurs if s["moteur"] == "redis")
+    r = await client_org.post(f"{DES}/web/bases/{sid_redis}/bases/cache/export", json={})
+    assert r.status_code == 404
 
 
 async def test_reconciliation_statut_hebergement_orphelin(client_org, monkeypatch):

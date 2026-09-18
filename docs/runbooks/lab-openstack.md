@@ -342,3 +342,32 @@ depuis la base après chaque création/modification/suppression de compte, les *
 `running`) puis un vrai login `sftp -P 2222 <utilisateur>@<ip>` / `ftp <ip>`.
 Images et formats d'env retenus d'après leur documentation publique — à confirmer au premier
 déploiement réel (un `docker logs` tranche).
+
+## Bases du VPS (hébergement Web) : 5 moteurs + export/import réels
+
+Chaque hébergement reçoit **cinq** moteurs partagés en conteneurs Docker (cloud-init
+`construire_cloud_init` / `_compose_bases`), sans ports publiés (joignables seulement depuis
+le réseau Docker `synelia` de la VM, donc par les sites) :
+`bases-mariadb` (`mariadb:11`), `bases-mysql` (`mysql:8`), `bases-postgres` (`postgres:16`),
+`bases-mongodb` (`mongo:7`, root via `MONGO_INITDB_ROOT_*`), `bases-redis` (`redis:7`).
+Un `ServeurBases` est exposé par moteur (l'interface « Databases » les liste tous).
+
+**CRUD réel** (via SSH dans le conteneur, `executer_sql_bases` → `commande_bases`) :
+- SQL (mariadb/mysql/postgresql) : `CREATE/DROP DATABASE`, `CREATE USER`/`GRANT`/`ALTER`/`DROP`,
+  rotation root (`ALTER USER`).
+- MongoDB : ordres **mongosh** (`db.getSiblingDB(...).createCollection/dropDatabase/createUser/
+  updateUser/dropUser`, `mongorestore`/`mongodump`) — mêmes endpoints, dialecte JS.
+- Redis : pas de bases nommées → 422 franc sur base/utilisateur ; seule la rotation
+  `requirepass` s'applique (`CONFIG SET` + `REWRITE`).
+
+**Export/import réels** (`base.export`/`base.import`) : dump produit dans le conteneur
+(`mariadb-dump`/`mysqldump`/`pg_dump`/`mongodump`), encodé base64 sur le canal SSH, décodé
+côté backend puis déposé dans MinIO (bucket `synelia-sauvegardes-bases`, clé
+`bases/<hebergement>/<base>-<horodatage>.<ext>` = `archiveId`). L'import relit l'archive de
+MinIO, l'écrit en base64 sur le VPS (SFTP) puis restaure (`mariadb`/`mysql`/`psql`/`mongorestore`).
+Archive absente : 404 ; Redis : 422. En simulation, un contenu factice est réellement
+déposé/relu dans le stockage objet en mémoire (le flux export→import reste testable sans infra).
+
+**À valider en lab** (VPS non routable depuis le poste de test) : créer une base, y écrire une
+ligne via `docker compose exec`, exporter, supprimer la base, importer l'archive, vérifier la
+ligne restaurée — pour chacun des 4 moteurs concernés.

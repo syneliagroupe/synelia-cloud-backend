@@ -289,7 +289,7 @@ class BaseHebergement(BaseModel):
     id: str
     hebergementId: str
     nom: str
-    moteur: Literal["mariadb", "postgresql"]
+    moteur: Literal["mariadb", "mysql", "postgresql", "mongodb"]
     version: str
     tailleMo: float
     jeuCaracteres: str
@@ -3375,7 +3375,7 @@ class ServeurBases(BaseModel):
     id: str
     hebergementId: str
     serveur: str
-    moteur: Literal["mariadb", "postgresql", "redis"]
+    moteur: Literal["mariadb", "mysql", "postgresql", "mongodb", "redis"]
     version: str
     actif: Annotated[bool, Field(description="Un moteur non activé est proposé, pas facturé.")]
     hoteInterne: Annotated[
