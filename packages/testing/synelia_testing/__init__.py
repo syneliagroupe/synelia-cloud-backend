@@ -22,6 +22,10 @@ def configurer_env() -> str:
     os.environ["SYNELIA_SEED_ADMIN_EMAIL"] = ADMIN_EMAIL
     os.environ["SYNELIA_SEED_ADMIN_MOT_DE_PASSE"] = ADMIN_MDP
     os.environ["SYNELIA_TRAVAUX_EN_LIGNE"] = "1"
+    # Conteneur api lab a Temporal + worker : sans ceci `demarrer_travail` préfère Temporal
+    # (statut `queued`) et le worker lit Postgres, pas le SQLite éphémère du test → faux échecs.
+    os.environ.pop("SYNELIA_TEMPORAL_ADRESSE", None)
+    os.environ.pop("SYNELIA_TRAVAUX_WORKER", None)
     os.environ.setdefault("SYNELIA_SEED_DEMO", "true")
     return d
 

@@ -175,14 +175,13 @@ async def demarrer_travail(
     ctx.session.add(travail)
     await ctx.session.flush()
 
-    if reglages().temporal_adresse:
+    if _en_ligne():
+        await _executer(ctx, travail, depuis=0)
+    elif reglages().temporal_adresse:
         from synelia.travaux import temporal  # import paresseux
 
         await temporal.lancer(travail)
         return vers_contrat(travail)
-
-    if _en_ligne():
-        await _executer(ctx, travail, depuis=0)
     elif _mode_worker():
         # `synelia worker` (travaux/local.py) rejoue ce travail hors requête HTTP : il a besoin
         # du même acteur que `create_task` aujourd'hui pour que les lignes d'audit écrites par

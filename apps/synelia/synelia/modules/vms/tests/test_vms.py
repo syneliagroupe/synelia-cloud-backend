@@ -9,7 +9,7 @@ async def _espace_demo(client) -> str:
     return demo["id"]
 
 
-async def _gabarit_id(client, nom: str = "medium") -> str:
+async def _gabarit_id(client, nom: str = "small") -> str:
     r = await client.get("/v1/catalogue/gabarits")
     assert r.status_code == 200
     gabarits = r.json()
@@ -53,7 +53,7 @@ async def test_creer_et_lister_vm(client):
     vm = r.json()
     assert vm["statut"] == "running"
     assert vm["espaceId"] == espace_id
-    assert vm["vcpu"] == 2 and vm["ramGo"] == 4
+    assert vm["vcpu"] == 1 and vm["ramGo"] == 2
     assert any(i["type"] == "privee" for i in vm["ips"])
 
 
@@ -201,15 +201,23 @@ async def test_migration_vm(client):
 
 
 async def test_redimensionner_vm(client):
+    # Lab: medium/large → NoValidHost. micro→small stays schedulable.
     espace_id = await _espace_demo(client)
-    vid = await _creer_vm(client, espace_id, "resize")
+    gabarit = await _gabarit_id(client, "micro")
+    image_id = await _image_id(client)
     r = await client.post(
-        f"/v1/vms/{vid}/redimensionnement", json={"vcpu": 4, "ramGo": 8, "diskGo": 80}
+        "/v1/vms",
+        json={"espaceId": espace_id, "nom": "resize", "imageId": image_id, "gabarit": gabarit},
+    )
+    assert r.status_code == 202 and r.json()["statut"] == "done"
+    vid = next(v["id"] for v in (await client.get("/v1/vms")).json()["donnees"] if v["nom"] == "resize")
+    r = await client.post(
+        f"/v1/vms/{vid}/redimensionnement", json={"vcpu": 1, "ramGo": 2, "diskGo": 20}
     )
     assert r.status_code == 202 and r.json()["statut"] == "done"
     r = await client.get(f"/v1/vms/{vid}")
-    assert r.json()["vcpu"] == 4 and r.json()["ramGo"] == 8 and r.json()["diskGo"] == 80
-    r = await client.post(f"/v1/vms/{vid}/redimensionnement", json={"diskGo": 40})
+    assert r.json()["vcpu"] == 1 and r.json()["ramGo"] == 2 and r.json()["diskGo"] == 20
+    r = await client.post(f"/v1/vms/{vid}/redimensionnement", json={"diskGo": 15})
     assert r.status_code == 422
 
 

@@ -68,7 +68,7 @@ services:
       # de bout en bout AUTH + quota + relais sans dépendre de Zimbra.
       SYNELIA_SMTP_RELAIS_AMONT_HOTE: mailpit
       SYNELIA_SMTP_RELAIS_AMONT_PORT: "1025"
-    ports: ["587:587"]
+    ports: ["127.0.0.1:2587:587"]
 
 volumes:
   pgdata: {}

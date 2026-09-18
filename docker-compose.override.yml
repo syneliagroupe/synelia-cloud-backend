@@ -1,0 +1,35 @@
+# Local lab overlay: inject .env into api+worker; keep Real OpenStack + connectors.
+# Preserves Cloud Platform openstack wiring; adds MinIO/Zimbra/relais SMTP.
+services:
+  api:
+    env_file: .env
+    environment:
+      SYNELIA_FOURNISSEUR: openstack
+      SYNELIA_OS_AUTH_URL: http://192.168.26.234:5000/v3
+      SYNELIA_OS_REGION: RegionOne
+      SYNELIA_MINIO_URL: http://minio:9000
+      SYNELIA_ZIMBRA_URL: https://zimbra:7071
+      SYNELIA_RELAIS_SMTP_HOTE: relais-smtp
+      SYNELIA_RELAIS_SMTP_PORT: "587"
+  worker:
+    env_file: .env
+    environment:
+      SYNELIA_FOURNISSEUR: openstack
+      SYNELIA_OS_AUTH_URL: http://192.168.26.234:5000/v3
+      SYNELIA_OS_REGION: RegionOne
+      SYNELIA_MINIO_URL: http://minio:9000
+      SYNELIA_ZIMBRA_URL: https://zimbra:7071
+      SYNELIA_RELAIS_SMTP_HOTE: relais-smtp
+      SYNELIA_RELAIS_SMTP_PORT: "587"
+  relais-smtp:
+    env_file: .env
+    environment:
+      SYNELIA_DATABASE_URL: postgresql+asyncpg://synelia:synelia@postgres:5432/synelia
+      SYNELIA_SMTP_RELAIS_HOTE: "0.0.0.0"
+      SYNELIA_SMTP_RELAIS_PORT: "587"
+      SYNELIA_SMTP_RELAIS_AMONT_HOTE: zimbra
+      SYNELIA_SMTP_RELAIS_AMONT_PORT: "587"
+    networks:
+      default:
+        aliases: [relais-smtp]
+    restart: unless-stopped

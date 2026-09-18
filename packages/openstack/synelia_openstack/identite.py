@@ -168,13 +168,15 @@ class IdentiteOpenStack(IdentiteSimule):
         dom = domaine_id or projet.domain_id
         nom = f"svc-{projet_id[:8]}"
         mdp = jeton_opaque(24)
+        # Recréer l'utilisateur de service plutôt que `update_user(password=…)` : sur ce lab
+        # Keystone, un user déjà existant après de nombreux rejeux pytest refusait ensuite
+        # l'auth v3password (401 sur /application_credentials) malgré le reset de mot de passe.
         user = c.identity.find_user(nom, domain_id=dom)
-        if user is None:
-            user = c.identity.create_user(
-                name=nom, password=mdp, domain_id=dom, enabled=True, description="service Synelia"
-            )
-        else:
-            c.identity.update_user(user, password=mdp)
+        if user is not None:
+            c.identity.delete_user(user.id, ignore_missing=True)
+        user = c.identity.create_user(
+            name=nom, password=mdp, domain_id=dom, enabled=True, description="service Synelia"
+        )
         role = c.identity.find_role("member") or c.identity.find_role("Member")
         c.identity.assign_project_role_to_user(projet, user, role)
         r = reglages()
@@ -189,9 +191,10 @@ class IdentiteOpenStack(IdentiteSimule):
             project_id=projet_id,
             region_name=r.os_region,
         )
-        ac = scope.identity.create_application_credential(
-            user=user.id, name=f"synelia-{projet_id[:8]}"
-        )
+        # Nom unique : évite le 409 Duplicate sur rejeu seed/pytest, et évite de lister/
+        # supprimer les AC (certains déploiements Keystone renvoient 401 sur ce list).
+        ac_name = f"synelia-{projet_id[:8]}-{nouvel_id()[:8]}"
+        ac = scope.identity.create_application_credential(user=user.id, name=ac_name)
         return {"id": ac.id, "secret": ac.secret, "utilisateur_id": user.id}
 
     def supprimer_projet(self, projet_id: str) -> None:
