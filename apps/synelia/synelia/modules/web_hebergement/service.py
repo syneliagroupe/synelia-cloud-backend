@@ -641,6 +641,164 @@ def ip_privee(hebergement_id: str) -> str:
     return f"10.{hash(hebergement_id) % 250}.0.{hash('web') % 250 + 2}"
 
 
+# ── Comptes FTP/SFTP (conteneurs Docker sur le VPS) ─────────────────────────
+# Le VPS héberge les serveurs de fichiers dans des conteneurs dédiés (projet
+# `/srv/synelia/fichiers`), comme les moteurs de bases et les sites : deux services
+# `sftp` (atmoz/sftp) et `ftp` (alpine-ftp-server), dont les comptes sont **déclaratifs**
+# — on régénère `users.conf`/`USERS` depuis la base puis `docker compose up -d`
+# (idempotent, recrée ce qui change). Chaque compte SFTP est chrooté dans SON dossier
+# (montage host → `/home/<utilisateur>`) : jamais l'arborescence entière du VPS.
+# Aucun mot de passe n'apparaît en ligne de commande (fichiers écrits par SSH, puis
+# compose les monte) ; les builders ci-dessous sont purs et testés hors infra.
+
+_PROTO_FICHIERS = ("ftp", "sftp", "ftps")
+
+
+def _racine_compte(racine: str | None) -> str:
+    """Chemin hôte exposé au compte : la racine demandée si elle vit déjà sous
+    `_RACINE_DOCKER`, sinon la racine web par défaut du VPS (le client ne connaît pas
+    l'arborescence interne du serveur)."""
+    if racine and racine.startswith(_RACINE_DOCKER):
+        return racine.rstrip("/")
+    if racine and not racine.startswith("/"):
+        return f"{_RACINE_DOCKER}/{racine.strip('/')}"
+    return f"{_RACINE_DOCKER}/www"
+
+
+def _utilisateur_sur(utilisateur: str) -> str:
+    """Nom d'utilisateur système sûr (charset borné) — jamais d'injection shell."""
+    import re
+
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", utilisateur or ""):
+        raise erreurs.validation(
+            "Nom d'utilisateur invalide (lettres, chiffres, `_`, `-` ; 32 max).",
+            champs={"utilisateur": utilisateur},
+        )
+    return utilisateur
+
+
+def construire_users_sftp(comptes: list[dict[str, Any]]) -> str:
+    """`users.conf` d'atmoz/sftp : `user:mot_de_passe:uid:gid` (uid/gid fixes pour que
+    les fichiers restent lisibles par les conteneurs applicatifs du VPS). Un compte sans
+    mot de passe (clés SSH seules) reçoit `e` (mot de passe vide, auth par clé)."""
+    lignes = []
+    for c in comptes:
+        if "sftp" not in (c.get("protocoles") or []):
+            continue
+        u = _utilisateur_sur(c["utilisateur"])
+        mdp = c.get("mot_de_passe") or "e"
+        lignes.append(f"{u}:{mdp}:1000:1000")
+    return "\n".join(lignes) + ("\n" if lignes else "")
+
+
+def construire_users_ftp(comptes: list[dict[str, Any]]) -> str:
+    """`USERS` d'alpine-ftp-server : `utilisateur|mot_de_passe|chemin`, séparés par `;`.
+    Un compte sans mot de passe n'est pas exposé en FTP (le protocole l'exige) — il reste
+    accessible en SFTP par clé."""
+    entrees = []
+    for c in comptes:
+        protos = c.get("protocoles") or []
+        if not ({"ftp", "ftps"} & set(protos)):
+            continue
+        if not c.get("mot_de_passe"):
+            continue
+        u = _utilisateur_sur(c["utilisateur"])
+        entrees.append(f"{u}|{c['mot_de_passe']}|{_racine_compte(c.get('racine'))}")
+    return ";".join(entrees)
+
+
+def _compose_fichiers(comptes: list[dict[str, Any]]) -> str:
+    """`docker-compose.yml` du projet `fichiers` : un conteneur SFTP chrooté par compte
+    (montage host → `/home/<utilisateur>`) et un conteneur FTP. Les comptes inactifs ne
+    figurent pas (retirer un compte = régénérer sans lui puis `up -d`)."""
+    sftp = [c for c in comptes if "sftp" in (c.get("protocoles") or [])]
+    ftp = [c for c in comptes if {"ftp", "ftps"} & set(c.get("protocoles") or [])]
+    volumes_sftp = "\n".join(
+        f"      - {_racine_compte(c.get('racine'))}:/home/{_utilisateur_sur(c['utilisateur'])}"
+        for c in sftp
+    )
+    services = ""
+    if sftp:
+        services += f"""  sftp:
+    image: atmoz/sftp:latest
+    restart: unless-stopped
+    ports:
+      - "2222:22"
+    volumes:
+      - {_RACINE_DOCKER}/fichiers/users.conf:/etc/sftp/users.conf:ro
+{volumes_sftp}
+
+"""
+    if ftp:
+        services += f"""  ftp:
+    image: delfer/alpine-ftp-server:latest
+    restart: unless-stopped
+    ports:
+      - "21:21"
+      - "21000-21010:21000-21010"
+    environment:
+      USERS: "{construire_users_ftp(comptes)}"
+    volumes:
+      - {_RACINE_DOCKER}:{_RACINE_DOCKER}
+
+"""
+    return "services:\n" + (services or "  # aucun compte de fichiers actif\n")
+
+
+def fichiers_comptes(comptes: list[dict[str, Any]]) -> dict[str, str]:
+    """Fichiers à écrire sur le VPS (chemin → contenu) pour le projet `fichiers` :
+    `users.conf` (SFTP) et `docker-compose.yml`. Écrits par SFTP (`ecrire_fichier`),
+    jamais interpolés dans une commande shell — un mot de passe ne doit pas apparaître
+    dans une ligne de commande distante (`ps`, journal d'exécution)."""
+    racine = f"{_RACINE_DOCKER}/fichiers"
+    return {
+        f"{racine}/users.conf": construire_users_sftp(comptes),
+        f"{racine}/docker-compose.yml": _compose_fichiers(comptes),
+    }
+
+
+def commande_demarrer_fichiers() -> str:
+    """Démarrage idempotent du projet `fichiers` (recrée ce qui a changé)."""
+    return (
+        f"mkdir -p {_RACINE_DOCKER}/fichiers && "
+        f"cd {_RACINE_DOCKER}/fichiers && docker compose up -d"
+    )
+
+
+async def appliquer_comptes_fichiers(ctx: Contexte, hebergement_id: str) -> None:
+    """Régénère et applique les comptes FTP/SFTP du VPS depuis la base (appelé après
+    toute création/modification/suppression de compte). `SshSimule` : no-op documenté ;
+    `SshReel` sans accès : échec franc (424) — jamais un compte annoncé sans serveur."""
+    comptes = []
+    for c in await depot_comptes.tous(ctx, parent_id=hebergement_id):
+        try:
+            secrets_c = await depot_comptes.secrets(ctx, c.id)
+        except Exception:  # noqa: BLE001
+            secrets_c = {}
+        comptes.append(
+            {
+                "utilisateur": c.utilisateur,
+                "mot_de_passe": secrets_c.get("mot_de_passe"),
+                "racine": c.racine,
+                "protocoles": c.protocoles,
+            }
+        )
+    if not isinstance(amont_ssh(), SshReel):
+        return
+    ip, cle_privee = await _acces_vps(ctx, hebergement_id)
+    ssh = amont_ssh()
+    for chemin, contenu in fichiers_comptes(comptes).items():
+        await asyncio.to_thread(ssh.ecrire_fichier, ip, cle_privee, chemin, contenu)
+    try:
+        await asyncio.to_thread(ssh.executer, ip, cle_privee, commande_demarrer_fichiers())
+    except Exception as exc:  # noqa: BLE001 — paramiko et co : 424 franc, pas 500
+        from synelia_kernel import erreurs as _e
+
+        if isinstance(exc, _e.AppError):
+            raise
+        raise erreurs.amont_indisponible("comptes de fichiers (SSH)", str(exc)[:200]) from None
+
+
 async def serveur_id(ctx: Contexte, hebergement_id: str, travail: Travail | None = None) -> str:
     """Identifiant Nova du serveur : dans les secrets (posé à la création), sinon le travail."""
     if travail and travail.contexte.get("serveur_id"):
@@ -1400,6 +1558,17 @@ class ExecuteurHebergementCreer(Executeur):
                 construire_serveur_bases_moteur(ctx, travail.cible_id or "", moteur),
                 parent_id=travail.cible_id,
             )
+        # Plan de sauvegarde de l'hébergement (VPS + domaine protégés par défaut) —
+        # sans lui, un client réel n'avait jamais de sauvegarde (seule la démo en
+        # recevait une, cf. `web_backup.service.assurer_plan_pour_hebergement`).
+        from synelia.modules.web_backup import service as backup_service
+
+        await backup_service.assurer_plan_pour_hebergement(
+            ctx,
+            travail.cible_id or "",
+            h.domaineProvisoire or h.domaine or h.serveur.nom,
+            h.serveur.nom,
+        )
         travail.contexte = {**travail.contexte, "serveur_bases_id": base.id}
         await depot.definir_statut(ctx, travail.cible_id or "", "en_ligne")
 

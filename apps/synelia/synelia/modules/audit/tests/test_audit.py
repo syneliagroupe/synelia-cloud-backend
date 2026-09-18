@@ -1,4 +1,9 @@
-"""Audit : journalisation des événements, filtres, export."""
+"""Audit : journalisation des événements, filtres, export.
+
+Reste sur `client` (admin plateforme) : ce fichier vérifie l'historique **seedé** par le
+peupleur de démo (2 entrées attendues). Une organisation cliente fraîche voit un journal
+vide mais fonctionnel — l'accès `org_admin` à `/v1/audit` est couvert par
+`test_rbac_client.py`."""
 
 from synelia.modules.audit import service
 

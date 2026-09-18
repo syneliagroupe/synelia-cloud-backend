@@ -62,6 +62,9 @@ async def test_consommation_couvre_volumes_lb_et_web_cloud(client):
     ).json()["total"]
     assert total_apres_lb > total_apres_volume, "un load balancer doit être facturé"
 
+    from synelia_testing import enregistrer_domaine
+
+    await enregistrer_domaine(client, "conso-web.test")
     r = await client.post(
         "/v1/web/hebergements",
         json={"palier": "pro", "site": "ABJ", "domaine": "conso-web.test"},

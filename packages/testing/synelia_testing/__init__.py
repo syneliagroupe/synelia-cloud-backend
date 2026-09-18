@@ -7,6 +7,7 @@ import shutil
 import tempfile
 import warnings
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from functools import lru_cache
 from typing import Any
 
@@ -258,6 +259,28 @@ async def forcer_code_verification(email: str, code: str = CODE_VERIFICATION_TES
         await s.commit()
 
 
+async def enregistrer_domaine(client, nom: str) -> None:
+    """Commande un domaine pour l'organisation du client (202). Un hébergement exige
+    désormais un domaine déjà enregistré et payé — les tests passent donc par la vraie
+    commande de domaine avant de créer un hébergement."""
+    r = await client.post(
+        "/v1/web/domaines",
+        json={
+            "nom": nom,
+            "dureeAnnees": 1,
+            "titulaire": {
+                "nom": "Synelia Test",
+                "email": "test@synelia.ci",
+                "telephone": "+22500000000",
+                "adresse": "x",
+                "ville": "Abidjan",
+                "pays": "CI",
+            },
+        },
+    )
+    assert r.status_code == 202, r.text
+
+
 async def inscrire_et_verifier(
     client, email: str, nom: str, mot_de_passe: str, organisation: dict | None = None
 ) -> dict[str, Any]:
@@ -286,9 +309,9 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
-@pytest.fixture
-async def client() -> AsyncIterator[ClientApi]:
-    """Application neuve (base SQLite éphémère), admin connecté."""
+@asynccontextmanager
+async def _application_neuve() -> AsyncIterator[ClientApi]:
+    """Application neuve (base SQLite éphémère), client non connecté."""
     d = configurer_env()
     from synelia_kernel import config
 
@@ -305,8 +328,48 @@ async def client() -> AsyncIterator[ClientApi]:
         async with app.router.lifespan_context(app):
             transport = httpx.ASGITransport(app=app)
             async with ClientApi(transport=transport, base_url="http://test") as c:
-                await c.connecter()
                 yield c
         await db.fermer()
     finally:
         shutil.rmtree(d, ignore_errors=True)
+
+
+@pytest.fixture
+async def client() -> AsyncIterator[ClientApi]:
+    """Application neuve, admin plateforme connecté — réservé aux chemins `/admin/**`
+    (équipe Synelia), seul rôle qui peut les appeler. Tout le reste doit passer par
+    `client_org` (compte client réel, jamais admin en superutilisateur)."""
+    async with _application_neuve() as c:
+        await c.connecter()
+        yield c
+
+
+ORG_CLIENT_NOM = "Organisation Test Client"
+ORG_CLIENT_EMAIL = "org-admin@test-client.ci"
+ORG_CLIENT_MDP = "OrgAdmin!2026"
+
+
+@pytest.fixture
+async def client_org() -> AsyncIterator[ClientApi]:
+    """Application neuve + organisation cliente fraîchement inscrite, session scellée
+    sur elle (`X-Organisation-Id`) en rôle `org_admin`.
+
+    Compte client réel : c'est ce que voit un vrai utilisateur de la plateforme.
+    Les tests d'API consommateur ne doivent jamais tourner en `super_admin` — un
+    endpoint cassé pour un rôle réel resterait vert sous admin (admin court-circuite
+    `rbac.autorise` via `est_admin_plateforme`)."""
+    async with _application_neuve() as c:
+        session = await inscrire_et_verifier(
+            c,
+            ORG_CLIENT_EMAIL,
+            "Admin Organisation Test",
+            ORG_CLIENT_MDP,
+            organisation={"nom": ORG_CLIENT_NOM, "pays": "CI"},
+        )
+        assert session.get("organisationActive"), session
+        c.jeton = session["accessToken"]
+        c.org_id = session["organisationActive"]
+        c.headers["Authorization"] = f"Bearer {c.jeton}"
+        c.headers["X-Organisation-Id"] = c.org_id
+        assert session.get("roleActif") == "org_admin", session
+        yield c

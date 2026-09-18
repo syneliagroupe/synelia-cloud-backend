@@ -130,7 +130,11 @@ async def test_zone_vps_provisionnee_et_masquee(client_zone_vps):
     assert any(e["code"] == "vps-zone" and e["id"] == ESPACE_ID_TEST for e in admin_espaces)
 
     # 4) La lecture des secrets (consommée par web_hebergement/projets) fonctionne toujours de
-    #    bout en bout via le dépôt « plateforme », sans org override.
+    #    bout en bout via le dépôt « plateforme », sans org override. Le domaine doit
+    #    désormais être enregistré au préalable (plus de nom provisoire implicite).
+    from synelia_testing import enregistrer_domaine
+
+    await enregistrer_domaine(client, "zone-vps.test")
     r = await client.post(
         f"{DES}/web/hebergements", json={"palier": "pro", "site": "ABJ", "domaine": "zone-vps.test"}
     )

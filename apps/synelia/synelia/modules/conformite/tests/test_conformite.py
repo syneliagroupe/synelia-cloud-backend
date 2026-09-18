@@ -1,4 +1,8 @@
-"""Tests du module Conformité : anomalies, attestations, rapports."""
+"""Tests du module Conformité : anomalies, attestations, rapports.
+
+Reste sur `client` (admin plateforme) : anomalies et attestations sont **seedées** par le
+peupleur de démo ; une organisation cliente fraîche les voit vides mais fonctionnelles.
+L'accès `org_admin` aux endpoints est couvert par `test_rbac_client.py`."""
 
 
 async def test_lister_anomalies(client):

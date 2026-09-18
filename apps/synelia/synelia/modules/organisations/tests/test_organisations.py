@@ -1,4 +1,9 @@
-"""Organisations : création (avec administrateur), liste, synthèse, suspension, emprunt d'identité."""
+"""Organisations : création (avec administrateur), liste, synthèse, suspension, emprunt d'identité.
+
+Reste sur `client` (admin plateforme) : `org.manage` est réservé `super_admin` par le
+RBAC (créer/modifier une Organisation est une action d'équipe — un client s'inscrit via
+`/auth/inscription`, il ne crée pas d'organisation par cette API). Le côté client est
+vérifié par `test_rbac_client.py` (accès refusé là où il faut)."""
 
 
 async def test_cycle_organisation(client):

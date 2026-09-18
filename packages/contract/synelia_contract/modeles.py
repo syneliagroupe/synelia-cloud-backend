@@ -1859,7 +1859,8 @@ class HebergementCreation(BaseModel):
     domaine: Annotated[
         str | None,
         Field(
-            description="Nom déjà détenu à attacher ; sinon l’hébergement démarre sur un nom provisoire."
+            description="Nom de domaine déjà détenu (enregistré et payé) à attacher. "
+            "Requis à la création : l’hébergement n’a plus de nom provisoire."
         ),
     ] = None
     versionPhp: str | None = None

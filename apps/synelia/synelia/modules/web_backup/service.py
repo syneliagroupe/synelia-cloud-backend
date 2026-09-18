@@ -24,6 +24,40 @@ depot = Depot(
 )
 
 
+async def assurer_plan_pour_hebergement(
+    ctx: Contexte, hebergement_id: str, nom_servi: str, serveur: str, site: str = "ABJ"
+) -> m.SauvegardeWeb:
+    """Crée le plan de sauvegarde d'un hébergement s'il n'existe pas encore — un
+    hébergement (VPS + domaine) est protégé par défaut, sans endpoint de création
+    dédié (l'interface « Backup » n'offre que lecture/configuration/exécution).
+
+    Sans ceci, une organisation cliente réelle n'avait **jamais** de sauvegarde :
+    seule l'organisation de démo en recevait une, via le peupleur — constaté en
+    passant la suite en compte client (`client_org`), où `GET /v1/web/backup`
+    répondait une liste vide à un client pourtant propriétaire d'un hébergement."""
+    existants = await depot.tous(ctx, filtre=lambda s: s.hebergementId == hebergement_id)
+    if existants:
+        return existants[0]
+    plan = m.SauvegardeWeb(
+        id=nouvel_id(),
+        hebergementId=hebergement_id,
+        serveur=serveur,
+        nomServi=nom_servi,
+        actif=True,
+        frequence="quotidienne",
+        heure="02:30",
+        retentionJours=14,
+        destination="backup.s3.synelia.cloud",
+        site=site if site in ("ABJ", "GBM") else "ABJ",  # type: ignore[arg-type]
+        immuable=False,
+        perimetre=m.Perimetre(fichiers=True, bases=True, configuration=True, messagerie=False),
+        executions=[],
+        espaceOccupeGo=0.0,
+        dernierTestRestauration=None,
+    )
+    return await depot.creer(ctx, plan)
+
+
 def point(nombre: str = "1.2 Go", contenu: list[str] | None = None) -> m.ExecutionSauvegarde:
     return m.ExecutionSauvegarde(
         id=nouvel_id(),
