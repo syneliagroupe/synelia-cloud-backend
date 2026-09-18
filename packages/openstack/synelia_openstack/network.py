@@ -138,6 +138,20 @@ class NetworkSimule:
     def assurer_regle_port(self, serveur_id: str, port: int) -> None:
         return None
 
+    # ── Lectures d'état réel (reconcile-on-read) ──────────────────────────
+    # `None` = amont inconnu (simulation : rien à interroger) — l'appelant garde
+    # alors la ligne DB telle quelle. Sur l'amont réel, `None` = ressource perdue
+    # (404 Neutron/Octavia) — l'appelant la traite en fantôme (404 applicatif).
+
+    def details_reseau(self, reseau_id: str) -> dict[str, Any] | None:
+        return None
+
+    def details_groupe(self, groupe_id: str) -> dict[str, Any] | None:
+        return None
+
+    def details_lb(self, lb_id: str) -> dict[str, Any] | None:
+        return None
+
 
 class NetworkOpenStack(NetworkSimule):
     """openstacksdk : Neutron (networks, floating IPs, security groups), Octavia, VPN."""
@@ -146,6 +160,38 @@ class NetworkOpenStack(NetworkSimule):
         from synelia_openstack.fabrique import connexion
 
         return connexion()
+
+    def details_reseau(self, reseau_id: str) -> dict[str, Any] | None:
+        """Réseau Neutron réel — `None` s'il a disparu hors bande (ligne fantôme)."""
+        net = self._c().network.find_network(reseau_id, ignore_missing=True)
+        if net is None:
+            return None
+        return {"id": net.id, "statut": net.status}
+
+    def details_groupe(self, groupe_id: str) -> dict[str, Any] | None:
+        """Groupe Neutron réel — `None` s'il a disparu hors bande (ligne fantôme)."""
+        sg = self._c().network.find_security_group(groupe_id, ignore_missing=True)
+        if sg is None:
+            return None
+        return {"id": sg.id}
+
+    def details_lb(self, lb_id: str) -> dict[str, Any] | None:
+        """Load balancer Octavia réel (statuts de provisioning/exploitation + VIP) —
+        `None` s'il a disparu hors bande. Même en `ERROR`/`OFFLINE` (état courant du
+        lab), c'est une information réelle : l'appelant la reflète au lieu d'une
+        fiche DB figée."""
+        try:
+            lb = self._c().load_balancer.get_load_balancer(lb_id)
+        except Exception as exc:  # noqa: BLE001 — seul le 404 vaut fantôme, le reste remonte
+            if "NotFound" in type(exc).__name__:
+                return None
+            raise
+        return {
+            "id": lb.id,
+            "provisioning": lb.provisioning_status,
+            "exploitation": lb.operating_status,
+            "vip": lb.vip_address,
+        }
 
     def creer_reseau(self, nom: str, cidr: str, **kw: Any) -> dict[str, Any]:
         c = self._c()

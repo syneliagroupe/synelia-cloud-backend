@@ -3,18 +3,6 @@
 from synelia_testing import connexion_lab, sur_lab_reel
 
 
-def _affirmer_serveur_base_nova(prefixe: str, avant: set):
-    """La base provisionne une vraie VM Nova nommée `db-<8 premiers de l'id>`."""
-    if not sur_lab_reel():
-        return
-    c = connexion_lab()
-    assert c is not None, "lab réel injoignable"
-    apres = {s.id for s in c.compute.servers(name=prefixe)}
-    assert len(apres - avant) == 1, (
-        f"aucun serveur Nova {prefixe!r} créé : base sans impact OpenStack"
-    )
-
-
 async def _espace(client) -> str:
     existants = (await client.get("/v1/espaces")).json()["donnees"]
     for e in existants:
@@ -63,7 +51,7 @@ async def test_cycle_base(client):
     if sur_lab_reel():
         c = connexion_lab()
         assert c is not None, "lab réel injoignable"
-        trouves = list(c.compute.servers(name=f"db-{bid[:8]}"))
+        trouves = list(c.compute.servers(name=f"db-{bid[:8]}", all_projects=True))
         assert trouves, f"aucun serveur Nova db-{bid[:8]} : base sans impact OpenStack"
 
     r = await client.get(f"/v1/bases/{bid}/identifiants")

@@ -143,6 +143,84 @@ async def dissocier_ip_amont(ctx: Contexte, ip_id_local: str) -> None:
         await asyncio.to_thread(amont_identite().dissocier_ip_flottante, fid)
 
 
+# ── Réconciliation à la lecture ──────────────────────────────────────────
+# Même motif que `vms.service.reconcilier_statut` / `kubernetes` / `web_hebergement` :
+# les GET détail relisent l'amont réel (Neutron/Octavia, appels synchrones déchargés
+# via `asyncio.to_thread`) au lieu de servir la fiche DB figée — une ressource
+# supprimée hors bande (nettoyage manuel du lab) répond 404 au lieu de 200 fantôme,
+# et les champs dynamiques (VIP du LB, attachement d'une IP) reflètent l'amont.
+# En simulation, `details_*` rend `None` (« inconnu », pas « perdu ») : on renvoie
+# alors la ligne DB telle quelle, comme avant.
+
+
+async def reconcilier_reseau(ctx: Contexte, reseau: m.Reseau) -> m.Reseau:
+    """404 si Neutron ne connaît plus ce réseau ; sinon la ligne DB (aucun champ
+    dynamique exposé au contrat pour un réseau)."""
+    if not isinstance(amont_identite(), IdentiteOpenStack):
+        return reseau
+    secrets = await depot_reseau.secrets(ctx, reseau.id)
+    rid = secrets.get("reseau_id")
+    if not rid:
+        return reseau
+    details = await asyncio.to_thread(amont_identite().details_reseau_secondaire, rid)
+    if details is None:
+        raise erreurs.introuvable("Réseau", reseau.nom)
+    return reseau
+
+
+async def reconcilier_groupe(ctx: Contexte, groupe: m.GroupeSecurite) -> m.GroupeSecurite:
+    """404 si Neutron ne connaît plus ce groupe. Les règles restent pilotées par
+    l'application (chaque mutation les pose déjà côté Neutron de façon synchrone)."""
+    if not isinstance(amont(), NetworkOpenStack):
+        return groupe
+    secrets = await depot_groupe.secrets(ctx, groupe.id)
+    gid = secrets.get("groupe_id")
+    if not gid:
+        return groupe
+    details = await asyncio.to_thread(amont().details_groupe, gid)
+    if details is None:
+        raise erreurs.introuvable("Groupe de sécurité", groupe.nom)
+    return groupe
+
+
+async def reconcilier_ip(ctx: Contexte, ip: m.IpPublique) -> m.IpPublique:
+    """404 si Neutron ne connaît plus cette IP ; sinon, un détachement hors bande
+    (port libéré côté Neutron alors que la fiche dit `attachedTo`) est reflété et
+    persisté — l'API ne prétend plus une attache qui n'existe plus."""
+    if not isinstance(amont_identite(), IdentiteOpenStack):
+        return ip
+    secrets = await depot_ip.secrets(ctx, ip.id)
+    fid = secrets.get("ip_flottante_id")
+    if not fid:
+        return ip
+    details = await asyncio.to_thread(amont_identite().details_ip_flottante, fid)
+    if details is None:
+        raise erreurs.introuvable("IP publique", ip.adresse)
+    if details.get("port_id") is None and ip.attachedTo is not None:
+        await depot_ip.modifier(ctx, ip.id, {"attachedTo": None, "attachedLabel": None})
+        return await depot_ip.obtenir(ctx, ip.id)
+    return ip
+
+
+async def reconcilier_lb(ctx: Contexte, lb: m.LoadBalancer) -> m.LoadBalancer:
+    """404 si Octavia ne connaît plus ce LB ; sinon la VIP réelle est reflétée et
+    persistée quand elle a changé (même en `ERROR`/`OFFLINE` — état réel courant
+    du lab — c'est l'amont qui fait foi, pas la fiche posée à la création)."""
+    if not isinstance(amont(), NetworkOpenStack):
+        return lb
+    secrets = await depot_lb.secrets(ctx, lb.id)
+    oid = secrets.get("octavia_lb_id")
+    if not oid:
+        return lb
+    details = await asyncio.to_thread(amont().details_lb, oid)
+    if details is None:
+        raise erreurs.introuvable("Load balancer", lb.nom)
+    if details.get("vip") and details["vip"] != lb.vip:
+        await depot_lb.modifier(ctx, lb.id, {"vip": details["vip"]})
+        return await depot_lb.obtenir(ctx, lb.id)
+    return lb
+
+
 def _regle_neutron(regle: m.RegleSecurite) -> dict[str, object]:
     """Traduit une `RegleSecurite` applicative en attributs Neutron. Sans cette traduction (et
     sans qu'aucune règle ne soit jamais posée côté amont, cf. `ajouter_regle_amont`), un groupe

@@ -4,6 +4,7 @@ import ipaddress
 
 from synelia_testing import (
     connexion_lab,
+    exiger_lab_reel,
     ignorer_si_fip_epuise,
     ignorer_si_octavia_casse,
     sur_lab_reel,
@@ -207,6 +208,27 @@ async def test_reseau_nom_deja_pris(client):
     assert r.status_code == 409
 
 
+async def test_reseau_fantome_supprime_hors_bande_404(client):
+    # Preuve du reconcile-on-read : un réseau supprimé directement côté Neutron
+    # (hors bande, sans passer par l'API) ne doit plus répondre 200 avec sa fiche
+    # DB figée, mais 404 — sans lab réel, sans objet (le simulé ne connaît pas Neutron).
+    exiger_lab_reel()
+    c = connexion_lab()
+    assert c is not None
+    avant = {n.id for n in c.network.networks(name="net-fantome")}
+    r = await _creer_reseau(client, nom="net-fantome")
+    assert r.status_code == 201, r.text
+    rid = r.json()["id"]
+    nouveaux = {n.id for n in c.network.networks(name="net-fantome")} - avant
+    assert len(nouveaux) == 1
+    c.network.delete_network(nouveaux.pop(), ignore_missing=True)
+    r = await client.get(f"/v1/reseaux/{rid}")
+    assert r.status_code == 404, r.text
+    assert r.json()["erreur"]["code"] == "introuvable"
+    r = await client.delete(f"/v1/reseaux/{rid}", params={"confirmation": "net-fantome"})
+    assert r.status_code == 204
+
+
 # ── IP publiques ───────────────────────────────────────────────────────────
 async def test_cycle_ip(client):
     ignorer_si_fip_epuise()
@@ -359,6 +381,32 @@ async def test_cycle_groupe_securite(client):
     r = await client.delete(f"/v1/groupes-securite/{gid}", params={"confirmation": "sg-web"})
     assert r.status_code == 204
     _affirmer_groupe_neutron_absent("sg-web", avant_sg)
+
+
+async def test_groupe_fantome_supprime_hors_bande_404(client):
+    # Même preuve pour les groupes (firewall) : supprimé côté Neutron hors bande →
+    # 404 applicatif, pas 200 fantôme. Sans lab réel, sans objet.
+    exiger_lab_reel()
+    c = connexion_lab()
+    assert c is not None
+    avant = {g.id for g in c.network.security_groups(name="sg-fantome")}
+    r = await _creer_groupe(client, nom="sg-fantome")
+    assert r.status_code == 201, r.text
+    gid = r.json()["id"]
+    nouveaux = {g.id for g in c.network.security_groups(name="sg-fantome")} - avant
+    assert len(nouveaux) == 1
+    c.network.delete_security_group(nouveaux.pop(), ignore_missing=True)
+    r = await client.get(f"/v1/groupes-securite/{gid}")
+    assert r.status_code == 404, r.text
+    assert r.json()["erreur"]["code"] == "introuvable"
+    r = await client.delete(f"/v1/groupes-securite/{gid}", params={"confirmation": "sg-fantome"})
+    assert r.status_code == 204
+
+
+# Pas de test fantôme pour les IP (pool d'IP flottantes épuisé sur le lab : impossible
+# d'en réserver une à supprimer hors bande) ni pour les LB (Octavia cassé lab-wide :
+# impossible d'en provisionner un) — les deux chemins `reconcilier_*` correspondants
+# restent câblés et seront prouvés dès que l'amont le permet.
 
 
 # ── Load balancers ─────────────────────────────────────────────────────────

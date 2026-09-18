@@ -18,14 +18,16 @@ def _affirmer_amont_reel():
 def _ids_serveurs_nova(nom: str) -> set | None:
     """Ids Nova portant `nom` (`None` hors lab) : instantanés avant/après — les noms
     de VM de test se répètent d'une passe à l'autre, un `find_server` par nom y est
-    ambigu et lève `DuplicateResource`."""
+    ambigu et lève `DuplicateResource`. `all_projects=True` : l'amont crée le serveur
+    dans le projet de l'Espace (credential scellée), invisible au scope par défaut
+    de la connexion admin (constaté : `db-xxx` créé mais `servers()` vide)."""
     if not sur_lab_reel():
         return None
     from synelia_testing import connexion_lab
 
     c = connexion_lab()
     assert c is not None, "lab réel injoignable"
-    return {s.id for s in c.compute.servers(name=nom)}
+    return {s.id for s in c.compute.servers(name=nom, all_projects=True)}
 
 
 def _affirmer_serveur_nova(nom: str, avant: set):
@@ -41,6 +43,18 @@ def _affirmer_serveur_nova_absent(nom: str, avant: set):
     apres = _ids_serveurs_nova(nom)
     if apres is None:
         return
+    # La suppression Nova est asynchrone : le serveur reste listé un temps (task_state
+    # `deleting`, purge différée) après que l'API a rendu `done` — constaté en direct
+    # (deux passes consécutives : le serveur de la passe N-1 avait disparu à la passe N).
+    # On attend la disparition réelle au lieu d'exiger l'immédiat.
+    import time
+
+    for _ in range(30):
+        if apres == avant:
+            return
+        time.sleep(3)
+        apres = _ids_serveurs_nova(nom)
+        assert apres is not None
     assert apres == avant, (
         f"serveur Nova {nom!r} toujours présent : suppression sans impact OpenStack"
     )

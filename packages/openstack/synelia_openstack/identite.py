@@ -39,6 +39,10 @@ class IdentiteSimule:
     def supprimer_reseau_secondaire(self, reseau_id: str) -> None:
         return None
 
+    def details_reseau_secondaire(self, reseau_id: str) -> dict[str, Any] | None:
+        """État réel du réseau — `None` en simulation (rien à interroger)."""
+        return None
+
     def creer_ip_flottante(self, projet_id: str | None) -> dict[str, Any]:
         return {"id": f"fip-{nouvel_id()[:8]}", "adresse": None}
 
@@ -49,6 +53,10 @@ class IdentiteSimule:
         return None
 
     def dissocier_ip_flottante(self, ip_id: str) -> None:
+        return None
+
+    def details_ip_flottante(self, ip_id: str) -> dict[str, Any] | None:
+        """État réel de l'IP flottante — `None` en simulation (rien à interroger)."""
         return None
 
     def creer_application_credential(
@@ -129,6 +137,13 @@ class IdentiteOpenStack(IdentiteSimule):
     def supprimer_reseau_secondaire(self, reseau_id: str) -> None:
         self._conn().network.delete_network(reseau_id, ignore_missing=True)
 
+    def details_reseau_secondaire(self, reseau_id: str) -> dict[str, Any] | None:
+        """Réseau Neutron réel — `None` s'il a disparu hors bande (ligne fantôme)."""
+        net = self._conn().network.find_network(reseau_id, ignore_missing=True)
+        if net is None:
+            return None
+        return {"id": net.id, "statut": net.status}
+
     def creer_ip_flottante(self, projet_id: str | None) -> dict[str, Any]:
         from synelia_openstack.erreurs import traduire
 
@@ -161,6 +176,22 @@ class IdentiteOpenStack(IdentiteSimule):
 
     def dissocier_ip_flottante(self, ip_id: str) -> None:
         self._conn().network.update_ip(ip_id, port_id=None)
+
+    def details_ip_flottante(self, ip_id: str) -> dict[str, Any] | None:
+        """IP flottante Neutron réelle (adresse, port d'attache, statut) — `None`
+        si elle a disparu hors bande (ligne fantôme)."""
+        try:
+            fip = self._conn().network.get_ip(ip_id)
+        except Exception as exc:  # noqa: BLE001 — seul le 404 vaut fantôme, le reste remonte
+            if "NotFound" in type(exc).__name__:
+                return None
+            raise
+        return {
+            "id": fip.id,
+            "adresse": fip.floating_ip_address,
+            "port_id": fip.port_id,
+            "statut": fip.status,
+        }
 
     def creer_application_credential(
         self, projet_id: str, domaine_id: str | None = None

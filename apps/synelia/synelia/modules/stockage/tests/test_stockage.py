@@ -8,7 +8,9 @@ def _ids_volumes_cinder(nom: str) -> set | None:
         return None
     c = connexion_lab()
     assert c is not None, "lab réel injoignable"
-    return {v.id for v in c.block_storage.volumes(name=nom)}
+    # `all_projects=True` : le volume est créé dans le projet de l'Espace, pas celui
+    # de la connexion admin (même leçon que Nova : scope par défaut aveugle).
+    return {v.id for v in c.block_storage.volumes(name=nom, all_projects=True)}
 
 
 def _affirmer_volume_cinder(nom: str, avant: set):
@@ -22,12 +24,18 @@ def _affirmer_volume_cinder(nom: str, avant: set):
 
 
 def _affirmer_volume_cinder_absent(nom: str, avant: set):
-    apres = _ids_volumes_cinder(nom)
-    if apres is None:
-        return
-    assert apres == avant, (
-        f"volume Cinder {nom!r} toujours présent : suppression sans impact OpenStack"
-    )
+    # Même asynchronisme que Nova : Cinder purge le volume après le `done` de l'API —
+    # on attend la disparition réelle au lieu d'exiger l'immédiat.
+    import time
+
+    for _ in range(30):
+        apres = _ids_volumes_cinder(nom)
+        if apres is None:
+            return
+        if apres == avant:
+            return
+        time.sleep(3)
+    assert False, f"volume Cinder {nom!r} toujours présent : suppression sans impact OpenStack"
 
 
 async def _espace(client) -> str:

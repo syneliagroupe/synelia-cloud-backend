@@ -13,7 +13,7 @@ def _affirmer_serveur_nova_hebergement(h: dict):
     assert nom, "hébergement sans nom de serveur : impossible de prouver l'impact Nova"
     c = connexion_lab()
     assert c is not None, "lab réel injoignable"
-    trouves = list(c.compute.servers(name=nom))
+    trouves = list(c.compute.servers(name=nom, all_projects=True))
     assert trouves, f"aucun serveur Nova {nom!r} : hébergement sans impact OpenStack"
 
 

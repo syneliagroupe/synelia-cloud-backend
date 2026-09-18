@@ -192,6 +192,64 @@ class ClientApi(httpx.AsyncClient):
         return corps
 
 
+CODE_VERIFICATION_TEST = "123456"
+
+
+async def forcer_code_verification(email: str, code: str = CODE_VERIFICATION_TEST) -> None:
+    """Pose un code de vérification connu pour `email` (tests uniquement) : l'inscription
+    réelle émet un code aléatoire envoyé par email, que les tests API ne peuvent pas lire.
+    Le code injecté consomme les précédents, comme `_emettre_code` côté routeur."""
+    from sqlalchemy import select
+    from synelia.securite import hacher_jeton
+    from synelia_db import session as db
+    from synelia_db.modeles import Utilisateur, VerificationEmail
+    from synelia_kernel.dates import dans, maintenant
+
+    async with db.fabrique()() as s:
+        u = (
+            await s.execute(select(Utilisateur).where(Utilisateur.email == email.lower()))
+        ).scalar_one()
+        precedents = (
+            await s.execute(
+                select(VerificationEmail).where(
+                    VerificationEmail.utilisateur_id == u.id,
+                    VerificationEmail.consommee_le.is_(None),
+                )
+            )
+        ).scalars()
+        for p in precedents:
+            p.consommee_le = maintenant()
+        s.add(
+            VerificationEmail(
+                utilisateur_id=u.id, code_hash=hacher_jeton(code), expire_le=dans(900)
+            )
+        )
+        await s.commit()
+
+
+async def inscrire_et_verifier(
+    client, email: str, nom: str, mot_de_passe: str, organisation: dict | None = None
+) -> dict[str, Any]:
+    """Inscription complète côté tests : 202 + code forcé + vérification → session."""
+    corps: dict[str, Any] = {
+        "email": email,
+        "nom": nom,
+        "motDePasse": mot_de_passe,
+        "accepteConditions": True,
+    }
+    if organisation is not None:
+        corps["organisation"] = organisation
+    r = await client.post("/v1/auth/inscription", json=corps)
+    assert r.status_code == 202, r.text
+    await forcer_code_verification(email)
+    r = await client.post(
+        "/v1/auth/verification-email",
+        json={"email": email, "code": CODE_VERIFICATION_TEST},
+    )
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
 @pytest.fixture(scope="session")
 def anyio_backend() -> str:
     return "asyncio"
