@@ -119,9 +119,20 @@ class SessionAuth(Base, Identifie, Horodate):
 
 
 class CleApi(Base, Identifie, Horodate):
+    """Clé d'API, deux portées selon `org_id` :
+
+    - `org_id` renseigné : clé d'organisation, gérée par l'organisation elle-même
+      (`/securite/cles-api`).
+    - `org_id` NULL : jeton plateforme (super admin), géré uniquement via `/admin/jetons` et
+      utilisable sans `X-Organisation-Id` — ses droits sont ceux de `role_emetteur`, bornés par
+      `portee`.
+
+    Postgres existant : `ALTER TABLE cles_api ALTER COLUMN org_id DROP NOT NULL;` (ADR 0003,
+    à exécuter par le propriétaire de la table avant de déployer l'image qui porte ce modèle)."""
+
     __tablename__ = "cles_api"
 
-    org_id: Mapped[str] = mapped_column(
+    org_id: Mapped[str | None] = mapped_column(
         ForeignKey("organisations.id", ondelete="CASCADE"), index=True
     )
     nom: Mapped[str] = mapped_column(String(120))

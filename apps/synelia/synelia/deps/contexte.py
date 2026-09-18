@@ -212,6 +212,21 @@ async def _principal_depuis_cle(session: AsyncSession, cle: str) -> Principal:
         raise erreurs.non_authentifie("Clé d'API inconnue, révoquée ou expirée.")
     ligne.derniere_utilisation_le = maintenant()
     ligne.utilisations = (ligne.utilisations or 0) + 1
+    if ligne.org_id is None:
+        # Jeton plateforme (super admin) : pas d'organisation, l'équipe Synelia est reconnue
+        # par `est_admin_plateforme` — mêmes droits que le rôle qui l'a émis, bornés par la
+        # `portee` du jeton (respectée par `exige` comme par `exige_admin`).
+        return Principal(
+            utilisateur_id=None,
+            email=f"cle:{ligne.prefixe}",
+            nom=ligne.nom,
+            org_id=None,
+            role=ligne.role_emetteur,
+            cle_api_id=ligne.id,
+            portee=list(ligne.portee or []),
+            equipe=True,
+            role_equipe=ligne.role_emetteur,
+        )
     return Principal(
         utilisateur_id=None,
         email=f"cle:{ligne.prefixe}",
