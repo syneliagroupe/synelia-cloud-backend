@@ -11,16 +11,17 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Response, status
 from sqlalchemy import select
-from synelia.audit import journaliser
-from synelia.deps import Contexte, Page, exige_admin, exiger_confirmation
-from synelia.deps.pagination import filtrer_trier_paginer
-from synelia.securite import hacher_jeton
 from synelia_contract import modeles as m
 from synelia_contract.rbac import ROLES_EQUIPE, permissions_effectives
 from synelia_db.modeles import CleApi
 from synelia_kernel import erreurs
 from synelia_kernel.dates import maintenant
 from synelia_kernel.ids import jeton_opaque, nouvel_id, prefixe_lisible
+
+from synelia.audit import journaliser
+from synelia.deps import Contexte, Page, exige_admin, exiger_confirmation
+from synelia.deps.pagination import filtrer_trier_paginer
+from synelia.securite import hacher_jeton
 
 router = APIRouter(prefix="/admin", tags=["Super admin — pilotage"])
 
