@@ -76,3 +76,36 @@ async def test_quota_drive(client):
         assert rr.status_code == 201, rr.text
     r = await client.post(f"/v1/web/drive/{did}/sieges", json={"userId": "u-x"})
     assert r.status_code == 402 and r.json()["erreur"]["code"] == "quota_depasse"
+
+
+async def test_erreurs_drive(client):
+    # Branches d'erreur simule-couvrables : 404 sur les endpoints détail, 409 doublon
+    # d'activation, 422 confirmation, liste filtrée.
+    for methode, chemin, kwargs in [
+        ("get", "/v1/web/drive/drive-inexistant", {}),
+        ("patch", "/v1/web/drive/drive-inexistant", {"json": {"palier": "pro"}}),
+        ("delete", "/v1/web/drive/drive-inexistant", {"params": {"confirmation": "x"}}),
+        ("post", "/v1/web/drive/drive-inexistant/ouverture", {}),
+        ("get", "/v1/web/drive/drive-inexistant/sieges", {}),
+        ("post", "/v1/web/drive/drive-inexistant/sieges", {"json": {"userId": "u-1"}}),
+    ]:
+        r = await getattr(client, methode)(chemin, **kwargs)
+        assert r.status_code == 404, (methode, chemin, r.text)
+
+    await _creer_hebergement(client, "erreurs.ci")
+    corps = {"domaine": "erreurs.ci", "palier": "pro", "sieges": 1}
+    r = await client.post("/v1/web/drive", json=corps)
+    assert r.status_code == 202, r.text
+    r = await client.post("/v1/web/drive", json=corps)
+    assert r.status_code == 409
+
+    did = next(
+        d["id"]
+        for d in (await client.get("/v1/web/drive")).json()["donnees"]
+        if d["domaine"] == "erreurs.ci"
+    )
+    r = await client.delete(f"/v1/web/drive/{did}", params={"confirmation": "mauvais"})
+    assert r.status_code == 422
+    r = await client.delete(f"/v1/web/drive/{did}", params={"confirmation": "erreurs.ci"})
+    assert r.status_code == 202, r.text
+    assert r.json()["statut"] == "done"

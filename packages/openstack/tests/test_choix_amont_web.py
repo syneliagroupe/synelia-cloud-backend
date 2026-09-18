@@ -42,6 +42,20 @@ def test_zimbra_simule_sans_url(monkeypatch):
     assert isinstance(zimbra.choisir_zimbra(), zimbra.ZimbraReel)
 
 
+def test_webmail_publique_jamais_interne(monkeypatch):
+    # Le lien cliquable pointe le vhost public (ou `SYNELIA_WEBMAIL_URL`), jamais la
+    # console admin interne `zimbra:7071` — même en repli simulé.
+    from synelia_openstack import zimbra
+
+    monkeypatch.delenv(zimbra.ENV_WEBMAIL_PUBLIC, raising=False)
+    url = zimbra.ZimbraSimule().ouvrir_webmail("a@exemple.ci")
+    assert url.startswith(f"https://{zimbra.HOTE_WEBMAIL_PUBLIC_DEFAUT}/"), url
+    assert "zimbra:7071" not in url and "7071" not in url
+    monkeypatch.setenv(zimbra.ENV_WEBMAIL_PUBLIC, "https://webmail.example.ci")
+    url = zimbra.ZimbraSimule().ouvrir_webmail("a@exemple.ci")
+    assert url.startswith("https://webmail.example.ci/"), url
+
+
 def test_registrar_simule_sans_partenaire(monkeypatch):
     # Aucun partenaire câblé : `RegistrarOpenStack` reste le simulé sous un autre
     # nom — le choix explicite évite le faux « réel » que `fournisseur()` donnait

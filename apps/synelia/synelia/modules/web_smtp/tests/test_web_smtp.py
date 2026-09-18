@@ -90,3 +90,27 @@ async def test_webhooks_smtp(client):
     r = await client.delete(f"/v1/web/smtp/webhooks/{wid}")
     assert r.status_code == 204
     assert (await client.get("/v1/web/smtp/webhooks")).json() == []
+
+
+async def test_erreurs_smtp(client):
+    # Branches d'erreur simule-couvrables : PATCH avant activation (404), 404 sur les
+    # endpoints détail (clés, webhooks), 422 confirmation, liste filtrée.
+    r = await client.patch("/v1/web/smtp", json={"domainesAutorises": ["x.ci"]})
+    assert r.status_code == 404
+
+    for methode, chemin, kwargs in [
+        ("patch", "/v1/web/smtp/cles/cle-inexistante", {"json": {"quotaJour": 1}}),
+        ("delete", "/v1/web/smtp/cles/cle-inexistante", {"params": {"confirmation": "x"}}),
+        ("delete", "/v1/web/smtp/webhooks/wh-inexistant", {}),
+    ]:
+        r = await getattr(client, methode)(chemin, **kwargs)
+        assert r.status_code == 404, (methode, chemin, r.text)
+
+    await client.post("/v1/web/smtp", json={"domainesAutorises": ["exemple.ci"]})
+    r = await client.post("/v1/web/smtp/cles", json={"nom": "ci", "quotaJour": 10})
+    assert r.status_code == 201, r.text
+    cid = r.json()["cle"]["id"]
+    r = await client.delete(f"/v1/web/smtp/cles/{cid}", params={"confirmation": "mauvais"})
+    assert r.status_code == 422
+    r = await client.get("/v1/web/smtp/cles", params={"statut": "active"})
+    assert r.status_code == 200 and any(c["id"] == cid for c in r.json())

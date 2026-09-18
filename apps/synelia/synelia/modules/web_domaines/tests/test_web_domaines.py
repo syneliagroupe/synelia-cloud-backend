@@ -21,6 +21,33 @@ async def test_disponibilite(client):
     assert r.status_code == 200 and r.json()["disponible"] is False
 
 
+async def test_erreurs_domaines(client):
+    # Branches d'erreur simule-couvrables : 404 sur tous les endpoints détail, filtres
+    # liste, disponibilité multi-extensions et domaine pris (avec suggestions).
+    for methode, chemin, kwargs in [
+        ("get", "/v1/web/domaines/domaine-inexistant", {}),
+        ("patch", "/v1/web/domaines/domaine-inexistant", {"json": {"renouvellementAuto": True}}),
+        ("post", "/v1/web/domaines/domaine-inexistant/code-auth", {}),
+        (
+            "post",
+            "/v1/web/domaines/domaine-inexistant/renouvellement",
+            {"json": {"dureeAnnees": 1}},
+        ),
+    ]:
+        r = await getattr(client, methode)(chemin, **kwargs)
+        assert r.status_code == 404, (methode, chemin, r.text)
+
+    r = await client.get(
+        "/v1/web/domaines/disponibilite", params={"nom": "mamarque", "extensions": "com,ci"}
+    )
+    assert r.status_code == 200 and r.json()["nom"] == "mamarque.com"
+
+    r = await client.get("/v1/web/domaines", params={"extension": "com"})
+    assert r.status_code == 200
+    r = await client.get("/v1/web/domaines", params={"renouvellementAuto": "true"})
+    assert r.status_code == 200
+
+
 async def test_commander_cycle(client):
     corps = {
         "nom": "synelia-mon-domaine.ci",

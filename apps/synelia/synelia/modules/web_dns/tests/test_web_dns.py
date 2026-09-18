@@ -116,9 +116,9 @@ async def test_cycle_zone_dns(client):
     assert any(e["type"] == "A" for e in r.json()["enregistrements"])
     amont_a = _recordsets_designate("demo-dns.com", "A")
     if amont_a is not None:
-        assert any(
-            "192.168.0.10" in (rs.records or []) for rs in amont_a
-        ), "enregistrement A absent de Designate : écriture sans impact OpenStack"
+        assert any("192.168.0.10" in (rs.records or []) for rs in amont_a), (
+            "enregistrement A absent de Designate : écriture sans impact OpenStack"
+        )
 
     r = await client.post(
         f"/v1/web/dns/{zid}/enregistrements",
@@ -151,9 +151,9 @@ async def test_cycle_zone_dns(client):
     amont_txt_apres = _recordsets_designate("demo-dns.com", "TXT")
     if amont_txt_apres is not None:
         # NS/SOA par défaut exclus : seuls nos TXT applicatifs comptent.
-        assert not any(
-            (rs.name or "").rstrip(".") == "demo-dns.com" for rs in amont_txt_apres
-        ), "TXT supprimé toujours présent dans Designate : suppression sans impact"
+        assert not any((rs.name or "").rstrip(".") == "demo-dns.com" for rs in amont_txt_apres), (
+            "TXT supprimé toujours présent dans Designate : suppression sans impact"
+        )
     r = await client.get(f"/v1/web/dns/{zid}")
     assert r.json()["enregistrements"] == []
 

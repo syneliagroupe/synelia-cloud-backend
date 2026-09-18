@@ -63,3 +63,26 @@ async def test_commande_le_expire_90j(client):
 
     attendu = date.today() + timedelta(days=90)
     assert date.fromisoformat(cert["expire"]) == attendu
+
+
+async def test_erreurs_ssl(client):
+    # Branches d'erreur simule-couvrables : 404 sur les endpoints détail, 409 doublon
+    # de commande, filtre liste.
+    for methode, chemin, kwargs in [
+        ("get", "/v1/web/ssl/cert-inexistant", {}),
+        ("patch", "/v1/web/ssl/cert-inexistant", {"json": {"renouvellementAuto": True}}),
+        ("delete", "/v1/web/ssl/cert-inexistant", {"params": {"confirmation": "x"}}),
+        ("post", "/v1/web/ssl/cert-inexistant/validation", {}),
+        ("post", "/v1/web/ssl/cert-inexistant/renouvellement", {"json": {"dureeAnnees": 1}}),
+    ]:
+        r = await getattr(client, methode)(chemin, **kwargs)
+        assert r.status_code == 404, (methode, chemin, r.text)
+
+    corps = {"hote": "dup.ci", "type": "letsencrypt", "validationDomaine": "dns"}
+    r = await client.post("/v1/web/ssl", json=corps)
+    assert r.status_code == 202, r.text
+    r = await client.post("/v1/web/ssl", json=corps)
+    assert r.status_code == 409
+
+    r = await client.get("/v1/web/ssl", params={"etat": "actif"})
+    assert r.status_code == 200

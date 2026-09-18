@@ -237,3 +237,51 @@ lab (Sauvegardes/PRA échouent honnêtement, Karbor n'étant pas déployé). Deu
 un plantage de l'API partagée sous charge concurrente réelle (suspecté : appel SDK OpenStack synchrone
 bloquant la boucle asyncio), et des enregistrements `web_hebergement` orphelins en base dont la VM Nova
 réelle a été supprimée sans nettoyage côté DB.
+
+## Webmail public Zimbra (`POST /v1/web/emails/{id}/ouverture`) — vhost `webmail.cloud.dev01.ovh.smile.ci`
+
+`ZimbraReel.ouvrir_webmail()` (`packages/openstack/synelia_openstack/zimbra.py`) fait un
+`DelegateAuthRequest` SOAP (SSO preauth, jeton 60 s) et rend un lien `/service/preauth?authtoken=…`.
+Avant ce correctif, ce lien pointait `https://zimbra:7071` (console admin interne, injoignable hors
+lab) — il pointe désormais l'hôte public `SYNELIA_WEBMAIL_URL`, repli
+`https://webmail.cloud.dev01.ovh.smile.ci` (`HOTE_WEBMAIL_PUBLIC_DEFAUT`, jamais `zimbra:7071` —
+verrouillé par `test_webmail_publique_jamais_interne`).
+
+**Vhost Apache** (fichiers hors dépôt git, sur dev01 uniquement — `/etc/httpd/conf.d/`, même
+motif que `console.synelia.dev01.ovh.smile.ci` § ci-dessus ; le mailboxd tourne dans Docker sur
+dev01, `127.0.0.1:8443 → 443`, cf. `zimbra/docker-compose.yml`) :
+- `webmail.cloud.dev01.ovh.smile.ci.conf` (port 80, redirection HTTPS + bypass ACME, copier le
+  motif des autres vhosts `*.dev01.ovh.smile.ci`).
+- `webmail.cloud.dev01.ovh.smile.ci-le-ssl.conf` (port 443) :
+  ```
+  <VirtualHost *:443>
+    ServerName webmail.cloud.dev01.ovh.smile.ci
+    SSLEngine on
+    SSLCertificateFile /etc/letsencrypt/live/webmail.cloud.dev01.ovh.smile.ci/fullchain.pem
+    SSLCertificateKeyFile /etc/letsencrypt/live/webmail.cloud.dev01.ovh.smile.ci/privkey.pem
+    SSLProxyEngine on
+    SSLProxyVerify none
+    SSLProxyCheckPeerName off
+    SSLProxyCheckPeerCN off
+    ProxyPreserveHost On
+    ProxyTimeout 300
+    RewriteEngine On
+    RewriteCond %{HTTP:Upgrade} =websocket [NC]
+    RewriteRule /(.*) wss://127.0.0.1:8443/$1 [P,L]
+    RewriteCond %{HTTP:Upgrade} !=websocket [NC]
+    RewriteRule /(.*) https://127.0.0.1:8443/$1 [P,L]
+    ProxyPassReverse / https://127.0.0.1:8443/
+    ProxyPassReverse / https://mail.zimbra.synelia.internal/
+  </VirtualHost>
+  ```
+  (`SSLProxyVerify none` : le mailboxd présente son certificat auto-signé interne ; le périmètre
+  TLS public reste le certificat Let's Encrypt du vhost.)
+- Certificat (`*.dev01.ovh.smile.ci` déjà en wildcard, aucun DNS à ajouter) :
+  `certbot certonly --webroot -w /var/www/html -d webmail.cloud.dev01.ovh.smile.ci --key-type ecdsa`
+- Recharger Apache : `sudo kill -USR1 $(cat /run/httpd/httpd.pid)` (`systemctl reload httpd`
+  échoue sur dev01, cf. § console).
+
+**Vérification** : `curl -ksI https://webmail.cloud.dev01.ovh.smile.ci/ | head -3` doit répondre
+depuis Internet (login Zimbra), puis `POST /v1/web/emails/{id}/ouverture` doit rendre un lien
+`https://webmail.cloud.dev01.ovh.smile.ci/service/preauth?authtoken=…` qui connecte sans mot de
+passe (jeton 60 s, `expire` dans la réponse).

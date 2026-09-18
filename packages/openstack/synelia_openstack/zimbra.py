@@ -20,6 +20,18 @@ from synelia_kernel.ids import nouvel_id
 ENV_URL = "SYNELIA_ZIMBRA_URL"
 ENV_USER = "SYNELIA_ZIMBRA_ADMIN_USER"
 ENV_PASSWORD = "SYNELIA_ZIMBRA_ADMIN_PASSWORD"
+# Hôte public du webmail (proxy HTTPS dev01 vers le mailboxd interne, cf.
+# `docs/runbooks/lab-openstack.md` § webmail) : seul cet hôte figure dans les liens
+# cliquables rendus aux utilisateurs — jamais `SYNELIA_ZIMBRA_URL` (console admin
+# interne, injoignable hors lab).
+ENV_WEBMAIL_PUBLIC = "SYNELIA_WEBMAIL_URL"
+HOTE_WEBMAIL_PUBLIC_DEFAUT = "webmail.cloud.dev01.ovh.smile.ci"
+
+
+def base_webmail_publique() -> str:
+    """Base publique cliquable du webmail (`SYNELIA_WEBMAIL_URL` ou le vhost dev01)."""
+    return os.environ.get(ENV_WEBMAIL_PUBLIC, f"https://{HOTE_WEBMAIL_PUBLIC_DEFAUT}")
+
 
 _NS_SOAP = "http://www.w3.org/2003/05/soap-envelope"
 _NS_ZIMBRA = "urn:zimbra"
@@ -57,7 +69,7 @@ class ZimbraSimule:
         }
 
     def ouvrir_webmail(self, adresse: str | None) -> str:
-        return f"https://webmail.synelia.cloud/?boite={adresse or ''}&jeton={nouvel_id()}"
+        return f"{base_webmail_publique()}/?boite={adresse or ''}&jeton={nouvel_id()}"
 
 
 class ZimbraReel(ZimbraSimule):
@@ -245,7 +257,12 @@ class ZimbraReel(ZimbraSimule):
         jeton = racine.find(f".//{{{_NS_ADMIN}}}authToken")
         if jeton is None or not jeton.text:
             return super().ouvrir_webmail(adresse)
-        return f"{self.base}/service/preauth?authtoken={jeton.text}"
+        # Lien cliquable sur l'hôte PUBLIC (vhost dev01 → mailboxd interne) : `self.base`
+        # est la console admin interne (`zimbra:7071`), jamais exposée — le preauth SSO
+        # (`/service/preauth?authtoken=`) est servi par le mailbox, pas par l'admin.
+        from urllib.parse import quote
+
+        return f"{base_webmail_publique()}/service/preauth?authtoken={quote(jeton.text, safe='')}"
 
 
 def choisir_zimbra() -> ZimbraSimule:

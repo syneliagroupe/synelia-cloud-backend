@@ -122,9 +122,7 @@ async def test_domaine_zimbra_reel_si_joignable(client):
     from synelia_openstack import zimbra
 
     assert isinstance(zimbra.choisir_zimbra(), zimbra.ZimbraReel)
-    r = await client.post(
-        "/v1/web/emails", json={"domaine": "preuve-zimbra.ci", "palier": "pro"}
-    )
+    r = await client.post("/v1/web/emails", json={"domaine": "preuve-zimbra.ci", "palier": "pro"})
     assert r.status_code == 202, r.text
     mess = next(
         m
@@ -142,3 +140,49 @@ async def test_domaine_zimbra_reel_si_joignable(client):
     assert reel._domaine_id("preuve-zimbra.ci") is None, (
         "domaine toujours présent dans Zimbra : suppression sans impact réel"
     )
+
+
+async def test_erreurs_emails(client):
+    # Branches d'erreur simule-couvrables : 404 sur tous les endpoints détail, 402 quota
+    # dépassé à l'activation, 422 confirmation, liste filtrée.
+    for methode, chemin, kwargs in [
+        ("get", "/v1/web/emails/messagerie-inexistante", {}),
+        ("patch", "/v1/web/emails/messagerie-inexistante", {"json": {"palier": "pro"}}),
+        ("delete", "/v1/web/emails/messagerie-inexistante", {"params": {"confirmation": "x"}}),
+        ("put", "/v1/web/emails/messagerie-inexistante/alias", {"json": {"alias": []}}),
+        (
+            "post",
+            "/v1/web/emails/messagerie-inexistante/authentification/verification",
+            {},
+        ),
+        (
+            "post",
+            "/v1/web/emails/messagerie-inexistante/boites",
+            {"json": {"adresse": "a@x.ci", "nom": "A"}},
+        ),
+        (
+            "patch",
+            "/v1/web/emails/messagerie-inexistante/boites/a@x.ci",
+            {"json": {"quotaGo": 1}},
+        ),
+        (
+            "delete",
+            "/v1/web/emails/messagerie-inexistante/boites/a@x.ci",
+            {"params": {"confirmation": "a@x.ci"}},
+        ),
+        ("post", "/v1/web/emails/messagerie-inexistante/ouverture", {"json": {}}),
+    ]:
+        r = await getattr(client, methode)(chemin, **kwargs)
+        assert r.status_code == 404, (methode, chemin, r.text)
+
+    r = await client.post("/v1/web/emails", json={"domaine": "erreurs.ci", "palier": "pro"})
+    assert r.status_code == 202, r.text
+    mid = next(
+        m
+        for m in (await client.get("/v1/web/emails")).json()["donnees"]
+        if m["domaine"] == "erreurs.ci"
+    )["id"]
+    r = await client.delete(f"/v1/web/emails/{mid}", params={"confirmation": "mauvais"})
+    assert r.status_code == 422
+    r = await client.get("/v1/web/emails", params={"actif": "true"})
+    assert r.status_code == 200 and any(m["id"] == mid for m in r.json()["donnees"])
