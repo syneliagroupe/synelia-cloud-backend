@@ -382,6 +382,29 @@ def _compose_bases(mdp_bases: dict[str, str] | None) -> str:
     networks:
       - synelia
 
+  bases-mysql:
+    image: mysql:8
+    restart: unless-stopped
+    command: --bind-address=0.0.0.0
+    environment:
+      MYSQL_ROOT_PASSWORD: {mdp_bases.get("mysql", "")}
+      MYSQL_ROOT_HOST: "%"
+    volumes:
+      - {_RACINE_DOCKER}/bases/mysql:/var/lib/mysql
+    networks:
+      - synelia
+
+  bases-mongodb:
+    image: mongo:7
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: {mdp_bases.get("mongodb", "")}
+    volumes:
+      - {_RACINE_DOCKER}/bases/mongodb:/data/db
+    networks:
+      - synelia
+
   bases-redis:
     image: redis:7
     restart: unless-stopped
@@ -457,7 +480,7 @@ def _sql_chaine(valeur: str) -> str:
 def sql_creer_base(moteur: str, nom: str, jeu_caracteres: str | None = None) -> list[str]:
     """Ordres de création d'une base — `moteur` parmi `mariadb`/`postgresql`."""
     _valider_identifiant_sql(nom, "nom de base")
-    if moteur == "mariadb":
+    if moteur in ("mariadb", "mysql"):
         charset = jeu_caracteres or "utf8mb4"
         return [f"CREATE DATABASE `{nom}` CHARACTER SET = {_sql_chaine(charset)};"]
     if moteur == "postgresql":
@@ -477,7 +500,7 @@ def sql_creer_utilisateur(
     # `tous/lecture/lecture_ecriture` ; `Utilisateur2.droits` : `complet/lecture/ecriture`)
     # — les deux formes pleines donnent `ALL`, le reste `SELECT`.
     pleins = {"complet", "tous"}
-    if moteur == "mariadb":
+    if moteur in ("mariadb", "mysql"):
         priv = "ALL PRIVILEGES" if (droits or "complet") in pleins else "SELECT"
         return [
             f"CREATE USER {_sql_chaine(utilisateur)}@'%' IDENTIFIED BY {mdp};",
@@ -502,7 +525,7 @@ def sql_mot_de_passe_utilisateur(moteur: str, utilisateur: str, mot_de_passe: st
     """Rotation du mot de passe d'un utilisateur existant."""
     _valider_identifiant_sql(utilisateur, "nom d'utilisateur")
     mdp = _sql_chaine(mot_de_passe)
-    if moteur == "mariadb":
+    if moteur in ("mariadb", "mysql"):
         return [f"ALTER USER {_sql_chaine(utilisateur)}@'%' IDENTIFIED BY {mdp};"]
     if moteur == "postgresql":
         return [f'ALTER USER "{utilisateur}" WITH PASSWORD {mdp};']
@@ -511,7 +534,7 @@ def sql_mot_de_passe_utilisateur(moteur: str, utilisateur: str, mot_de_passe: st
 
 def sql_supprimer_base(moteur: str, nom: str) -> list[str]:
     _valider_identifiant_sql(nom, "nom de base")
-    if moteur == "mariadb":
+    if moteur in ("mariadb", "mysql"):
         return [f"DROP DATABASE IF EXISTS `{nom}`;"]
     if moteur == "postgresql":
         return [f'DROP DATABASE IF EXISTS "{nom}";']
@@ -520,7 +543,7 @@ def sql_supprimer_base(moteur: str, nom: str) -> list[str]:
 
 def sql_supprimer_utilisateur(moteur: str, utilisateur: str) -> list[str]:
     _valider_identifiant_sql(utilisateur, "nom d'utilisateur")
-    if moteur == "mariadb":
+    if moteur in ("mariadb", "mysql"):
         return [f"DROP USER IF EXISTS {_sql_chaine(utilisateur)}@'%';"]
     if moteur == "postgresql":
         return [f'DROP USER IF EXISTS "{utilisateur}";']
@@ -531,7 +554,7 @@ def sql_rotation_root(moteur: str, nouveau: str) -> list[str]:
     """Rotation du mot de passe root du moteur — `root`@`localhost`+`%` garantis par le
     script d'init du premier boot (`_fichiers_bases`), `postgres` natif à l'image."""
     mdp = _sql_chaine(nouveau)
-    if moteur == "mariadb":
+    if moteur in ("mariadb", "mysql"):
         return [
             f"ALTER USER 'root'@'localhost' IDENTIFIED BY {mdp};",
             f"ALTER USER 'root'@'%' IDENTIFIED BY {mdp};",
@@ -556,10 +579,103 @@ def commande_redis_rotation(ancien: str, nouveau: str) -> str:
     )
 
 
+def _js_chaine(valeur: str) -> str:
+    """Littéral chaîne JavaScript (mongosh) : `"` et `\\` échappés."""
+    return '"' + valeur.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def mongo_creer_base(moteur: str, nom: str, jeu_caracteres: str | None = None) -> list[str]:
+    """MongoDB n'a pas de `CREATE DATABASE` : la base naît avec sa première collection.
+    On en crée une d'ancrage (`_synelia`) pour matérialiser la base demandée."""
+    _valider_identifiant_sql(nom, "nom de base")
+    return [f"db.getSiblingDB({_js_chaine(nom)}).createCollection('_synelia');"]
+
+
+def mongo_creer_utilisateur(
+    moteur: str, utilisateur: str, mot_de_passe: str, base: str, droits: str | None = None
+) -> list[str]:
+    """Utilisateur restreint à `base` (`read` ou `readWrite` selon les droits)."""
+    _valider_identifiant_sql(utilisateur, "nom d'utilisateur")
+    _valider_identifiant_sql(base, "nom de base")
+    role = "readWrite" if (droits or "complet") in {"complet", "tous"} else "read"
+    return [
+        f"db.getSiblingDB({_js_chaine(base)}).createUser({{"
+        f"user: {_js_chaine(utilisateur)}, pwd: {_js_chaine(mot_de_passe)}, "
+        f"roles: [{{role: {_js_chaine(role)}, db: {_js_chaine(base)}}}]}});"
+    ]
+
+
+def mongo_mot_de_passe_utilisateur(moteur: str, utilisateur: str, mot_de_passe: str) -> list[str]:
+    _valider_identifiant_sql(utilisateur, "nom d'utilisateur")
+    return [
+        f"db.getSiblingDB('admin').updateUser({_js_chaine(utilisateur)}, "
+        f"{{pwd: {_js_chaine(mot_de_passe)}}});"
+    ]
+
+
+def mongo_supprimer_base(moteur: str, nom: str) -> list[str]:
+    _valider_identifiant_sql(nom, "nom de base")
+    return [f"db.getSiblingDB({_js_chaine(nom)}).dropDatabase();"]
+
+
+def mongo_supprimer_utilisateur(moteur: str, utilisateur: str) -> list[str]:
+    _valider_identifiant_sql(utilisateur, "nom d'utilisateur")
+    return [f"db.getSiblingDB('admin').dropUser({_js_chaine(utilisateur)});"]
+
+
+def mongo_rotation_root(moteur: str, nouveau: str) -> list[str]:
+    return [f"db.getSiblingDB('admin').updateUser('root', {{pwd: {_js_chaine(nouveau)}}});"]
+
+
+# ── Dispatch générique (SQL ou JS selon le moteur) ──────────────────────────
+# Les routeurs appellent ces fonctions : mariadb/mysql/postgresql renvoient des
+# ordres SQL, mongodb des ordres mongosh. Redis n'a pas de bases nommées (422 franc).
+
+
+def ordres_creer_base(moteur: str, nom: str, jeu_caracteres: str | None = None) -> list[str]:
+    if moteur == "mongodb":
+        return mongo_creer_base(moteur, nom, jeu_caracteres)
+    return sql_creer_base(moteur, nom, jeu_caracteres)
+
+
+def ordres_creer_utilisateur(
+    moteur: str, utilisateur: str, mot_de_passe: str, base: str, droits: str | None = None
+) -> list[str]:
+    if moteur == "mongodb":
+        return mongo_creer_utilisateur(moteur, utilisateur, mot_de_passe, base, droits)
+    return sql_creer_utilisateur(moteur, utilisateur, mot_de_passe, base, droits)
+
+
+def ordres_mot_de_passe_utilisateur(moteur: str, utilisateur: str, mot_de_passe: str) -> list[str]:
+    if moteur == "mongodb":
+        return mongo_mot_de_passe_utilisateur(moteur, utilisateur, mot_de_passe)
+    return sql_mot_de_passe_utilisateur(moteur, utilisateur, mot_de_passe)
+
+
+def ordres_supprimer_base(moteur: str, nom: str) -> list[str]:
+    if moteur == "mongodb":
+        return mongo_supprimer_base(moteur, nom)
+    return sql_supprimer_base(moteur, nom)
+
+
+def ordres_supprimer_utilisateur(moteur: str, utilisateur: str) -> list[str]:
+    if moteur == "mongodb":
+        return mongo_supprimer_utilisateur(moteur, utilisateur)
+    return sql_supprimer_utilisateur(moteur, utilisateur)
+
+
+def ordres_rotation_root(moteur: str, nouveau: str) -> list[str]:
+    if moteur == "mongodb":
+        return mongo_rotation_root(moteur, nouveau)
+    return sql_rotation_root(moteur, nouveau)
+
+
 def _client_moteur(moteur: str) -> tuple[str, str]:
     """(service compose, préfixe client) pour exécuter du SQL dans le conteneur moteur."""
     if moteur == "mariadb":
         return ("bases-mariadb", "mariadb -uroot")
+    if moteur == "mysql":
+        return ("bases-mysql", "mysql -uroot")
     if moteur == "postgresql":
         return ("bases-postgres", "psql -U postgres -v ON_ERROR_STOP=1")
     raise erreurs.non_porte(f"Le moteur {moteur} ne porte pas de bases nommées.")
@@ -579,6 +695,26 @@ def commande_sql_bases(moteur: str, mdp_root: str, ordres: list[str]) -> str:
     )
 
 
+def commande_mongo_bases(moteur: str, mdp_root: str, ordres: list[str]) -> str:
+    """Commandes mongosh (JS) — mot de passe root en variable d'environnement, script
+    passé par stdin (`mongosh --file /dev/stdin`), jamais en argument visible."""
+    script = "\n".join(ordres)
+    return (
+        f"cd {_RACINE_DOCKER} && "
+        f"MDB_MDP={_coquille(mdp_root)} "
+        "docker compose exec -T -e MDB_MDP bases-mongodb "
+        'sh -c \'mongosh --quiet -u root -p "$MDB_MDP" --authenticationDatabase admin '
+        "--file /dev/stdin' <<'SYNELIA_JS'\n" + script + "\nSYNELIA_JS"
+    )
+
+
+def commande_bases(moteur: str, mdp_root: str, ordres: list[str]) -> str:
+    """Commande d'application des ordres, selon le moteur (SQL ou JS)."""
+    if moteur == "mongodb":
+        return commande_mongo_bases(moteur, mdp_root, ordres)
+    return commande_sql_bases(moteur, mdp_root, ordres)
+
+
 def _coquille(valeur: str) -> str:
     """Échappement shell POSIX (guillemet simple) pour les interpolations de
     `commande_sql_bases` — les mots de passe clients sont arbitraires."""
@@ -588,10 +724,10 @@ def _coquille(valeur: str) -> str:
 async def executer_sql_bases(
     ctx: Contexte, hebergement_id: str, moteur: str, ordres: list[str]
 ) -> None:
-    """Exécute `ordres` SQL sur le moteur partagé du VPS. `SshSimule` : no-op documenté
-    (tests, aucune infra) — l'appelant persiste alors sa ligne comme avant. `SshReel`
-    sans IP/clé/mot de passe root : échec franc, jamais de ligne fantôme. Toute erreur
-    SSH remonte en `amont_indisponible` (424), jamais en 500 opaque."""
+    """Exécute `ordres` (SQL ou mongosh) sur le moteur partagé du VPS. `SshSimule` :
+    no-op documenté (tests, aucune infra) — l'appelant persiste alors sa ligne comme
+    avant. `SshReel` sans IP/clé/mot de passe root : échec franc, jamais de ligne
+    fantôme. Toute erreur SSH remonte en `amont_indisponible` (424), jamais en 500."""
     if not isinstance(amont_ssh(), SshReel):
         return
     try:
@@ -602,9 +738,9 @@ async def executer_sql_bases(
     if not mdp_root:
         raise erreurs.amont_indisponible(
             "bases (SSH)",
-            "Mot de passe root indisponible pour ce VPS : exécution SQL impossible.",
+            "Mot de passe root indisponible pour ce VPS : exécution impossible.",
         )
-    await executer_commande_vps(ctx, hebergement_id, commande_sql_bases(moteur, mdp_root, ordres))
+    await executer_commande_vps(ctx, hebergement_id, commande_bases(moteur, mdp_root, ordres))
 
 
 async def _acces_vps(ctx: Contexte, hebergement_id: str) -> tuple[str, str]:
@@ -635,6 +771,181 @@ async def executer_commande_vps(ctx: Contexte, hebergement_id: str, commande: st
         if isinstance(exc, _e.AppError):
             raise
         raise erreurs.amont_indisponible("VPS (SSH)", str(exc)[:200]) from None
+
+
+# ── Export / import réels des bases ─────────────────────────────────────────
+# Le dump est produit dans le conteneur moteur (`mariadb-dump`/`mysqldump`/`pg_dump`/
+# `mongodump`), encodé en base64 sur le VPS (canal SSH texte), décodé ici puis déposé
+# dans le stockage objet (MinIO, bucket dédié). L'import fait l'inverse : l'archive est
+# lue depuis MinIO, écrite en base64 sur le VPS, puis restaurée. Redis n'a pas de bases
+# nommées (422 franc). En simulation, aucun VPS : un contenu factice est déposé/relu
+# (le flux export→import reste testable de bout en bout sans infra).
+
+BUCKET_SAUVEGARDES_BASES = "synelia-sauvegardes-bases"
+
+_EXTENSIONS = {"sql": "sql", "sql_gz": "sql.gz", "csv": "csv"}
+
+
+def commande_export_base(moteur: str, base: str, mdp_root: str) -> str:
+    """Dump de `base`, encodé base64 sur stdout (canal SSH texte)."""
+    _valider_identifiant_sql(base, "nom de base")
+    if moteur == "mongodb":
+        return (
+            f"cd {_RACINE_DOCKER} && "
+            f"MDB_MDP={_coquille(mdp_root)} "
+            "docker compose exec -T -e MDB_MDP bases-mongodb "
+            "sh -c 'mongodump --archive --gzip --db "
+            f'{_coquille(base)} -u root -p "$MDB_MDP" --authenticationDatabase admin\' | base64 -w0'
+        )
+    service, _ = _client_moteur(moteur)
+    if moteur == "postgresql":
+        dump = f"pg_dump -U postgres {_coquille(base)}"
+        env = 'PGPASSWORD="$MDB_MDP"'
+    else:
+        binaire = "mariadb-dump" if moteur == "mariadb" else "mysqldump"
+        dump = f"{binaire} -uroot {_coquille(base)}"
+        env = 'MYSQL_PWD="$MDB_MDP"'
+    return (
+        f"cd {_RACINE_DOCKER} && MDB_MDP={_coquille(mdp_root)} "
+        f"docker compose exec -T -e {env} {service} sh -c {_coquille(dump)} | base64 -w0"
+    )
+
+
+def commande_import_base(moteur: str, base: str, mdp_root: str) -> str:
+    """Restaure `base` depuis `/srv/synelia/bases/import.b64` (écrit par SFTP)."""
+    _valider_identifiant_sql(base, "nom de base")
+    fichier = f"{_RACINE_DOCKER}/bases/import.b64"
+    if moteur == "mongodb":
+        return (
+            f"cd {_RACINE_DOCKER} && base64 -d < {fichier} | "
+            f"MDB_MDP={_coquille(mdp_root)} "
+            "docker compose exec -T -e MDB_MDP bases-mongodb "
+            'sh -c \'mongorestore --archive --gzip --drop -u root -p "$MDB_MDP" '
+            "--authenticationDatabase admin'"
+        )
+    service, _ = _client_moteur(moteur)
+    if moteur == "postgresql":
+        env = 'PGPASSWORD="$MDB_MDP"'
+        # La base cible doit exister : `pg_dump` ne la crée pas au restore.
+        creer = (
+            # `base` est borné par `_valider_identifiant_sql` (charset sûr) — pas d'injection.
+            f"docker compose exec -T -e {env} {service} psql -U postgres -tc "  # noqa: S608
+            f"\"SELECT 1 FROM pg_database WHERE datname='{base}'\" | grep -q 1 || "
+            f"docker compose exec -T -e {env} {service} createdb -U postgres {_coquille(base)} && "
+        )
+        restore = f"psql -U postgres -v ON_ERROR_STOP=1 -d {_coquille(base)}"
+    else:
+        env = 'MYSQL_PWD="$MDB_MDP"'
+        creer = (
+            f"docker compose exec -T -e {env} {service} sh -c "
+            f"'CREATE DATABASE IF NOT EXISTS `{base}`' >/dev/null && "
+        )
+        restore = f"mysql -uroot {_coquille(base)}"
+    return (
+        f"cd {_RACINE_DOCKER} && MDB_MDP={_coquille(mdp_root)} "
+        f"{creer}base64 -d < {fichier} | "
+        f"docker compose exec -T -e {env} {service} sh -c {_coquille(restore)}"
+    )
+
+
+async def _mdp_root(ctx: Contexte, hebergement_id: str, moteur: str) -> str:
+    try:
+        secrets_h = await depot.secrets(ctx, hebergement_id)
+    except Exception:  # noqa: BLE001
+        secrets_h = {}
+    mdp = secrets_h.get(f"mdp_bases_{moteur}")
+    if not mdp:
+        raise erreurs.amont_indisponible(
+            "bases (SSH)", "Mot de passe root indisponible pour ce VPS."
+        )
+    return mdp
+
+
+def _cle_archive(hebergement_id: str, base: str, format_: str, moteur: str) -> str:
+    ext = "archive.gz" if moteur == "mongodb" else _EXTENSIONS.get(format_, "sql")
+    horodatage = maintenant().strftime("%Y%m%dT%H%M%SZ")
+    return f"bases/{hebergement_id}/{base}-{horodatage}.{ext}"
+
+
+async def exporter_base(
+    ctx: Contexte, hebergement_id: str, moteur: str, base: str, format_: str = "sql"
+) -> str:
+    """Exporte `base` et dépose l'archive dans MinIO ; renvoie la clé d'archive
+    (l'interface la présente comme `archiveId`). Redis : 422 franc."""
+    if moteur == "redis":
+        raise erreurs.non_porte("Redis n'a pas de bases nommées : export sans objet.")
+    from synelia.modules.stockage.service import amont_objet
+
+    cle = _cle_archive(hebergement_id, base, format_, moteur)
+    if not isinstance(amont_ssh(), SshReel):
+        contenu = f"-- export simulé de {base} ({moteur})\n".encode()
+    else:
+        import base64
+
+        mdp = await _mdp_root(ctx, hebergement_id, moteur)
+        ip, cle_privee = await _acces_vps(ctx, hebergement_id)
+        try:
+            sortie = await asyncio.to_thread(
+                amont_ssh().executer,
+                ip,
+                cle_privee,
+                commande_export_base(moteur, base, mdp),
+            )
+        except Exception as exc:  # noqa: BLE001
+            from synelia_kernel import erreurs as _e
+
+            if isinstance(exc, _e.AppError):
+                raise
+            raise erreurs.amont_indisponible("bases (SSH)", str(exc)[:200]) from None
+        contenu = base64.b64decode((sortie or "").strip() or b"")
+    await asyncio.to_thread(
+        amont_objet().deposer_objet,
+        BUCKET_SAUVEGARDES_BASES,
+        cle,
+        contenu,
+        "application/octet-stream",
+    )
+    return cle
+
+
+async def importer_base(
+    ctx: Contexte, hebergement_id: str, moteur: str, base: str, archive_id: str
+) -> None:
+    """Restaure `base` depuis l'archive MinIO `archive_id`. Archive absente : 404 ;
+    Redis : 422 franc ; VPS injoignable en réel : 424."""
+    if moteur == "redis":
+        raise erreurs.non_porte("Redis n'a pas de bases nommées : import sans objet.")
+    from synelia.modules.stockage.service import amont_objet
+
+    contenu = await asyncio.to_thread(
+        amont_objet().recuperer_objet, BUCKET_SAUVEGARDES_BASES, archive_id
+    )
+    if contenu is None:
+        raise erreurs.introuvable("Archive", archive_id)
+    if not isinstance(amont_ssh(), SshReel):
+        return
+    import base64
+
+    mdp = await _mdp_root(ctx, hebergement_id, moteur)
+    ip, cle_privee = await _acces_vps(ctx, hebergement_id)
+    ssh = amont_ssh()
+    await asyncio.to_thread(
+        ssh.ecrire_fichier,
+        ip,
+        cle_privee,
+        f"{_RACINE_DOCKER}/bases/import.b64",
+        base64.b64encode(contenu).decode(),
+    )
+    try:
+        await asyncio.to_thread(
+            ssh.executer, ip, cle_privee, commande_import_base(moteur, base, mdp)
+        )
+    except Exception as exc:  # noqa: BLE001
+        from synelia_kernel import erreurs as _e
+
+        if isinstance(exc, _e.AppError):
+            raise
+        raise erreurs.amont_indisponible("bases (SSH)", str(exc)[:200]) from None
 
 
 def ip_privee(hebergement_id: str) -> str:
@@ -1068,11 +1379,14 @@ def construire_serveur_bases(ctx: Contexte, hebergement_id: str) -> m.ServeurBas
 def construire_serveur_bases_moteur(
     ctx: Contexte, hebergement_id: str, moteur: str
 ) -> m.ServeurBases:
-    """Fiche d'un moteur partagé du VPS (`mariadb`/`postgresql`/`redis`, conteneurs
-    posés par `construire_cloud_init`) : même forme, seuls moteur/version/port changent."""
+    """Fiche d'un moteur partagé du VPS (`mariadb`/`mysql`/`postgresql`/`mongodb`/`redis`,
+    conteneurs posés par `construire_cloud_init`) : même forme, seuls moteur/version/port
+    changent."""
     meta = {
-        "mariadb": ("MariaDB 10.11", 3306),
+        "mariadb": ("MariaDB 11", 3306),
+        "mysql": ("MySQL 8", 3306),
         "postgresql": ("PostgreSQL 16", 5432),
+        "mongodb": ("MongoDB 7", 27017),
         "redis": ("Redis 7", 6379),
     }[moteur]
     return m.ServeurBases(
@@ -1452,7 +1766,7 @@ class ExecuteurHebergementCreer(Executeur):
                 secrets_h = {}
             mdp_bases = {
                 moteur: secrets_h.get(f"mdp_bases_{moteur}") or jeton_opaque(20)
-                for moteur in ("mariadb", "postgresql", "redis")
+                for moteur in ("mariadb", "mysql", "postgresql", "mongodb", "redis")
             }
             await depot.definir_secrets(
                 ctx, h.id, {f"mdp_bases_{m}": v for m, v in mdp_bases.items()}
@@ -1550,9 +1864,10 @@ class ExecuteurHebergementCreer(Executeur):
         base = await depot_bases.creer(
             ctx, construire_serveur_bases(ctx, travail.cible_id or ""), parent_id=travail.cible_id
         )
-        # Un serveur par moteur partagé du VPS (mariadb + postgresql + redis, conteneurs
-        # posés par `construire_cloud_init`) : l'interface « Databases » les liste tous.
-        for moteur in ("postgresql", "redis"):
+        # Un serveur par moteur partagé du VPS (mariadb + mysql + postgresql + mongodb
+        # + redis, conteneurs posés par `construire_cloud_init`) : l'interface
+        # « Databases » les liste tous.
+        for moteur in ("mysql", "postgresql", "mongodb", "redis"):
             await depot_bases.creer(
                 ctx,
                 construire_serveur_bases_moteur(ctx, travail.cible_id or "", moteur),
@@ -1837,12 +2152,35 @@ class ExecuteurSiteMiseAJour(Executeur):
 
 @executeur("base.export")
 class ExecuteurBaseExport(Executeur):
+    async def etape(self, ctx: Contexte, travail: Travail, index: int, nom: str) -> str | None:
+        if index != 2:
+            return None
+        serveur = await depot_bases.obtenir(ctx, travail.cible_id or "")
+        entree = travail.entree or {}
+        base = entree.get("base") or travail.label
+        format_ = entree.get("format") or "sql"
+        archive = await exporter_base(ctx, serveur.hebergementId, serveur.moteur, base, format_)
+        travail.contexte = {**dict(travail.contexte), "archive_id": archive}
+        return f"Archive déposée : {archive}"
+
     async def terminer(self, ctx: Contexte, travail: Travail) -> None:
         return None
 
 
 @executeur("base.import")
 class ExecuteurBaseImport(Executeur):
+    async def etape(self, ctx: Contexte, travail: Travail, index: int, nom: str) -> str | None:
+        if index != 1:
+            return None
+        serveur = await depot_bases.obtenir(ctx, travail.cible_id or "")
+        entree = travail.entree or {}
+        base = entree.get("base") or travail.label
+        archive = entree.get("archiveId")
+        if not archive:
+            raise erreurs.validation("Archive d'import manquante.", champs={"archiveId": "requis"})
+        await importer_base(ctx, serveur.hebergementId, serveur.moteur, base, archive)
+        return f"Base {base} restaurée depuis {archive}"
+
     async def terminer(self, ctx: Contexte, travail: Travail) -> None:
         return None
 
