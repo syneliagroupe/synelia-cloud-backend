@@ -56,6 +56,8 @@ def exige_admin(action: str | None = None) -> Callable[..., Coroutine[Any, Any, 
         assert p is not None
         if not p.est_admin_plateforme:
             await _refuser(ctx, action or "admin", "Espace réservé à l'équipe Synelia.")
+        if p.cle_api_id and p.portee and action and action not in p.portee:
+            await _refuser(ctx, action, "Ce jeton n'a pas cette action dans sa portée.")
         if action and not rbac.autorise(p.role_equipe or p.role, action, lecture=True):
             await _refuser(ctx, action, rbac.message_refus(action))
         return ctx
