@@ -671,25 +671,33 @@ def ordres_rotation_root(moteur: str, nouveau: str) -> list[str]:
 
 
 def _client_moteur(moteur: str) -> tuple[str, str]:
-    """(service compose, préfixe client) pour exécuter du SQL dans le conteneur moteur."""
+    """(service compose, préfixe client) pour exécuter du SQL dans le conteneur moteur.
+    `$MDB_MDP` est propagé dans le conteneur par `-e MDB_MDP` (cf. `commande_sql_bases`) —
+    chaque préfixe doit donc réellement s'authentifier avec, jamais compter sur un root
+    sans mot de passe (mariadb/mysql : `-p`, sans espace, valeur non loguée dans `ps`
+    puisque lue depuis l'environnement ; postgresql : `psql` n'a pas de flag mot de passe,
+    `PGPASSWORD` est la voie standard)."""
     if moteur == "mariadb":
-        return ("bases-mariadb", "mariadb -uroot")
+        return ("bases-mariadb", 'mariadb -uroot -p"$MDB_MDP"')
     if moteur == "mysql":
-        return ("bases-mysql", "mysql -uroot")
+        return ("bases-mysql", 'mysql -uroot -p"$MDB_MDP"')
     if moteur == "postgresql":
-        return ("bases-postgres", "psql -U postgres -v ON_ERROR_STOP=1")
+        return ("bases-postgres", 'PGPASSWORD="$MDB_MDP" psql -U postgres -v ON_ERROR_STOP=1')
     raise erreurs.non_porte(f"Le moteur {moteur} ne porte pas de bases nommées.")
 
 
 def commande_sql_bases(moteur: str, mdp_root: str, ordres: list[str]) -> str:
     """Commande shell (exécutée via SSH sur le VPS) lançant `ordres` dans le conteneur
     moteur — mot de passe root en variable d'environnement (jamais en clair dans
-    `ps`), SQL passé par stdin (pas de contrainte de quoting du shell distant)."""
+    `ps`), SQL passé par stdin (pas de contrainte de quoting du shell distant).
+    `-e MDB_MDP` propage la variable du shell hôte (SSH) au conteneur : sans lui, la
+    variable posée avant `docker compose exec` reste invisible dedans et `_client_moteur`
+    s'authentifie contre un mot de passe vide (constaté en direct : 1045 Access denied)."""
     service, client = _client_moteur(moteur)
     return (
         f"cd {_RACINE_DOCKER} && "
         f"MDB_MDP={_coquille(mdp_root)} "
-        f"docker compose exec -T {service} sh -c {_coquille(client + ' < /dev/stdin')} <<'SYNELIA_SQL'\n"
+        f"docker compose exec -T -e MDB_MDP {service} sh -c {_coquille(client + ' < /dev/stdin')} <<'SYNELIA_SQL'\n"
         + "\n".join(ordres)
         + "\nSYNELIA_SQL"
     )

@@ -566,9 +566,11 @@ def test_sql_bases_moteurs():
         assert exc.code == "non_porte"
     else:
         raise AssertionError("base redis acceptée")
-    # Commande shell : mot de passe en variable d'environnement, SQL par stdin.
+    # Commande shell : mot de passe en variable d'environnement (propagée dans le
+    # conteneur par -e, utilisée par le client via -p), SQL par stdin.
     cmd = heb.commande_sql_bases("mariadb", "r00t", ["SELECT 1;"])
-    assert "docker compose exec -T bases-mariadb" in cmd and "MDB_MDP='r00t'" in cmd
+    assert "docker compose exec -T -e MDB_MDP bases-mariadb" in cmd and "MDB_MDP='r00t'" in cmd
+    assert 'mariadb -uroot -p"$MDB_MDP"' in cmd
     assert cmd.rstrip().endswith("SYNELIA_SQL")
     # Rotation root : les deux comptes mariadb (init du premier boot), postgres natif.
     assert heb.sql_rotation_root("mariadb", "n3w") == [
