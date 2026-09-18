@@ -652,8 +652,9 @@ async def demo(session, org: Organisation, admin: Utilisateur) -> None:
     # Branche OpenStack réel (projet + réseau + AC) si le lab tourne en fournisseur openstack :
     # le peupleur UI n'appelle pas `espace.create`, donc sans ceci `reseau_id`/`projet_id` restent
     # vides et les chemins Real Neutron/Nova voient `tenant_id=None`.
-    from synelia.modules.espaces.service import assurer_secrets_openstack_espace
     from synelia_kernel.journal import journal as _journal
+
+    from synelia.modules.espaces.service import assurer_secrets_openstack_espace
 
     await session.flush()
     try:
