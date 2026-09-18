@@ -50,6 +50,15 @@ services:
           fi
           rm -rf /opt/zimbra-install
         else
+          # KNOWN GAP: this only carries over the hostname/LDAP patches. A true
+          # fresh install (empty ./zimbra-storage) also needs the 4 fixes
+          # documented in zimbra/fix/build.sh (FIPS-disabled openssl.cnf,
+          # jetty-setuid jar symlink, amavisd StartTLS verify=none, JDK 17
+          # --add-opens) — those are NOT applied here. That directory now
+          # builds nothing (this container runs the stock image), but keep it
+          # as the reference for whoever next does a disaster-recovery
+          # reinstall; port the relevant `sed`/`cp`/`ln` lines in before
+          # `zmsetup.pl` runs, not after.
           sed -i 's/HOSTNAME=$(hostname -a)/HOSTNAME=$(hostname -s)/' /opt/build.sh
           sed -i 's/LDAPSERVERID="2"/LDAPSERVERID="1"/g' /opt/build.sh
         fi
