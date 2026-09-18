@@ -179,6 +179,56 @@ n'est pas créé par cet exécuteur et doit encore être posé à la main (`open
 + `depot_plateforme.definir_secrets(ctx, espace_id, {"lb_id": ...})`) avant le premier hébergement —
 c'est ce qui a été fait manuellement pour créer `vps-zone` sur ce lab.
 
+## Magnum CAPI remis en service (2026-09-18)
+
+Driver `magnum-cluster-api 0.38.2` (magnum `22.0.1.dev11`, api+conductor),
+management k3s `v1.31.5` sur ctrl1 (CAPI/CAPO/ORC Running). `openstack coe
+cluster create` vérifié de bout en bout : template → LB Octavia ACTIVE →
+VMs → `CREATE_COMPLETE / HEALTHY`, puis cluster de test supprimé (lab
+nettoyé : 0 VM/LB/volume/FIP résiduels).
+
+- Template public `k8s-capi` (`4f72b71f-...`) : image
+  `ubuntu-24.04-v1.33.12`, master `k8s.master`, worker `k8s.worker-mini`
+  (2/4096/10 — le `k8s.worker` 20 Go ne schedule plus sur comp1 plein),
+  `network_driver=calico`, `external_network_id=external-net`,
+  `dns_nameserver=192.168.121.1` (vérifié joignable+résolvant depuis
+  tenant-net ; `1.1.1.1` bloqué, `8.8.8.8` OK aussi),
+  `labels={kube_tag: v1.33.12}`, `master_lb_enabled=true`.
+  Attention : `network_driver=cilium` est REJETÉ à la création (400) —
+  `allowed_network_drivers` du lab = `flannel,calico` (supporté inclut
+  cilium, autorisé non). Changer `flavor_id` d'un template référencé par
+  un cluster → 400 ; supprimer le cluster d'abord.
+- `o-hm0` : après recréation manuelle son MAC (`e6:f9:...`) ne matchait
+  plus le port Neutron (`fa:16:3e:47:61:bf`) pinné dans les flows
+  anti-spoofing br-int → ARP FAILED vers les amphora. Fix :
+  `ip link set o-hm0 address fa:16:3e:47:61:bf`. Persistant via
+  `/etc/systemd/system/octavia-interface.service` (`ExecStartPre` pose
+  déjà la bonne MAC, service `enabled`) — ne pas recréer o-hm0 à la main
+  sans fixer la MAC.
+- Endpoints **public** Keystone/Neutron/Nova/Cinder rebasculés sur les
+  vhosts `https://{keystone,neutron,nova,cinder}.openstack-lab.dev01.ovh.smile.ci`
+  (étaient retombés sur `http://192.168.26.234`, injoignables depuis les
+  VM tenants → CCM crashloop). Ne pas les remettre sur les IP internes.
+- Piège CCM (OCCM v1.33.1) : le cloud-config généré par le driver pointe
+  `auth-url=http://192.168.26.234:5000` (injoignable tenant) ET sans `/v3`
+  la discovery suit le `href` http:// du version-doc Keystone (derrière
+  proxy TLS) → POST http → 301 → GET → 401. Contournement par cluster :
+  patcher le Secret workload `kube-system/cloud-config`
+  (`auth-url=https://keystone.openstack-lab.dev01.ovh.smile.ci/v3` —
+  le `/v3` explicite saute la discovery) + `rollout restart
+  ds/openstack-cloud-controller-manager`. Vérifié : taints retirés,
+  providerID/adresses posés, Machines Ready, `coe cluster show` HEALTHY.
+- Diag utile : `kubectl get secret kube-<stack>-kubeconfig -n magnum-system`
+  donne le kubeconfig workload ; `ip netns exec qdhcp-<net> curl
+  https://<vip>:6443/healthz` prouve le LB ; console série Nova via
+  `compute.get_server_console_output` ; logs CCM injoignables tant que les
+  Nodes n'ont pas d'addresses (`kubectl patch node ... --subresource=status`
+  pour débloquer).
+- Capacité : seul comp1 est up (comp2 éteint, pas de route). Avant un
+  `coe cluster create`, vérifier `os-hypervisors/statistics`
+  (`free_disk_gb` ≥ flavor master + worker + 5 amphora) et les claims
+  placement par consumer pour trouver le squatteur.
+
 ## État réel vs simulé de l'univers Infrastructure
 
 Voir [[infra-universe-real-vs-simulated]] (mémoire de session) pour le détail à jour — au 2026-09-07,

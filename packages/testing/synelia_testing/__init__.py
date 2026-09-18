@@ -48,6 +48,37 @@ def _sur_lab_reel() -> bool:
     return mode() == "openstack"
 
 
+def _sonde_tcp(hote: str, port: int, delai_s: float = 4.0) -> bool:
+    """Joignabilité TCP brute, sans exception : les backends hors réseau du lab
+    (Zimbra, relais SMTP — noms Docker non résolus depuis le poste de test) ne
+    doivent jamais faire échouer la suite, seulement la désélectionner."""
+    import socket
+
+    try:
+        socket.create_connection((hote, port), timeout=delai_s).close()
+        return True
+    except OSError:
+        return False
+
+
+def ignorer_si_zimbra_injoignable() -> None:
+    """Saute les preuves Zimbra réelles quand le serveur n'est pas joignable depuis
+    le poste de test (réseau Docker du lab uniquement) ; sans effet là où il l'est —
+    la preuve tourne alors pour de vrai, jamais en simulé silencieux."""
+    import os
+
+    url = os.environ.get("SYNELIA_ZIMBRA_URL", "")
+    hote = url.split("://", 1)[-1].split(":", 1)[0].split("/", 1)[0]
+    try:
+        port = int(url.rsplit(":", 1)[-1].rstrip("/")) if ":" in url.split("://", 1)[-1] else 443
+    except ValueError:
+        port = 443
+    if not hote or not _sonde_tcp(hote, port):
+        import pytest
+
+        pytest.skip(f"Zimbra injoignable depuis ce poste ({url or 'non configuré'})")
+
+
 def sur_lab_reel() -> bool:
     """Alias public de la sonde de mode : `True` quand la suite tourne contre le
     vrai lab OpenStack (`SYNELIA_FOURNISSEUR=openstack`)."""

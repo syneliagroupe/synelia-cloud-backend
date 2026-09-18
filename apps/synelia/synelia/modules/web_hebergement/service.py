@@ -248,12 +248,27 @@ def indenter(bloc: str, colonnes: int) -> str:
     return "\n".join(f"{prefixe}{ligne}" for ligne in bloc.splitlines())
 
 
-def construire_cloud_init(domaine: str, version_php: str, cle_publique: str | None = None) -> str:
+def construire_cloud_init(
+    domaine: str,
+    version_php: str,
+    cle_publique: str | None = None,
+    mdp_bases: dict[str, str] | None = None,
+) -> str:
     """`#cloud-config` : Docker + Traefik (reverse-proxy HTTP sur :80) et un conteneur PHP pour
     `domaine`, routé par son `Host()`. Nextcloud (« Drive ») est ajouté plus tard au même
     `docker-compose.yml`, sur cette même VM, quand `web_drive` est activé pour l'organisation
     (voir `web_drive.service`) — un Traefik par VM d'hébergement, tout le reste en conteneurs
     Docker derrière lui.
+
+    Moteurs de bases partagés (`mdp_bases` : `{"mariadb": ..., "postgresql": ..., "redis":
+    ...}`, mots de passe racine) : conteneurs `mariadb:11`, `postgres:16` et `redis:7`
+    **sans ports publiés** — joignables uniquement depuis le réseau Docker `synelia` de la
+    VM (sites et applis hébergés), jamais depuis l'extérieur : c'est la propriété
+    « boucle locale » du contrat (`ServeurBases.hoteInterne == "localhost"`), appliquée au
+    niveau du périmètre réseau plutôt que du bind de socket (un bind `127.0.0.1` intra-
+    conteneur rendrait le moteur injoignable même aux sites de la VM, qui s'y connectent
+    par nom de service). Données persistées sous `{_RACINE_DOCKER}/bases/<moteur>` (redis :
+    cache éphémère, sans volume — `save ""` + `appendonly no`).
 
     Traefik route via son *provider fichier* (config statique dans `traefik-dynamic/`), pas le
     provider Docker : le Docker Engine récent (>= API 1.44, cf. `docker.io` sur Ubuntu 24.04)
@@ -284,7 +299,7 @@ def construire_cloud_init(domaine: str, version_php: str, cle_publique: str | No
       - {_RACINE_DOCKER}/www:/var/www/html:ro
     networks:
       - synelia
-
+{_compose_bases(mdp_bases)}
 networks:
   synelia:
     name: synelia
@@ -327,12 +342,299 @@ networks:
         "    content: |\n" + indenter(routage, 6) + "\n"
         f"  - path: {_RACINE_DOCKER}/www/index.php\n"
         "    content: |\n" + indenter(index_php, 6) + "\n"
+        f"{_fichiers_bases(mdp_bases)}"
         f"{DROP_IN_CONTAINERD}"
         "runcmd:\n"
         "  - systemctl daemon-reload\n"
         "  - systemctl enable --now docker\n"
         f"  - [sh, -c, 'cd {_RACINE_DOCKER} && docker compose up -d']\n"
     )
+
+
+def _compose_bases(mdp_bases: dict[str, str] | None) -> str:
+    """Services des moteurs de bases partagés (voir `construire_cloud_init`) : texte vide
+    sans mots de passe (VM antérieures, chemins unitaires) — jamais de ports publiés."""
+    if not mdp_bases:
+        return ""
+    mdp_mariadb = mdp_bases.get("mariadb", "")
+    mdp_postgres = mdp_bases.get("postgresql", "")
+    # Pas de variable pour redis : le mot de passe vit dans `redis.conf` (fichier
+    # mono-usage, cf. `_fichiers_bases`), jamais en variable d'environnement.
+    return f"""  bases-mariadb:
+    image: mariadb:11
+    restart: unless-stopped
+    command: --bind-address=0.0.0.0
+    environment:
+      MARIADB_ROOT_PASSWORD: {mdp_mariadb}
+    volumes:
+      - {_RACINE_DOCKER}/bases/mariadb:/var/lib/mysql
+      - {_RACINE_DOCKER}/bases/mariadb-init:/docker-entrypoint-initdb.d:ro
+    networks:
+      - synelia
+
+  bases-postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: {mdp_postgres}
+    volumes:
+      - {_RACINE_DOCKER}/bases/postgres:/var/lib/postgresql/data
+    networks:
+      - synelia
+
+  bases-redis:
+    image: redis:7
+    restart: unless-stopped
+    command: redis-server /etc/redis/redis.conf
+    volumes:
+      - {_RACINE_DOCKER}/bases/redis.conf:/etc/redis/redis.conf:ro
+    networks:
+      - synelia
+
+"""
+
+
+def _fichiers_bases(mdp_bases: dict[str, str] | None) -> str:
+    """Fichiers boot des moteurs (cloud-init `write_files`, premier démarrage uniquement) :
+    - `bases/mariadb-init/01-root.sql` : garantit `root`@`localhost` ET `root`@`%` avec le
+      mot de passe initial — sans lui, la rotation ne peut pas présumer l'existence des
+      deux comptes selon les versions d'image ;
+    - `bases/redis.conf` : fichier de conf mono-usage (`requirepass` + bind boucle locale)
+      — `CONFIG REWRITE` y persiste la rotation, et sa réécriture reste déterministe.
+    Texte vide sans mots de passe (VM antérieures)."""
+    if not mdp_bases:
+        return ""
+    init_sql = (
+        f"ALTER USER 'root'@'localhost' IDENTIFIED BY '{mdp_bases.get('mariadb', '')}';\n"
+        f"CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED BY '{mdp_bases.get('mariadb', '')}';\n"
+        "ALTER USER 'root'@'%' IDENTIFIED BY "
+        f"'{mdp_bases.get('mariadb', '')}';\n"
+        "GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;\n"
+        "FLUSH PRIVILEGES;\n"
+    )
+    redis_conf = (
+        "bind 127.0.0.1\nport 6379\n"
+        f"requirepass {mdp_bases.get('redis', '')}\n"
+        "save ''\nappendonly no\n"
+    )
+    return (
+        f"  - path: {_RACINE_DOCKER}/bases/mariadb-init/01-root.sql\n"
+        "    content: |\n" + indenter(init_sql, 6) + "\n"
+        f"  - path: {_RACINE_DOCKER}/bases/redis.conf\n"
+        "    content: |\n" + indenter(redis_conf, 6) + "\n"
+    )
+
+
+# ── Moteurs de bases : SQL réel ─────────────────────────────────────────
+# Les endpoints `/web/bases` écrivaient seulement des lignes DB (aucun `CREATE DATABASE`
+# sur le VPS). Les constructeurs ci-dessous produisent les ordres réels exécutés via SSH
+# sur les conteneurs partagés (`bases-mariadb`/`bases-postgres`, cf. `_compose_bases`) —
+# fonctions pures, testées partout sans infra. Redis n'a pas de bases nommées : la
+# création y est refusée franchement (422, voir `router_bases`), sa gestion passe par la
+# rotation du mot de passe.
+
+_MOTIF_IDENTIFIANT_SQL = r"[A-Za-z0-9_$-]+"
+
+
+def _valider_identifiant_sql(nom: str, quoi: str = "nom") -> str:
+    """Garde anti-injection : les identifiants SQL (base, utilisateur) sont bornés au
+    charset sûr — le reste est rejeté en validation, jamais échappé à la main."""
+    import re
+
+    if not nom or not re.fullmatch(_MOTIF_IDENTIFIANT_SQL, nom):
+        raise erreurs.validation(
+            f"{quoi} invalide (lettres, chiffres, `_`, `$`, `-` uniquement).",
+            champs={quoi: nom},
+        )
+    return nom
+
+
+def _sql_chaine(valeur: str) -> str:
+    """Littéral chaîne SQL : `'` doublés (seule syntaxe portable mariadb/postgres)."""
+    return "'" + valeur.replace("'", "''") + "'"
+
+
+def sql_creer_base(moteur: str, nom: str, jeu_caracteres: str | None = None) -> list[str]:
+    """Ordres de création d'une base — `moteur` parmi `mariadb`/`postgresql`."""
+    _valider_identifiant_sql(nom, "nom de base")
+    if moteur == "mariadb":
+        charset = jeu_caracteres or "utf8mb4"
+        return [f"CREATE DATABASE `{nom}` CHARACTER SET = {_sql_chaine(charset)};"]
+    if moteur == "postgresql":
+        return [f'CREATE DATABASE "{nom}";']
+    raise erreurs.non_porte(f"Le moteur {moteur} ne porte pas de bases nommées.")
+
+
+def sql_creer_utilisateur(
+    moteur: str, utilisateur: str, mot_de_passe: str, base: str, droits: str | None = None
+) -> list[str]:
+    """Ordres de création d'un utilisateur restreint à `base` (+ `SET PASSWORD` séparé
+    pour la rotation, cf. `sql_mot_de_passe_utilisateur`)."""
+    _valider_identifiant_sql(utilisateur, "nom d'utilisateur")
+    _valider_identifiant_sql(base, "nom de base")
+    mdp = _sql_chaine(mot_de_passe)
+    # Deux vocabulaires de droits coexistent au contrat (`Utilisateur1.droits` :
+    # `tous/lecture/lecture_ecriture` ; `Utilisateur2.droits` : `complet/lecture/ecriture`)
+    # — les deux formes pleines donnent `ALL`, le reste `SELECT`.
+    pleins = {"complet", "tous"}
+    if moteur == "mariadb":
+        priv = "ALL PRIVILEGES" if (droits or "complet") in pleins else "SELECT"
+        return [
+            f"CREATE USER {_sql_chaine(utilisateur)}@'%' IDENTIFIED BY {mdp};",
+            f"GRANT {priv} ON `{base}`.* TO {_sql_chaine(utilisateur)}@'%';",
+            "FLUSH PRIVILEGES;",
+        ]
+    if moteur == "postgresql":
+        lecture_seule = (droits or "complet") not in {"complet", "tous"}
+        return [
+            f'CREATE USER "{utilisateur}" WITH PASSWORD {mdp};',
+            f'GRANT CONNECT ON DATABASE "{base}" TO "{utilisateur}";',
+            (
+                f'GRANT SELECT ON ALL TABLES IN SCHEMA public TO "{utilisateur}";'
+                if lecture_seule
+                else f'GRANT ALL ON DATABASE "{base}" TO "{utilisateur}";'
+            ),
+        ]
+    raise erreurs.non_porte(f"Le moteur {moteur} ne porte pas d'utilisateurs de base.")
+
+
+def sql_mot_de_passe_utilisateur(moteur: str, utilisateur: str, mot_de_passe: str) -> list[str]:
+    """Rotation du mot de passe d'un utilisateur existant."""
+    _valider_identifiant_sql(utilisateur, "nom d'utilisateur")
+    mdp = _sql_chaine(mot_de_passe)
+    if moteur == "mariadb":
+        return [f"ALTER USER {_sql_chaine(utilisateur)}@'%' IDENTIFIED BY {mdp};"]
+    if moteur == "postgresql":
+        return [f'ALTER USER "{utilisateur}" WITH PASSWORD {mdp};']
+    raise erreurs.non_porte(f"Le moteur {moteur} ne porte pas d'utilisateurs de base.")
+
+
+def sql_supprimer_base(moteur: str, nom: str) -> list[str]:
+    _valider_identifiant_sql(nom, "nom de base")
+    if moteur == "mariadb":
+        return [f"DROP DATABASE IF EXISTS `{nom}`;"]
+    if moteur == "postgresql":
+        return [f'DROP DATABASE IF EXISTS "{nom}";']
+    raise erreurs.non_porte(f"Le moteur {moteur} ne porte pas de bases nommées.")
+
+
+def sql_supprimer_utilisateur(moteur: str, utilisateur: str) -> list[str]:
+    _valider_identifiant_sql(utilisateur, "nom d'utilisateur")
+    if moteur == "mariadb":
+        return [f"DROP USER IF EXISTS {_sql_chaine(utilisateur)}@'%';"]
+    if moteur == "postgresql":
+        return [f'DROP USER IF EXISTS "{utilisateur}";']
+    raise erreurs.non_porte(f"Le moteur {moteur} ne porte pas d'utilisateurs de base.")
+
+
+def sql_rotation_root(moteur: str, nouveau: str) -> list[str]:
+    """Rotation du mot de passe root du moteur — `root`@`localhost`+`%` garantis par le
+    script d'init du premier boot (`_fichiers_bases`), `postgres` natif à l'image."""
+    mdp = _sql_chaine(nouveau)
+    if moteur == "mariadb":
+        return [
+            f"ALTER USER 'root'@'localhost' IDENTIFIED BY {mdp};",
+            f"ALTER USER 'root'@'%' IDENTIFIED BY {mdp};",
+            "FLUSH PRIVILEGES;",
+        ]
+    if moteur == "postgresql":
+        return [f"ALTER USER postgres WITH PASSWORD {mdp};"]
+    raise erreurs.non_porte(f"Le moteur {moteur} ne porte pas de rotation SQL root.")
+
+
+def commande_redis_rotation(ancien: str, nouveau: str) -> str:
+    """Rotation `requirepass` Redis : runtime (`CONFIG SET` + `REWRITE` vers le fichier
+    mono-usage) + réécriture déterministe du fichier (source au prochain boot)."""
+    conf = f"bind 127.0.0.1\\nport 6379\\nrequirepass {nouveau}\\nsave ''\\nappendonly no\\n"
+    return (
+        f"cd {_RACINE_DOCKER} && "
+        f"docker compose exec -T bases-redis redis-cli -a {_coquille(ancien)} "
+        f"CONFIG SET requirepass {_coquille(nouveau)} && "
+        f"docker compose exec -T bases-redis redis-cli -a {_coquille(nouveau)} "
+        "CONFIG REWRITE && "
+        f"printf {conf} > {_RACINE_DOCKER}/bases/redis.conf"
+    )
+
+
+def _client_moteur(moteur: str) -> tuple[str, str]:
+    """(service compose, préfixe client) pour exécuter du SQL dans le conteneur moteur."""
+    if moteur == "mariadb":
+        return ("bases-mariadb", "mariadb -uroot")
+    if moteur == "postgresql":
+        return ("bases-postgres", "psql -U postgres -v ON_ERROR_STOP=1")
+    raise erreurs.non_porte(f"Le moteur {moteur} ne porte pas de bases nommées.")
+
+
+def commande_sql_bases(moteur: str, mdp_root: str, ordres: list[str]) -> str:
+    """Commande shell (exécutée via SSH sur le VPS) lançant `ordres` dans le conteneur
+    moteur — mot de passe root en variable d'environnement (jamais en clair dans
+    `ps`), SQL passé par stdin (pas de contrainte de quoting du shell distant)."""
+    service, client = _client_moteur(moteur)
+    return (
+        f"cd {_RACINE_DOCKER} && "
+        f"MDB_MDP={_coquille(mdp_root)} "
+        f"docker compose exec -T {service} sh -c {_coquille(client + ' < /dev/stdin')} <<'SYNELIA_SQL'\n"
+        + "\n".join(ordres)
+        + "\nSYNELIA_SQL"
+    )
+
+
+def _coquille(valeur: str) -> str:
+    """Échappement shell POSIX (guillemet simple) pour les interpolations de
+    `commande_sql_bases` — les mots de passe clients sont arbitraires."""
+    return "'" + valeur.replace("'", "'\\''") + "'"
+
+
+async def executer_sql_bases(
+    ctx: Contexte, hebergement_id: str, moteur: str, ordres: list[str]
+) -> None:
+    """Exécute `ordres` SQL sur le moteur partagé du VPS. `SshSimule` : no-op documenté
+    (tests, aucune infra) — l'appelant persiste alors sa ligne comme avant. `SshReel`
+    sans IP/clé/mot de passe root : échec franc, jamais de ligne fantôme. Toute erreur
+    SSH remonte en `amont_indisponible` (424), jamais en 500 opaque."""
+    if not isinstance(amont_ssh(), SshReel):
+        return
+    try:
+        secrets_h = await depot.secrets(ctx, hebergement_id)
+    except Exception:  # noqa: BLE001
+        secrets_h = {}
+    mdp_root = secrets_h.get(f"mdp_bases_{moteur}")
+    if not mdp_root:
+        raise erreurs.amont_indisponible(
+            "bases (SSH)",
+            "Mot de passe root indisponible pour ce VPS : exécution SQL impossible.",
+        )
+    await executer_commande_vps(ctx, hebergement_id, commande_sql_bases(moteur, mdp_root, ordres))
+
+
+async def _acces_vps(ctx: Contexte, hebergement_id: str) -> tuple[str, str]:
+    """(ip de gestion, clé privée) du VPS — échec franc si l'un manque en mode réel."""
+    h = await depot.obtenir(ctx, hebergement_id)
+    zone = await zone_vps_secrets(ctx)
+    cle_privee = zone.get("ssh_prive")
+    ip = await ip_gestion_hebergement(ctx, h)
+    if not cle_privee or not ip:
+        raise erreurs.amont_indisponible(
+            "VPS (SSH)",
+            "IP de gestion ou clé SSH indisponible pour ce VPS : commande impossible.",
+        )
+    return ip, cle_privee
+
+
+async def executer_commande_vps(ctx: Contexte, hebergement_id: str, commande: str) -> None:
+    """Exécute une commande shell brute sur le VPS (rotation redis, maintenance…) —
+    même discipline que `executer_sql_bases` : no-op simulé, 424 franc en réel."""
+    if not isinstance(amont_ssh(), SshReel):
+        return
+    ip, cle_privee = await _acces_vps(ctx, hebergement_id)
+    try:
+        await asyncio.to_thread(amont_ssh().executer, ip, cle_privee, commande)
+    except Exception as exc:  # noqa: BLE001 — paramiko et co : 424 franc, pas 500
+        from synelia_kernel import erreurs as _e
+
+        if isinstance(exc, _e.AppError):
+            raise
+        raise erreurs.amont_indisponible("VPS (SSH)", str(exc)[:200]) from None
 
 
 def ip_privee(hebergement_id: str) -> str:
@@ -602,15 +904,28 @@ def construire_hebergement(ctx: Contexte, corps: m.HebergementCreation) -> m.Heb
 
 
 def construire_serveur_bases(ctx: Contexte, hebergement_id: str) -> m.ServeurBases:
+    return construire_serveur_bases_moteur(ctx, hebergement_id, "mariadb")
+
+
+def construire_serveur_bases_moteur(
+    ctx: Contexte, hebergement_id: str, moteur: str
+) -> m.ServeurBases:
+    """Fiche d'un moteur partagé du VPS (`mariadb`/`postgresql`/`redis`, conteneurs
+    posés par `construire_cloud_init`) : même forme, seuls moteur/version/port changent."""
+    meta = {
+        "mariadb": ("MariaDB 10.11", 3306),
+        "postgresql": ("PostgreSQL 16", 5432),
+        "redis": ("Redis 7", 6379),
+    }[moteur]
     return m.ServeurBases(
         id=nouvel_id(),
         hebergementId=hebergement_id,
         serveur=f"db-{hebergement_id[:8]}",
-        moteur="mariadb",
-        version="MariaDB 10.11",
+        moteur=moteur,  # type: ignore[arg-type]
+        version=meta[0],
         actif=True,
         hoteInterne="localhost",
-        port=3306,
+        port=meta[1],
         bases=[],
         utilisateurs=[],
         quotaMo=1024.0,
@@ -951,6 +1266,17 @@ class ExecuteurHebergementCreer(Executeur):
         if index == 1:
             h = await depot.obtenir(ctx, travail.cible_id or "")
             zone = await zone_vps_secrets(ctx)
+            # Garde-fou franc (constaté en direct sur le lab : sans lui, une zone VPS à
+            # moitié provisionnée — `reseau_id` absent des secrets — descend jusqu'à Nova
+            # qui répond un 409 cryptique « Multiple possible networks found, use a
+            # Network ID », `networks="auto"` étant ambigu dès que le projet voit plus
+            # d'un réseau). En simulation, `reseau_id` est inutilisé : aucune exigence.
+            if isinstance(amont(), ComputeOpenStack) and not zone.get("reseau_id"):
+                raise erreurs.amont_indisponible(
+                    "zone VPS",
+                    "Réseau de la zone VPS non provisionné (`reseau_id` absent) : "
+                    "reprovisionnez la zone avant de créer un hébergement.",
+                )
             cle = await assurer_cle_ssh_zone(ctx)
             # `image_ubuntu`/`gabarit_pour_palier` (openstacksdk, synchrones — même fonctions
             # utilisées telles quelles par `projets.service._assurer_vm_projet`, signature
@@ -959,6 +1285,20 @@ class ExecuteurHebergementCreer(Executeur):
             # lent gèlerait la boucle asyncio — donc l'API entière, tous tenants confondus.
             image_id = await asyncio.to_thread(image_ubuntu)
             gabarit_id = await asyncio.to_thread(gabarit_pour_palier, h.palier)
+            # Mots de passe racine des moteurs partagés (get-or-create : une reprise de
+            # travail ne doit jamais régénérer des secrets déjà posés — le compose déjà
+            # rendu à Nova embarque les précédents).
+            try:
+                secrets_h = await depot.secrets(ctx, h.id)
+            except Exception:  # noqa: BLE001
+                secrets_h = {}
+            mdp_bases = {
+                moteur: secrets_h.get(f"mdp_bases_{moteur}") or jeton_opaque(20)
+                for moteur in ("mariadb", "postgresql", "redis")
+            }
+            await depot.definir_secrets(
+                ctx, h.id, {f"mdp_bases_{m}": v for m, v in mdp_bases.items()}
+            )
             srv = await asyncio.to_thread(
                 amont().creer_serveur,
                 nom=h.serveur.nom,
@@ -970,7 +1310,10 @@ class ExecuteurHebergementCreer(Executeur):
                 espace_id=None,
                 cle_ssh=cle.get("ssh_cle_nom"),
                 cloud_init=construire_cloud_init(
-                    h.domaineProvisoire, h.php.versionDefaut, cle.get("ssh_publique")
+                    h.domaineProvisoire,
+                    h.php.versionDefaut,
+                    cle.get("ssh_publique"),
+                    mdp_bases,
                 ),
             )
             c = dict(travail.contexte)
@@ -1049,6 +1392,14 @@ class ExecuteurHebergementCreer(Executeur):
         base = await depot_bases.creer(
             ctx, construire_serveur_bases(ctx, travail.cible_id or ""), parent_id=travail.cible_id
         )
+        # Un serveur par moteur partagé du VPS (mariadb + postgresql + redis, conteneurs
+        # posés par `construire_cloud_init`) : l'interface « Databases » les liste tous.
+        for moteur in ("postgresql", "redis"):
+            await depot_bases.creer(
+                ctx,
+                construire_serveur_bases_moteur(ctx, travail.cible_id or "", moteur),
+                parent_id=travail.cible_id,
+            )
         travail.contexte = {**travail.contexte, "serveur_bases_id": base.id}
         await depot.definir_statut(ctx, travail.cible_id or "", "en_ligne")
 

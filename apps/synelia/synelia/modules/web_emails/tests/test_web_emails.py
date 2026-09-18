@@ -102,3 +102,43 @@ async def test_quota_boites(client):
     assert r.status_code == 202, r.text
     r = await client.get(f"/v1/web/emails/{mid}")
     assert r.status_code == 404
+
+
+async def test_domaine_zimbra_reel_si_joignable(client):
+    # Preuve Zimbra réelle (création → GetDomain → suppression) : ne tourne que là où
+    # le serveur est joignable (réseau Docker du lab) — depuis ce poste, saut honnête
+    # documenté au lieu d'un faux-positif simulé silencieux.
+    import os
+
+    from synelia_testing import ignorer_si_zimbra_injoignable
+
+    ignorer_si_zimbra_injoignable()
+    if not os.environ.get("SYNELIA_ZIMBRA_ADMIN_USER") or not os.environ.get(
+        "SYNELIA_ZIMBRA_ADMIN_PASSWORD"
+    ):
+        import pytest
+
+        pytest.skip("identifiants admin Zimbra absents")
+    from synelia_openstack import zimbra
+
+    assert isinstance(zimbra.choisir_zimbra(), zimbra.ZimbraReel)
+    r = await client.post(
+        "/v1/web/emails", json={"domaine": "preuve-zimbra.ci", "palier": "pro"}
+    )
+    assert r.status_code == 202, r.text
+    mess = next(
+        m
+        for m in (await client.get("/v1/web/emails")).json()["donnees"]
+        if m["domaine"] == "preuve-zimbra.ci"
+    )
+    reel = zimbra.ZimbraReel()
+    assert reel._domaine_id("preuve-zimbra.ci") is not None, (
+        "domaine absent de Zimbra : activation sans impact réel"
+    )
+    r = await client.delete(
+        f"/v1/web/emails/{mess['id']}", params={"confirmation": "preuve-zimbra.ci"}
+    )
+    assert r.status_code == 202, r.text
+    assert reel._domaine_id("preuve-zimbra.ci") is None, (
+        "domaine toujours présent dans Zimbra : suppression sans impact réel"
+    )

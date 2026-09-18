@@ -6,7 +6,6 @@ from synelia_testing import (
     connexion_lab,
     exiger_lab_reel,
     ignorer_si_fip_epuise,
-    ignorer_si_octavia_casse,
     sur_lab_reel,
 )
 
@@ -288,7 +287,6 @@ async def test_attacher_ip_vm_introuvable(client):
 
 
 async def test_attacher_ip_load_balancer(client):
-    ignorer_si_octavia_casse()
     ignorer_si_fip_epuise()
     # Cible documentée par le contrat (« VM, load balancer ou passerelle ») mais qui échouait
     # jusqu'ici avec un 404 « Vm ... introuvable » : le routeur résolvait toujours la cible
@@ -403,15 +401,13 @@ async def test_groupe_fantome_supprime_hors_bande_404(client):
     assert r.status_code == 204
 
 
-# Pas de test fantôme pour les IP (pool d'IP flottantes épuisé sur le lab : impossible
-# d'en réserver une à supprimer hors bande) ni pour les LB (Octavia cassé lab-wide :
-# impossible d'en provisionner un) — les deux chemins `reconcilier_*` correspondants
-# restent câblés et seront prouvés dès que l'amont le permet.
+# Pas de test fantôme pour les IP (pool d'IP flottantes limité sur le lab : impossible
+# d'en réserver une à supprimer hors bande). Octavia refonctionne depuis le fix
+# o-hm0+endpoints du 2026-09-18 — les tests LB tournent pour de vrai ci-dessous.
 
 
 # ── Load balancers ─────────────────────────────────────────────────────────
 async def test_cycle_load_balancer(client):
-    ignorer_si_octavia_casse()
     r = await _creer_lb(client)
     assert r.status_code == 202, r.text
     travail = r.json()

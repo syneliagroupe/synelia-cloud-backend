@@ -180,6 +180,29 @@ async def test_suppression_hebergement(client):
     assert r.status_code == 202, r.text
 
 
+async def test_creer_hebergement_sans_zone_rejet_franc(client):
+    # Garde-fou zone VPS : sans `reseau_id` provisionné, la création échouait au fin fond
+    # de Nova avec un 409 cryptique (« Multiple possible networks found » — constaté en
+    # direct sur le lab). En mode réel, elle échoue désormais franchement (travail
+    # `rolled_back`, cause « zone VPS » nommée) ; en simulation, `reseau_id` est
+    # inutilisé et la création passe — ce test verrouille les deux comportements.
+    # La base éphémère des tests ne provisionne jamais la zone : le cas est déterministe
+    # partout, sans lab.
+    from synelia_testing import sur_lab_reel
+
+    r = await client.post(
+        f"{DES}/web/hebergements", json={"palier": "pro", "site": "ABJ", "domaine": "zone-test.com"}
+    )
+    assert r.status_code == 202, r.text
+    travail = r.json()
+    if sur_lab_reel():
+        assert travail["statut"] == "rolled_back", travail
+        detail = (travail.get("erreur") or {}).get("message", "") + str(travail.get("taches") or "")
+        assert "zone VPS" in detail or "reseau_id" in detail, travail
+    else:
+        assert travail["statut"] == "done", travail
+
+
 async def test_sites_web(client):
     hid = (await _creer_hebergement(client))["id"]
     r = await client.post(
@@ -259,8 +282,11 @@ async def test_bases(client):
     r = await client.get(f"{DES}/web/bases", params={"hebergementId": hid})
     assert r.status_code == 200
     serveurs = r.json()["donnees"]
-    assert len(serveurs) == 1 and serveurs[0]["hoteInterne"] == "localhost"
-    sid = serveurs[0]["id"]
+    # Un serveur par moteur partagé du VPS (mariadb + postgresql + redis), tous
+    # boucle locale, jamais exposés.
+    assert {s["moteur"] for s in serveurs} == {"mariadb", "postgresql", "redis"}
+    assert all(s["hoteInterne"] == "localhost" for s in serveurs)
+    sid = next(s["id"] for s in serveurs if s["moteur"] == "mariadb")
 
     r = await client.get(f"{DES}/web/bases/{sid}")
     assert r.status_code == 200
@@ -303,6 +329,122 @@ async def test_bases(client):
 
     r = await client.delete(f"{DES}/web/bases/{sid}/bases/wpdb", params={"confirmation": "wpdb"})
     assert r.status_code == 204
+
+
+async def test_rotation_mot_de_passe_serveurs(client):
+    # Chaque moteur (mariadb + postgresql + redis) expose une rotation du mot de passe
+    # root, renvoyé une seule fois. En simulation : secret renouvelé sans SSH.
+    hid = (await _creer_hebergement(client))["id"]
+    serveurs = (await client.get(f"{DES}/web/bases", params={"hebergementId": hid})).json()[
+        "donnees"
+    ]
+    assert {s["moteur"] for s in serveurs} == {"mariadb", "postgresql", "redis"}
+    for s in serveurs:
+        r = await client.post(f"{DES}/web/bases/{s['id']}/rotation-mot-de-passe")
+        assert r.status_code == 200, r.text
+        assert r.json()["motDePasse"] and len(r.json()["motDePasse"]) >= 20
+        r2 = await client.post(f"{DES}/web/bases/{s['id']}/rotation-mot-de-passe")
+        assert r2.json()["motDePasse"] != r.json()["motDePasse"]
+
+
+def test_compose_bases_moteurs_partages():
+    # Preuve offline (texte du cloud-init, aucune infra) : les trois moteurs partagés
+    # sont posés avec leurs images, mots de passe et volumes — et SANS ports publiés
+    # (périmètre réseau de la VM uniquement, cf. `construire_cloud_init`).
+    from synelia.modules.web_hebergement.service import _compose_bases, construire_cloud_init
+
+    assert _compose_bases(None) == ""
+    mdp = {"mariadb": "m1", "postgresql": "m2", "redis": "m3"}
+    texte = _compose_bases(mdp)
+    assert "image: mariadb:11" in texte and "MARIADB_ROOT_PASSWORD: m1" in texte
+    assert "image: postgres:16" in texte and "POSTGRES_PASSWORD: m2" in texte
+    # Redis : mot de passe dans le fichier mono-usage, jamais en variable (cf. F841).
+    assert "image: redis:7" in texte and "redis-server /etc/redis/redis.conf" in texte
+    assert "requirepass" not in texte
+    from synelia.modules.web_hebergement.service import _fichiers_bases
+
+    fichiers = _fichiers_bases(mdp)
+    assert "requirepass m3" in fichiers and "01-root.sql" in fichiers
+    assert _fichiers_bases(None) == ""
+    assert "/bases/mariadb:/var/lib/mysql" in texte
+    assert "/bases/postgres:/var/lib/postgresql/data" in texte
+    for ligne in texte.splitlines():
+        assert not ligne.strip().startswith('"3306:') and not ligne.strip().startswith('"5432:')
+        assert not ligne.strip().startswith('"6379:')
+
+    complet = construire_cloud_init("demo.com", "8.3", None, mdp)
+    assert "bases-mariadb" in complet and "bases-postgres" in complet and "bases-redis" in complet
+    # Sans mots de passe : compose inchangé (VM antérieures, chemins unitaires).
+    assert "bases-mariadb" not in construire_cloud_init("demo.com", "8.3", None)
+
+
+def test_sql_bases_moteurs():
+    # Preuve offline : ordres SQL réels par moteur (exécutés via SSH sur le VPS en
+    # mode réel, cf. `executer_sql_bases`) — validation stricte des identifiants,
+    # échappement des littéraux, double vocabulaire de droits.
+    from synelia.modules.web_hebergement import service as heb
+    from synelia_kernel import erreurs as _e
+
+    assert heb.sql_creer_base("mariadb", "wpdb") == [
+        "CREATE DATABASE `wpdb` CHARACTER SET = 'utf8mb4';"
+    ]
+    assert heb.sql_creer_base("postgresql", "wpdb") == ['CREATE DATABASE "wpdb";']
+    assert heb.sql_creer_utilisateur("mariadb", "userdb", "s3cret", "wpdb", "complet") == [
+        "CREATE USER 'userdb'@'%' IDENTIFIED BY 's3cret';",
+        "GRANT ALL PRIVILEGES ON `wpdb`.* TO 'userdb'@'%';",
+        "FLUSH PRIVILEGES;",
+    ]
+    assert heb.sql_creer_utilisateur("mariadb", "userdb", "s3cret", "wpdb", "lecture")[
+        1
+    ].startswith("GRANT SELECT")
+    # Vocabulaire `Utilisateur1` (`tous`) : mêmes privilèges pleins.
+    assert "ALL PRIVILEGES" in heb.sql_creer_utilisateur("mariadb", "u", "p", "b", "tous")[1]
+    assert heb.sql_creer_utilisateur("postgresql", "userdb", "s3cret", "wpdb", "complet")[
+        1
+    ].startswith("GRANT CONNECT")
+    assert heb.sql_mot_de_passe_utilisateur("postgresql", "userdb", "n3w") == [
+        "ALTER USER \"userdb\" WITH PASSWORD 'n3w';"
+    ]
+    assert heb.sql_supprimer_base("mariadb", "wpdb") == ["DROP DATABASE IF EXISTS `wpdb`;"]
+    assert heb.sql_supprimer_utilisateur("postgresql", "userdb") == [
+        'DROP USER IF EXISTS "userdb";'
+    ]
+    # Injection : rejetée en 422, jamais échappée à la main.
+    for mauvais in ("a`b", 'a"b', "a'b", "a;b", "a b", ""):
+        try:
+            heb.sql_creer_base("mariadb", mauvais)
+        except _e.AppError as exc:
+            assert exc.code == "validation"
+        else:
+            raise AssertionError(f"identifiant {mauvais!r} accepté")
+    # Guillemet dans un mot de passe : doublé (pas de fuite hors littéral).
+    assert (
+        "IDENTIFIED BY 'it''s';"
+        in heb.sql_creer_utilisateur("mariadb", "u", "it's", "b", "complet")[0]
+    )
+    # Redis n'a pas de bases nommées : 422 franc, pas de faux succès.
+    try:
+        heb.sql_creer_base("redis", "cache")
+    except _e.AppError as exc:
+        assert exc.code == "non_porte"
+    else:
+        raise AssertionError("base redis acceptée")
+    # Commande shell : mot de passe en variable d'environnement, SQL par stdin.
+    cmd = heb.commande_sql_bases("mariadb", "r00t", ["SELECT 1;"])
+    assert "docker compose exec -T bases-mariadb" in cmd and "MDB_MDP='r00t'" in cmd
+    assert cmd.rstrip().endswith("SYNELIA_SQL")
+    # Rotation root : les deux comptes mariadb (init du premier boot), postgres natif.
+    assert heb.sql_rotation_root("mariadb", "n3w") == [
+        "ALTER USER 'root'@'localhost' IDENTIFIED BY 'n3w';",
+        "ALTER USER 'root'@'%' IDENTIFIED BY 'n3w';",
+        "FLUSH PRIVILEGES;",
+    ]
+    assert heb.sql_rotation_root("postgresql", "n3w") == [
+        "ALTER USER postgres WITH PASSWORD 'n3w';"
+    ]
+    rot = heb.commande_redis_rotation("old", "new")
+    assert "CONFIG SET requirepass 'new'" in rot and "CONFIG REWRITE" in rot
+    assert "redis.conf" in rot
 
 
 async def test_reconciliation_statut_hebergement_orphelin(client, monkeypatch):

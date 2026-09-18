@@ -8,8 +8,7 @@ from synelia_contract import modeles as m
 from synelia_db.modeles import Ressource, Travail
 from synelia_kernel import erreurs
 from synelia_kernel.dates import maintenant
-from synelia_openstack import fournisseur
-from synelia_openstack.registrar import RegistrarOpenStack, RegistrarSimule
+from synelia_openstack.registrar import RegistrarSimule
 
 from synelia.depot import Depot
 from synelia.deps.contexte import Contexte
@@ -30,7 +29,13 @@ PRIX_TLD = {".com": 9500, ".net": 8500, ".org": 8000, ".ci": 6500, ".africa": 70
 
 
 def amont() -> RegistrarSimule:
-    return fournisseur(RegistrarSimule, RegistrarOpenStack)
+    # URL-gaté (comme ACME/Zimbra/relais), pas `fournisseur()` : aucun partenaire
+    # registrar n'existe sur le lab — basculer sur `RegistrarOpenStack` au seul motif
+    # `SYNELIA_FOURNISSEUR=openstack` donnerait un faux « réel » (la classe reste le
+    # simulé sous un autre nom tant qu'aucune URL partenaire n'est posée).
+    from synelia_openstack.registrar import choisir_registrar
+
+    return choisir_registrar()
 
 
 async def exiger_nom_libre_global(ctx: Contexte, nom: str) -> None:

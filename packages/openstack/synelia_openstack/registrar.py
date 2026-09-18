@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from synelia_kernel.ids import jeton_opaque, nouvel_id
+
+ENV_URL = "SYNELIA_REGISTRAR_URL"
 
 OCCUPES = {"google.com", "synelia.ci"}
 
@@ -31,4 +34,15 @@ class RegistrarSimule:
 
 
 class RegistrarOpenStack(RegistrarSimule):
-    """Registrar partenaire via son API HTTP (variable d'environnement d'URL)."""
+    """Registrar partenaire via son API HTTP (variable d'environnement d'URL) —
+    aucun partenaire n'est câblé pour l'instant : cette classe reste le simulé
+    sous un autre nom, et `choisir_registrar()` ne la renvoie jamais tant que
+    `SYNELIA_REGISTRAR_URL` n'est pas posée (jamais de faux « réel »)."""
+
+
+def choisir_registrar() -> RegistrarSimule:
+    """Le réel seulement quand un partenaire est configuré — partout ailleurs
+    (lab y compris, aucune URL partenaire posée) le simulé, explicitement."""
+    if os.environ.get(ENV_URL):
+        return RegistrarOpenStack()
+    return RegistrarSimule()
