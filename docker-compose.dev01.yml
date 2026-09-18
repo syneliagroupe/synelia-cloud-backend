@@ -31,11 +31,11 @@ x-env-backend: &env-backend
   # interne répond en ~1s pour cette même route. Voir k8s_workload.py::_kubeconfig.
   SYNELIA_OS_ENDPOINT_OVERRIDES: '{"container_infra": "http://192.168.26.234:9511/v1"}'
   # Zone VPS partagée (web_hebergement) : bootstrap auto au démarrage, voir
-  # espaces.service.semer_zone_vps. Cet id a été régénéré le 2026-09-18 : l'ancien
-  # (01a072e1-...) était resté avec org_id NULL et secrets vides après un échec de
-  # provisioning jamais rejoué par semer_zone_vps (idempotence court-circuitée dès que
-  # la ligne existe) — pointer un id neuf force une reprovision propre au redémarrage.
-  SYNELIA_VPS_ZONE_ESPACE_ID: 0eb31cb1-2ca7-4387-a555-02e640ca8ba9
+  # espaces.service.semer_zone_vps. Régénéré le 2026-09-18 (2e fois : un
+  # nettoyage OpenStack a supprimé le réseau du premier id régénéré, cf.
+  # STATUS-SNAPSHOT.md) — pointer un id neuf force une reprovision propre au
+  # redémarrage plutôt que de dépendre d'une ligne dont le réseau réel a disparu.
+  SYNELIA_VPS_ZONE_ESPACE_ID: b2468d93-699a-4b40-aabc-317bd67928ae
   SYNELIA_VPS_ZONE_ORG_ID: 01a0b10b-8f4d-7633-bd9a-75379da461a3
   SYNELIA_TRAVAUX_EN_LIGNE: "false"
   SYNELIA_SEED_DEMO: "false"
