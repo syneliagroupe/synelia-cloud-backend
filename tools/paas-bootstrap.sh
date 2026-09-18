@@ -47,6 +47,8 @@ kubectl get nodes -o wide
 # et basculer keystone/neutron/nova/cinder/octavia/placement/glance sur leurs vhosts.
 # (Octavia exige aussi un provider activé : le driver CAPI défaut à `amphorav2`,
 #  ce lab n'a que `amphora` — cf. backend `magnum.py`, label `octavia_provider`.)
+# Quota Cinder : chaque PVC = un volume réel ; le défaut (10) sature vite.
+#   openstack quota set --volumes 30 <projet-du-cluster>
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Beaucoup d'opérateurs (MongoDB, etc.) créent des PVC sans `storageClassName` :
@@ -186,7 +188,7 @@ helm upgrade --install eck-operator elastic/eck-operator -n elastic-system --ski
 # le ReplicaSet n'est jamais déclaré prêt). Percona est fiable et sans ce défaut.
 install_crds psmdb-operator-crds percona/psmdb-operator-crds psmdb-system
 reown_crds psmdb-operator psmdb-system 'psmdb.percona.com'
-helm upgrade --install psmdb-operator percona/psmdb-operator -n psmdb-system --skip-crds --wait --timeout 8m
+helm upgrade --install psmdb-operator percona/psmdb-operator -n psmdb-system --skip-crds --set watchAllNamespaces=true --wait --timeout 8m
 
 log "Opérateurs :"
 kubectl get pods -A | grep -E 'cnpg-system|mariadb-system|redis-operator|elastic-system|mongodb-system' || true
@@ -240,8 +242,9 @@ apiVersion: psmdb.percona.com/v1
 kind: PerconaServerMongoDB
 metadata: {name: demo-psmdb, namespace: ${APPS_NS}}
 spec:
-  crVersion: 1.23.1
+  crVersion: 1.23.0
   image: percona/percona-server-mongodb:7.0.14-8
+  unsafeFlags: {replsetSize: true}
   replsets:
     - name: rs0
       size: 1

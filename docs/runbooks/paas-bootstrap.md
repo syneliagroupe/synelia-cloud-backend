@@ -87,15 +87,24 @@ Pièges :
   est cassé sur ce cluster : l'agent ne démarre pas (`readinessprobe` panique,
   aucune annotation `agent.mongodb.com/version` publiée), la CR reste `Pending`
   alors même que `mongod` répond. `percona/psmdb-operator` fonctionne sans ce
-  défaut. (Le piège Community, documenté pour mémoire : il ne réconcilie que son
-  propre namespace sans `watchNamespace="*"`, exige un ServiceAccount
-  `mongodb-database` dans le namespace de la base, et crée un PVC `logs-volume`
-  sans classe.)
+  défaut. Pièges Percona : (1) `--set watchAllNamespaces=true` (sinon la CR dans
+  un autre namespace est ignorée) ; (2) `crVersion` doit égaler le **tag de
+  l'image de l'opérateur** (`kubectl -n psmdb-system get deploy psmdb-operator -o
+  jsonpath='{.spec.template.spec.containers[0].image}'`), pas la version du chart
+  — sinon l'init-container tire un tag inexistant (`ErrImagePull`) ; (3) un
+  replica set à 1 nœud exige `spec.unsafeFlags.replsetSize: true`. (Piège
+  Community, pour mémoire : ne réconcilie que son namespace sans
+  `watchNamespace="*"`, exige un ServiceAccount `mongodb-database` dans le
+  namespace de la base, et crée un PVC `logs-volume` sans classe.)
 - **Capacité** : un opérateur de plus peut rester `Pending` (`Insufficient cpu`).
   Sur un cluster 1 master + 1 worker, retirer le taint
   `node-role.kubernetes.io/control-plane` du master, ou ajouter un worker
   (attention : la capacité compute du lab peut manquer — vérifier
   `os-hypervisors/statistics` avant).
+- **Quota Cinder** : chaque PVC est un volume Cinder réel ; le quota `volumes`
+  par défaut (10) est vite atteint par la stack (Zot + 5 bases + logs…). Un PVC
+  reste alors `Pending` avec `VolumeLimitExceeded` dans les events. Élargir avant :
+  `openstack quota set --volumes 30 <projet>`.
 
 ### 4. Bases de démonstration (optionnel)
 `demo-cnpg` (CNPG), `demo-mariadb`, `demo-redis`, `demo-psmdb` (Percona MongoDB) —
@@ -115,13 +124,48 @@ kubectl -n demo-apps exec demo-psmdb-rs0-0 -c mongod -- mongosh --quiet "mongodb
 
 ## Déploiement d'applications
 
-- **Image** : chart `stakater/application` (`helm upgrade --install <app> stakater/application`).
-  Attention aux défauts : `containerSecurityContext.runAsNonRoot=true` +
-  `readOnlyRootFilesystem=true` (cassent `nginx:alpine`/images nixpacks → les
-  désactiver), ports en **listes** (`deployment.ports[]`, `service.ports[]`,
-  défaut 8080), `deployment.env` en **map** (`PORT: {value: "8080"}`).
-- **Depuis GitHub** : `nixpacks build <dir> --name <VIP>:5000/<nom>:<tag>` puis
-  `crane push`/`docker push` vers Zot. `railpack` est l'alternative moderne.
+Outil : `tools/paas-deploy-app.sh` — déploie via le chart `stakater/application` :
+
+```bash
+# depuis une image publique (Docker Hub, ghcr, quay…)
+./tools/paas-deploy-app.sh --name demo-web --image nginx:alpine --port 80
+
+# depuis un dépôt Git public : nixpacks build → push Zot → helm
+./tools/paas-deploy-app.sh --name demo-api --git https://github.com/user/repo \
+  --branch main --port 8080 --env PORT=8080
+```
+
+### Déclencher le CI/CD depuis GitHub
+Le script est le point d'entrée : un workflow du dépôt applicatif (public) peut
+l'appeler après un push. Exemple minimal (`.github/workflows/deploy.yml`) :
+
+```yaml
+name: deploy
+on: { push: { branches: [main] } }
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # À adapter : le runner doit joindre le cluster (VPN/self-hosted) et avoir
+      # helm/kubectl/nixpacks/crane + un kubeconfig en secret.
+      - run: ./tools/paas-deploy-app.sh --name "${{ github.event.repository.name }}" \
+               --git "${{ github.server_url }}/${{ github.repository }}" --port 8080
+```
+
+En pratique, sur ce lab le build tourne **sur ctrl1** (accès cluster) : un webhook
+ou une tâche Temporal peut appeler `paas-deploy-app.sh` avec l'URL du dépôt, sans
+exposer le cluster à Internet.
+
+### Pièges du chart stakater/application
+- Défauts `containerSecurityContext.runAsNonRoot=true` +
+  `readOnlyRootFilesystem=true` (cassent `nginx:alpine`/images nixpacks → le script
+  les désactive).
+- Ports en **listes** (`deployment.ports[]`, `service.ports[]`, défaut 8080).
+- `deployment.env` en **map** (`PORT: {value: "8080"}`).
+- Build GitHub : `nixpacks build` puis `crane push <tar> <vip>:5000/... --insecure`
+  (`docker save` + `crane` évite de reconfigurer Docker en registre insecure).
+  `railpack` est l'alternative moderne à nixpacks.
 
 ## Ce qui n'est pas encore automatisé
 - Le bootstrap n'est pas encore déclenché par le backend à la fin de `k8s.create` ;
