@@ -1,6 +1,6 @@
 import pytest
 
-from synelia_testing import connexion_lab, ignorer_si_fip_epuise, sur_lab_reel
+from synelia_testing import ignorer_si_fip_epuise
 
 pytestmark = pytest.mark.anyio
 
