@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -53,13 +54,19 @@ ETAPES: list[tuple[str, int]] = [
 ]
 
 
-def _env_helm() -> dict[str, str]:
+def _env_helm(kubeconfig: str) -> dict[str, str]:
+    # Homed under the per-step kubeconfig's own unique temp path (never a
+    # fixed /tmp/helm/* — this executor runs as a Temporal-backed travail:
+    # retries and concurrent bootstraps of different clusters are the normal
+    # case, not an edge case, so a shared cache dir would let one run's helm
+    # invocation race or corrupt another's.
+    base = f"{kubeconfig}.helm"
     env = dict(os.environ)
     env.update(
         {
-            "HELM_CACHE_HOME": "/tmp/helm/cache",
-            "HELM_CONFIG_HOME": "/tmp/helm/config",
-            "HELM_DATA_HOME": "/tmp/helm/data",
+            "HELM_CACHE_HOME": f"{base}/cache",
+            "HELM_CONFIG_HOME": f"{base}/config",
+            "HELM_DATA_HOME": f"{base}/data",
         }
     )
     return env
@@ -67,10 +74,13 @@ def _env_helm() -> dict[str, str]:
 
 def _helm(*args: str, kubeconfig: str, check: bool = True) -> subprocess.CompletedProcess:
     """Exécute `helm` avec le kubeconfig temporaire. Synchrone (appelé via to_thread)."""
-    for d in ("/tmp/helm/cache", "/tmp/helm/config", "/tmp/helm/data"):
+    base = f"{kubeconfig}.helm"
+    for d in (f"{base}/cache", f"{base}/config", f"{base}/data"):
         Path(d).mkdir(parents=True, exist_ok=True)
     cmd = ["helm", "--kubeconfig", kubeconfig, *args]
-    res = subprocess.run(cmd, capture_output=True, text=True, env=_env_helm(), check=False)
+    res = subprocess.run(
+        cmd, capture_output=True, text=True, env=_env_helm(kubeconfig), check=False
+    )
     if check and res.returncode != 0:
         raise erreurs.amont_indisponible("helm", f"{' '.join(args)} → {res.stderr.strip()[:500]}")
     return res
@@ -368,6 +378,7 @@ class ExecuteurPaasBootstrap(Executeur):
                     os.unlink(chemin)
                 except OSError:
                     pass
+                shutil.rmtree(f"{chemin}.helm", ignore_errors=True)
 
         # helm/k8s : appels synchrones (sous-processus, réseau) → hors boucle asyncio.
         return await asyncio.to_thread(_run)
