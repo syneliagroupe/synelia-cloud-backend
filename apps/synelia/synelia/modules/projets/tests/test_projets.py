@@ -1,5 +1,4 @@
 import pytest
-
 from synelia_testing import ignorer_si_fip_epuise
 
 pytestmark = pytest.mark.anyio
