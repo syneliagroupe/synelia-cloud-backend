@@ -1,7 +1,21 @@
 """Couverture du module Réseau : reseaux, IP, groupes de sécurité, load balancers, VPN."""
 
+import ipaddress
+
 ESPACE = "espace-demo-abj"
 VM = "vm-demo-web"
+
+
+def _adresse_ip_valide(adresse: str) -> bool:
+    """Une adresse allouée doit être une IPv4 valide, quel que soit l'amont : le simulé
+    alloue dans `196.201.0.0/16`, le Neutron réel du lab dans `192.168.20.0/24`
+    (`external-net`) — asserter le préfixe mock rendait le test faux sur le réel
+    (TODO.md, 2026-09-18)."""
+    try:
+        ipaddress.ip_address(adresse)
+    except ValueError:
+        return False
+    return True
 
 
 async def _creer_reseau(client, nom="net-prod", cidr="10.50.0.0/16"):
@@ -92,7 +106,7 @@ async def test_cycle_ip(client):
     assert r.status_code == 201, r.text
     ip = r.json()
     ipid = ip["id"]
-    assert ip["adresse"].startswith("196.201.")
+    assert _adresse_ip_valide(ip["adresse"]), ip["adresse"]
 
     r = await client.get("/v1/ips")
     assert r.status_code == 200 and any(x["id"] == ipid for x in r.json()["donnees"])
@@ -241,7 +255,7 @@ async def test_cycle_load_balancer(client):
         for x in (await client.get("/v1/load-balancers")).json()["donnees"]
         if x["nom"] == "lb-api"
     )
-    assert lb["vip"].startswith("196.201.")
+    assert _adresse_ip_valide(lb["vip"]), lb["vip"]
 
     r = await client.get("/v1/load-balancers")
     lbid = next(x["id"] for x in r.json()["donnees"] if x["nom"] == "lb-api")

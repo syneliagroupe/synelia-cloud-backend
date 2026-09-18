@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import logging
+
 from synelia_contract import modeles as m
 from synelia_db.modeles import Travail
 from synelia_openstack import fournisseur
@@ -9,6 +12,8 @@ from synelia_openstack.minio import MinioSimule, choisir_minio
 from synelia.depot import Depot
 from synelia.deps.contexte import Contexte
 from synelia.travaux import Executeur, executeur
+
+logger = logging.getLogger(__name__)
 
 depot_volume = Depot("volume", m.Volume)
 depot_bucket = Depot("bucket", m.Bucket, champ_nom="nom")
@@ -98,6 +103,37 @@ class ExecuteurVolumeCreate(Executeur):
         await depot_volume.definir_statut(ctx, travail.cible_id or "", "erreur")
 
 
+# Après un attachement Nova, Cinder propage le statut du volume `attaching` →
+# `in-use` de façon asynchrone : un `detach` appelé quelques secondes après un
+# `attach` (test automatisé enchaîné) recevait un 400 Nova (« Volume status must
+# be 'in-use' ») alors même que l'attachement avait bien eu lieu — constaté en
+# direct sur le lab réel (RESULTS-INFRA.md, 2026-09-18). On attend donc la
+# convergence avant de déclarer l'étape ok.
+_DELAI_ATTACH_MAX_S = 180.0
+_DELAI_ATTACH_SONDE_S = 2.0
+
+
+async def _attendre_in_use(vid: str, secrets_espace: dict) -> str:
+    """Sonde le statut Cinder jusqu'à `in-use` (ou expiration du délai). Ne lève
+    jamais : en cas d'amont illisible on renvoie le dernier statut vu (ou
+    `inconnu`), l'appelant le mentionne dans son message plutôt que de faire
+    échouer un attachement que Nova a déjà accepté."""
+    statut = "inconnu"
+    delai = 0.0
+    while delai < _DELAI_ATTACH_MAX_S:
+        try:
+            statut = await asyncio.to_thread(
+                amont_cinder().statut_volume, vid, identifiants=secrets_espace
+            )
+        except Exception as exc:  # noqa: BLE001 — lecture best effort, on ressonde
+            logger.debug("sondage Cinder %s impossible : %s", vid, exc)
+        if statut == "in-use":
+            return statut
+        await asyncio.sleep(_DELAI_ATTACH_SONDE_S)
+        delai += _DELAI_ATTACH_SONDE_S
+    return statut
+
+
 @executeur("volume.attach")
 class ExecuteurVolumeAttach(Executeur):
     async def etape(self, ctx: Contexte, travail: Travail, index: int, nom: str) -> str | None:
@@ -108,10 +144,29 @@ class ExecuteurVolumeAttach(Executeur):
 
             sid = await serveur_id(ctx, str(travail.contexte.get("vm_id") or ""))
             secrets_espace = await identifiants_espace(ctx, vol.espaceId)
-            amont_cinder().attacher(
-                vid, sid, travail.contexte.get("montage"), identifiants=secrets_espace
+            # `attacher` (openstacksdk synchrone/bloquant) + sondage Cinder : déchargés via
+            # `asyncio.to_thread` pour ne pas geler la boucle asyncio — même garde que
+            # `vms.service` (cf. `ExecuteurVmResize`, qui gelait l'API entière sans ça).
+            await asyncio.to_thread(
+                amont_cinder().attacher,
+                vid,
+                sid,
+                travail.contexte.get("montage"),
+                identifiants=secrets_espace,
             )
-            return f"Volume {vid} attaché au serveur {sid}"
+            statut = await _attendre_in_use(vid, secrets_espace)
+            if statut == "in-use":
+                return f"Volume {vid} attaché au serveur {sid}"
+            # Nova a accepté l'attachement mais Cinder n'a pas convergé à temps : on ne
+            # fait pas échouer le travail pour autant (le volume finit par se stabiliser
+            # seul), mais on le dit franchement — un `detach` immédiat peut encore être
+            # refusé par Nova (400 « Volume status must be 'in-use' »), il suffit alors
+            # d'attendre quelques secondes et de réessayer.
+            return (
+                f"Volume {vid} attaché au serveur {sid} "
+                f"(statut Cinder `{statut}` après {int(_DELAI_ATTACH_MAX_S)} s : "
+                f"pas encore `in-use`, un détachement immédiat peut être refusé)"
+            )
         return None
 
     async def terminer(self, ctx: Contexte, travail: Travail) -> None:
