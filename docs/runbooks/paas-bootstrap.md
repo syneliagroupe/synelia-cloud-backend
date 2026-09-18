@@ -73,7 +73,7 @@ Vérifier le pull réel : un pod avec `image: <VIP>:5000/<nom>:<tag>` doit passe
 | MariaDB | `mariadb-system` | `mariadb-operator-crds` puis `mariadb-operator` |
 | Redis (OT-container-kit) | `redis-operator` | `ot-helm/redis-operator` |
 | Elastic (ECK) | `elastic-system` | `elastic/eck-operator-crds` puis `eck-operator` |
-| MongoDB Community | `mongodb-system` | `mongodb/community-operator-crds` puis `community-operator` |
+| MongoDB | `psmdb-system` | `percona/psmdb-operator-crds` puis `psmdb-operator` |
 
 Pièges :
 - **CRDs en chart séparé** (ECK, MongoDB) : installer le chart CRDs puis
@@ -83,14 +83,14 @@ Pièges :
 - **Classe de stockage par défaut** : beaucoup d'opérateurs créent des PVC sans
   `storageClassName` (MongoDB `logs-volume`, etc.) → `Pending` silencieux. Le
   bootstrap marque la classe Cinder (`block-ssd`) comme défaut du cluster.
-- **MongoDB Community** ne réconcilie que son propre namespace par défaut :
-  `--set operator.watchNamespace="*"` obligatoire pour des CR dans d'autres ns.
-  Deux pièges supplémentaires : (1) l'opérateur attend un ServiceAccount nommé
-  `spec.database.name` (défaut `mongodb-database`) **dans le namespace de la base**
-  — sinon `FailedCreate: serviceaccount not found` et la CR reste `Pending` ;
-  (2) il crée un PVC `logs-volume` en plus de `data-volume` — sans classe de
-  stockage par défaut, il reste `no storage class is set` : le déclarer
-  explicitement dans `spec.statefulSet.spec.volumeClaimTemplates`.
+- **MongoDB → Percona, pas Community.** L'opérateur MongoDB Community (officiel)
+  est cassé sur ce cluster : l'agent ne démarre pas (`readinessprobe` panique,
+  aucune annotation `agent.mongodb.com/version` publiée), la CR reste `Pending`
+  alors même que `mongod` répond. `percona/psmdb-operator` fonctionne sans ce
+  défaut. (Le piège Community, documenté pour mémoire : il ne réconcilie que son
+  propre namespace sans `watchNamespace="*"`, exige un ServiceAccount
+  `mongodb-database` dans le namespace de la base, et crée un PVC `logs-volume`
+  sans classe.)
 - **Capacité** : un opérateur de plus peut rester `Pending` (`Insufficient cpu`).
   Sur un cluster 1 master + 1 worker, retirer le taint
   `node-role.kubernetes.io/control-plane` du master, ou ajouter un worker
@@ -98,8 +98,8 @@ Pièges :
   `os-hypervisors/statistics` avant).
 
 ### 4. Bases de démonstration (optionnel)
-`demo-cnpg` (CNPG), `demo-mariadb`, `demo-redis`, `demo-mongo` — chacune avec PVC
-sur `block-ssd` (volume Cinder).
+`demo-cnpg` (CNPG), `demo-mariadb`, `demo-redis`, `demo-psmdb` (Percona MongoDB) —
+chacune avec PVC sur `block-ssd` (volume Cinder).
 
 ## Vérifications de bout en bout
 
@@ -109,7 +109,8 @@ kubectl -n demo-apps exec demo-mariadb-0 -- mariadb -uappuser -pDemoUser123 -N -
 kubectl -n demo-apps exec demo-redis-0 -- redis-cli ping
 PW=$(kubectl -n demo-apps get secret demo-es-es-elastic-user -o jsonpath='{.data.elastic}' | base64 -d)
 kubectl -n demo-apps exec demo-es-es-default-0 -c elasticsearch -- curl -sk -u "elastic:$PW" https://localhost:9200/_cluster/health
-kubectl -n demo-apps exec demo-mongo-0 -c mongod -- mongosh --quiet "mongodb://appuser:DemoMongo123@localhost:27017/appdb?authSource=appdb" --eval "db.runCommand({ping:1}).ok"
+MPW=$(kubectl -n demo-apps get secret internal-demo-psmdb-users -o jsonpath='{.data.MONGODB_DATABASE_ADMIN_PASSWORD}' | base64 -d)
+kubectl -n demo-apps exec demo-psmdb-rs0-0 -c mongod -- mongosh --quiet "mongodb://databaseAdmin:$MPW@localhost:27017/admin?authSource=admin" --eval "db.runCommand({ping:1}).ok"
 ```
 
 ## Déploiement d'applications

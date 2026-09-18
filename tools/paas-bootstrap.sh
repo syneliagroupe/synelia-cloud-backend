@@ -61,6 +61,7 @@ helm repo add ot-helm https://ot-container-kit.github.io/helm-charts/ >/dev/null
 helm repo add mariadb-operator https://mariadb-operator.github.io/mariadb-operator >/dev/null 2>&1 || true
 helm repo add elastic https://helm.elastic.co >/dev/null 2>&1 || true
 helm repo add mongodb https://mongodb.github.io/helm-charts >/dev/null 2>&1 || true
+helm repo add percona https://percona.github.io/percona-helm-charts >/dev/null 2>&1 || true
 helm repo update >/dev/null 2>&1 || true
 
 cat >/tmp/zot-values.yaml <<EOF
@@ -179,11 +180,13 @@ install_crds eck-operator-crds elastic/eck-operator-crds elastic-system
 reown_crds eck-operator elastic-system 'k8s.elastic.co'
 helm upgrade --install eck-operator elastic/eck-operator -n elastic-system --skip-crds --wait --timeout 8m
 
-# MongoDB Community Operator — `watchNamespace: "*"` obligatoire pour réconcilier
-# des CR dans d'autres namespaces que le sien.
-install_crds community-operator-crds mongodb/community-operator-crds mongodb-system
-reown_crds community-operator mongodb-system 'mongodbcommunity'
-helm upgrade --install community-operator mongodb/community-operator -n mongodb-system --skip-crds --set operator.watchNamespace="*" --wait --timeout 8m
+# MongoDB : opérateur **Percona Server for MongoDB**. L'opérateur MongoDB Community
+# (officiel) a un agent cassé sur ce cluster — `readinessprobe` panique, l'agent ne
+# publie jamais `agent.mongodb.com/version`, la CR reste `Pending` (mongod tourne mais
+# le ReplicaSet n'est jamais déclaré prêt). Percona est fiable et sans ce défaut.
+install_crds psmdb-operator-crds percona/psmdb-operator-crds psmdb-system
+reown_crds psmdb-operator psmdb-system 'psmdb.percona.com'
+helm upgrade --install psmdb-operator percona/psmdb-operator -n psmdb-system --skip-crds --wait --timeout 8m
 
 log "Opérateurs :"
 kubectl get pods -A | grep -E 'cnpg-system|mariadb-system|redis-operator|elastic-system|mongodb-system' || true
@@ -194,11 +197,7 @@ if [ "$SKIP_DATABASES" != "1" ]; then
   kubectl create ns "$APPS_NS" 2>/dev/null || true
   kubectl -n "$APPS_NS" create secret generic demo-mariadb-root --from-literal=password=DemoRoot123 2>/dev/null || true
   kubectl -n "$APPS_NS" create secret generic demo-mariadb-user --from-literal=password=DemoUser123 2>/dev/null || true
-  kubectl -n "$APPS_NS" create secret generic demo-mongo-password --from-literal=password=DemoMongo123 2>/dev/null || true
-  # MongoDB Community attend un ServiceAccount portant `spec.database.name`
-  # (défaut `mongodb-database`) DANS le namespace de la base — l'opérateur ne le
-  # crée que dans le sien : sans lui, les pods restent `FailedCreate` en Pending.
-  kubectl -n "$APPS_NS" create serviceaccount mongodb-database 2>/dev/null || true
+  # (MongoDB/Percona génère lui-même ses secrets `internal-*` ; rien à créer ici.)
 
   kubectl apply -f - <<EOF
 apiVersion: postgresql.cnpg.io/v1
@@ -237,33 +236,19 @@ spec:
         resources: {requests: {storage: 1Gi}}
   podSecurityContext: {runAsUser: 1000, fsGroup: 1000}
 ---
-apiVersion: mongodbcommunity.mongodb.com/v1
-kind: MongoDBCommunity
-metadata: {name: demo-mongo, namespace: ${APPS_NS}}
+apiVersion: psmdb.percona.com/v1
+kind: PerconaServerMongoDB
+metadata: {name: demo-psmdb, namespace: ${APPS_NS}}
 spec:
-  members: 1
-  type: ReplicaSet
-  version: "7.0.14"
-  security: {authentication: {modes: ["SCRAM"]}}
-  users:
-    - name: appuser
-      db: appdb
-      passwordSecretRef: {name: demo-mongo-password}
-      roles: [{name: readWrite, db: appdb}]
-      scramCredentialsSecretName: demo-mongo-scram
-  statefulSet:
-    spec:
-      volumeClaimTemplates:
-        - metadata: {name: data-volume}
-          spec:
-            accessModes: [ReadWriteOnce]
-            storageClassName: ${REGISTRY_STORAGE_CLASS}
-            resources: {requests: {storage: 2Gi}}
-        - metadata: {name: logs-volume}
-          spec:
-            accessModes: [ReadWriteOnce]
-            storageClassName: ${REGISTRY_STORAGE_CLASS}
-            resources: {requests: {storage: 1Gi}}
+  crVersion: 1.23.1
+  image: percona/percona-server-mongodb:7.0.14-8
+  replsets:
+    - name: rs0
+      size: 1
+      volumeSpec:
+        persistentVolumeClaim:
+          storageClassName: ${REGISTRY_STORAGE_CLASS}
+          resources: {requests: {storage: 2Gi}}
 EOF
   echo "Bases créées. Vérifier : kubectl -n $APPS_NS get cluster.postgresql.cnpg.io,mariadb,redis,mongodbcommunity"
 fi
