@@ -90,6 +90,14 @@ async def test_sante_plateforme(client):
     r = await client.get("/v1/admin/sante")
     assert r.status_code == 200, r.text
     assert "backends" in r.json() and "filesProvisioning" in r.json()
+    from synelia_testing import sur_lab_reel
+
+    if sur_lab_reel():
+        # Sur lab réel, l'intégration OpenStack doit être vérifiée `ok` (appel Nova
+        # réel), jamais un « ok » figé ni une panne silencieuse.
+        integrations = {i["nom"]: i["statut"] for i in r.json().get("integrations", [])}
+        if "OpenStack" in integrations:
+            assert integrations["OpenStack"] == "ok", integrations
 
 
 async def test_sites_physiques(client):
@@ -122,6 +130,22 @@ async def test_capacite(client):
     r = await client.get("/v1/admin/capacite")
     assert r.status_code == 200, r.text
     assert "backends" in r.json() and "capaciteParSite" in r.json()
+    from synelia_testing import connexion_lab, sur_lab_reel
+
+    if sur_lab_reel():
+        # La capacité `backend-abj` doit refléter les hyperviseurs Nova réels, pas les
+        # valeurs de secours de l'amorçage (hosts=24) : preuve d'un appel amont réel.
+        c = connexion_lab()
+        assert c is not None, "lab réel injoignable"
+        stats = c.compute.get("/os-hypervisors/statistics")
+        stats.raise_for_status()
+        vrais_hosts = int(stats.json()["hypervisor_statistics"]["count"])
+        backends = {b["id"]: b for b in r.json()["backends"]}
+        assert "backend-abj" in backends
+        assert backends["backend-abj"]["hosts"] == vrais_hosts, (
+            f"capacité figée (hosts={backends['backend-abj']['hosts']}) "
+            f"alors que Nova rapporte {vrais_hosts} hyperviseurs"
+        )
 
 
 async def test_placements(client):

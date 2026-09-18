@@ -23,20 +23,30 @@ def _neutron():
     return c
 
 
-def _affirmer_reseau_neutron(nom: str):
+def _ids_reseaux_neutron(nom: str) -> set | None:
+    """Ids Neutron portant `nom` (`None` hors lab) : comparaison par instantanés
+    avant/après — le lab accumule des réseaux homonymes fuités d'anciennes passes
+    (`net-prod` ×15), un `find_*` par nom y est ambigu et lève `DuplicateResource`."""
     c = _neutron()
     if c is None:
+        return None
+    return {n.id for n in c.network.networks(name=nom)}
+
+
+def _affirmer_reseau_cree_neutron(nom: str, avant: set):
+    apres = _ids_reseaux_neutron(nom)
+    if apres is None:
         return
-    assert c.network.find_network(nom, ignore_missing=True) is not None, (
-        f"réseau Neutron {nom!r} introuvable : création sans impact OpenStack"
+    assert len(apres - avant) == 1, (
+        f"aucun réseau Neutron {nom!r} créé : création sans impact OpenStack"
     )
 
 
-def _affirmer_reseau_neutron_absent(nom: str):
-    c = _neutron()
-    if c is None:
+def _affirmer_reseau_supprime_neutron(nom: str, avant: set):
+    apres = _ids_reseaux_neutron(nom)
+    if apres is None:
         return
-    assert c.network.find_network(nom, ignore_missing=True) is None, (
+    assert apres == avant, (
         f"réseau Neutron {nom!r} toujours présent : suppression sans impact OpenStack"
     )
 
@@ -58,22 +68,44 @@ def _affirmer_fip_neutron_absente(adresse: str):
     )
 
 
-def _affirmer_groupe_neutron(nom: str):
+def _ids_groupes_neutron(nom: str) -> set | None:
+    c = _neutron()
+    if c is None:
+        return None
+    return {g.id for g in c.network.security_groups(name=nom)}
+
+
+def _affirmer_groupe_neutron(nom: str, avant: set | None = None):
+    if avant is None:
+        c = _neutron()
+        if c is None:
+            return
+        assert c.network.find_security_group(nom, ignore_missing=True) is not None, (
+            f"groupe Neutron {nom!r} introuvable : création sans impact OpenStack"
+        )
+        return
     c = _neutron()
     if c is None:
         return
-    assert c.network.find_security_group(nom, ignore_missing=True) is not None, (
-        f"groupe Neutron {nom!r} introuvable : création sans impact OpenStack"
+    apres = {g.id for g in c.network.security_groups(name=nom)}
+    assert len(apres - avant) == 1, (
+        f"aucun groupe Neutron {nom!r} créé : création sans impact OpenStack"
     )
 
 
-def _affirmer_groupe_neutron_absent(nom: str):
+def _affirmer_groupe_neutron_absent(nom: str, avant: set | None = None):
     c = _neutron()
     if c is None:
         return
-    assert c.network.find_security_group(nom, ignore_missing=True) is None, (
-        f"groupe Neutron {nom!r} toujours présent : suppression sans impact OpenStack"
-    )
+    apres = {g.id for g in c.network.security_groups(name=nom)}
+    if avant is None:
+        assert not apres, (
+            f"groupe Neutron {nom!r} toujours présent : suppression sans impact OpenStack"
+        )
+    else:
+        assert apres == avant, (
+            f"groupe Neutron {nom!r} toujours présent : suppression sans impact OpenStack"
+        )
 
 
 def _adresse_ip_valide(adresse: str) -> bool:
@@ -139,11 +171,12 @@ async def _creer_tunnel(client, nom="vpn-site"):
 
 # ── Réseaux ────────────────────────────────────────────────────────────────
 async def test_cycle_reseau(client):
+    avant = _ids_reseaux_neutron("net-prod") or set()
     r = await _creer_reseau(client)
     assert r.status_code == 201, r.text
     rid = r.json()["id"]
     assert r.json()["cidr"] == "10.50.0.0/16"
-    _affirmer_reseau_neutron("net-prod")
+    _affirmer_reseau_cree_neutron("net-prod", avant)
 
     r = await client.get("/v1/reseaux")
     assert r.status_code == 200 and any(x["id"] == rid for x in r.json()["donnees"])
@@ -158,7 +191,9 @@ async def test_cycle_reseau(client):
 
     r = await client.delete(f"/v1/reseaux/{rid}", params={"confirmation": "net-prod-2"})
     assert r.status_code == 204
-    _affirmer_reseau_neutron_absent("net-prod-2")
+    # Le PATCH ne renomme que la ligne DB : côté Neutron le réseau s'appelle
+    # toujours `net-prod` — on attend le retour à l'instantané d'avant création.
+    _affirmer_reseau_supprime_neutron("net-prod", avant)
 
 
 async def test_reseau_cidr_invalide(client):
@@ -269,11 +304,12 @@ async def test_attacher_ip_passerelle_non_portee(client):
 
 # ── Groupes de sécurité ────────────────────────────────────────────────────
 async def test_cycle_groupe_securite(client):
+    avant_sg = _ids_groupes_neutron("sg-web") or set()
     r = await _creer_groupe(client)
     assert r.status_code == 201, r.text
     gid = r.json()["id"]
     assert r.json()["defaultPolicy"]["ingress"] == "deny"
-    _affirmer_groupe_neutron("sg-web")
+    _affirmer_groupe_neutron("sg-web", avant_sg)
 
     r = await client.get("/v1/groupes-securite")
     assert r.status_code == 200 and r.json()["pagination"]["total"] == 1
@@ -322,7 +358,7 @@ async def test_cycle_groupe_securite(client):
 
     r = await client.delete(f"/v1/groupes-securite/{gid}", params={"confirmation": "sg-web"})
     assert r.status_code == 204
-    _affirmer_groupe_neutron_absent("sg-web")
+    _affirmer_groupe_neutron_absent("sg-web", avant_sg)
 
 
 # ── Load balancers ─────────────────────────────────────────────────────────

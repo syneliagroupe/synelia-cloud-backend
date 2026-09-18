@@ -1,6 +1,20 @@
 """Web Cloud — hébergement, applications web et bases."""
 
+from synelia_testing import connexion_lab, corriger_amont, sur_lab_reel
+
 DES = "/v1"
+
+
+def _affirmer_serveur_nova_hebergement(h: dict):
+    """L'hébergement doit reposer sur un vrai serveur Nova (exactement un de plus)."""
+    if not sur_lab_reel():
+        return
+    nom = (h.get("serveur") or {}).get("nom")
+    assert nom, "hébergement sans nom de serveur : impossible de prouver l'impact Nova"
+    c = connexion_lab()
+    assert c is not None, "lab réel injoignable"
+    trouves = list(c.compute.servers(name=nom))
+    assert trouves, f"aucun serveur Nova {nom!r} : hébergement sans impact OpenStack"
 
 
 async def _creer_hebergement(client, nom="demo-h.com") -> dict:
@@ -13,6 +27,7 @@ async def _creer_hebergement(client, nom="demo-h.com") -> dict:
     assert r.status_code == 200
     elements = [h for h in r.json()["donnees"] if h.get("domaine") == nom]
     assert len(elements) == 1
+    _affirmer_serveur_nova_hebergement(elements[0])
     return elements[0]
 
 
@@ -308,14 +323,22 @@ async def test_reconciliation_statut_hebergement_orphelin(client, monkeypatch):
     assert r.json()["serveur"]["statut"] == "en_ligne"
 
     # Nova ne connaît plus le serveur : suppression réelle déclenchée à la lecture.
+    # `corriger_amont` patch SIMULÉ + RÉEL : sur lab, `amont()` renvoie
+    # `ComputeOpenStack`, un patch du seul `ComputeSimule` serait sans effet (faux-positif).
     supprime = []
-    monkeypatch.setattr(
-        hebergement_service.ComputeSimule,
+    corriger_amont(
+        monkeypatch,
+        hebergement_service,
+        "ComputeSimule",
+        "ComputeOpenStack",
         "statut_serveur",
         lambda self, serveur_id, identifiants=None: "absente",
     )
-    monkeypatch.setattr(
-        hebergement_service.ComputeSimule,
+    corriger_amont(
+        monkeypatch,
+        hebergement_service,
+        "ComputeSimule",
+        "ComputeOpenStack",
         "supprimer_serveur",
         lambda self, serveur_id: supprime.append(serveur_id),
     )
@@ -348,12 +371,22 @@ async def test_reconciliation_hebergement_orphelin_protege(client, monkeypatch):
         raise AssertionError("Hébergement protégé : jamais supprimé automatiquement")
 
     monkeypatch.setattr(hebergement_service, "_HEBERGEMENTS_PROTEGES", ("",))
-    monkeypatch.setattr(
-        hebergement_service.ComputeSimule,
+    corriger_amont(
+        monkeypatch,
+        hebergement_service,
+        "ComputeSimule",
+        "ComputeOpenStack",
         "statut_serveur",
         lambda self, serveur_id, identifiants=None: "absente",
     )
-    monkeypatch.setattr(hebergement_service.ComputeSimule, "supprimer_serveur", _interdit)
+    corriger_amont(
+        monkeypatch,
+        hebergement_service,
+        "ComputeSimule",
+        "ComputeOpenStack",
+        "supprimer_serveur",
+        _interdit,
+    )
     r = await client.get(f"{DES}/web/hebergements/{hid}")
     assert r.status_code == 200
     assert r.json()["statut"] == "suspendu"

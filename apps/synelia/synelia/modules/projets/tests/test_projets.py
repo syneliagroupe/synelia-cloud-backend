@@ -1,5 +1,7 @@
 import pytest
 
+from synelia_testing import connexion_lab, ignorer_si_fip_epuise, sur_lab_reel
+
 pytestmark = pytest.mark.anyio
 
 
@@ -323,6 +325,9 @@ async def test_cycle_service_vm(client):
     UNE SEULE VM Nova partagée (pas un namespace K8s) — provisionnée paresseusement, au
     premier service ayant réellement une image à exécuter. Reste instantané/sans réseau en
     mode simulé, comme tout le reste de la plateforme."""
+    # Sur lab réel, `_assurer_vm_projet` alloue une vraie IP flottante de gestion SSH :
+    # pool épuisé → saut honnête, pas échec applicatif (même politique que `test_reseau`).
+    ignorer_si_fip_epuise()
     espace_id = await _espace(client)
     projet = await _projet_vm(client, espace_id)
     pid = projet["id"]

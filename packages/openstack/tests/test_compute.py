@@ -10,7 +10,9 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
 from synelia_openstack.compute import ComputeOpenStack
+from synelia_testing import connexion_lab, sur_lab_reel
 
 
 class ConflictException(Exception):
@@ -70,3 +72,26 @@ def test_autre_type_d_exception_nest_jamais_absorbe():
     compute = ComputeOpenStack()
     exc = AutreException("Cannot 'stop' instance abc while it is in vm_state stopped")
     assert compute._deja_dans_etat_cible(exc, "arret", _connexion("SHUTOFF"), "abc") is False
+
+
+def test_lab_nova_glance_reels():
+    """Impact OpenStack réel : les gabarits viennent des flavors Nova du lab (publics
+    seulement, pas l'amphora Octavia privée), les images de Glance (sans l'appliance
+    `amphora` taguée). Sans lab joignable, saut honnête plutôt que faux-positif."""
+    if not sur_lab_reel():
+        pytest.skip("réservé au lab réel (SYNELIA_FOURNISSEUR=openstack)")
+    if connexion_lab() is None:
+        pytest.skip("lab réel injoignable")
+    compute = ComputeOpenStack()
+    gabarits = compute.gabarits()
+    assert gabarits, "Nova ne renvoie aucun flavor public"
+    assert all(g["vcpu"] >= 1 and g["ramGo"] >= 1 for g in gabarits)
+    images = compute.images()
+    assert images, "Glance ne renvoie aucune image publique"
+    assert not any("amphora" in str(i.get("nom", "")).lower() for i in images), (
+        "l'image amphora Octavia fuit dans le catalogue"
+    )
+    capacite = compute.capacite_plateforme()
+    assert capacite is not None and capacite["hosts"] >= 1, (
+        "capacité hyperviseurs illisible sur lab réel"
+    )

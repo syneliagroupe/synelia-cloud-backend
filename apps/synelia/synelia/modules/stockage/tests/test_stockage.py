@@ -3,23 +3,29 @@
 from synelia_testing import connexion_lab, ignorer_si_vm_demo_absente, sur_lab_reel
 
 
-def _affirmer_volume_cinder(nom: str):
-    """Le volume doit exister pour de vrai côté Cinder (retrouvé par son nom)."""
+def _ids_volumes_cinder(nom: str) -> set | None:
     if not sur_lab_reel():
-        return
+        return None
     c = connexion_lab()
     assert c is not None, "lab réel injoignable"
-    assert c.block_storage.find_volume(nom, ignore_missing=True) is not None, (
-        f"volume Cinder {nom!r} introuvable : création sans impact OpenStack"
+    return {v.id for v in c.block_storage.volumes(name=nom)}
+
+
+def _affirmer_volume_cinder(nom: str, avant: set):
+    """Le volume doit exister pour de vrai côté Cinder (exactement un de plus)."""
+    apres = _ids_volumes_cinder(nom)
+    if apres is None:
+        return
+    assert len(apres - avant) == 1, (
+        f"aucun volume Cinder {nom!r} créé : création sans impact OpenStack"
     )
 
 
-def _affirmer_volume_cinder_absent(nom: str):
-    if not sur_lab_reel():
+def _affirmer_volume_cinder_absent(nom: str, avant: set):
+    apres = _ids_volumes_cinder(nom)
+    if apres is None:
         return
-    c = connexion_lab()
-    assert c is not None, "lab réel injoignable"
-    assert c.block_storage.find_volume(nom, ignore_missing=True) is None, (
+    assert apres == avant, (
         f"volume Cinder {nom!r} toujours présent : suppression sans impact OpenStack"
     )
 
@@ -45,6 +51,7 @@ async def _espace(client) -> str:
 
 async def test_cycle_volume(client):
     ignorer_si_vm_demo_absente()
+    avant = _ids_volumes_cinder("data-01") or set()
     espace_id = await _espace(client)
     vid = None
     corps = {
@@ -64,7 +71,7 @@ async def test_cycle_volume(client):
     vols = [v for v in r.json()["donnees"] if v["nom"] == "data-01"]
     assert len(vols) == 1 and vols[0]["nom"] == "data-01"
     vid = vols[0]["id"]
-    _affirmer_volume_cinder("data-01")
+    _affirmer_volume_cinder("data-01", avant)
 
     r = await client.get(f"/v1/volumes/{vid}")
     assert r.status_code == 200 and r.json()["classe"] == "ssd"
@@ -90,7 +97,7 @@ async def test_cycle_volume(client):
 
     r = await client.get("/v1/volumes")
     assert all(v["id"] != vid for v in r.json()["donnees"])
-    _affirmer_volume_cinder_absent("data-01")
+    _affirmer_volume_cinder_absent("data-01", avant)
 
 
 async def test_volume_quota_depasse(client):

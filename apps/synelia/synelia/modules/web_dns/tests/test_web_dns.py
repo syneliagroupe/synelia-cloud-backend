@@ -1,5 +1,36 @@
 """Web Cloud — DNS : zones, enregistrements, DNSSEC, modèles."""
 
+from synelia_testing import connexion_lab, sur_lab_reel
+
+
+def _affirmer_zone_designate(domaine: str):
+    """La zone doit exister pour de vrai côté Designate (nom pleinement qualifié)."""
+    if not sur_lab_reel():
+        return
+    c = connexion_lab()
+    assert c is not None, "lab réel injoignable"
+    nom_zone = domaine if domaine.endswith(".") else f"{domaine}."
+    assert c.dns.find_zone(nom_zone, ignore_missing=True) is not None, (
+        f"zone Designate {nom_zone!r} introuvable : création sans impact OpenStack"
+    )
+
+
+def _affirmer_zone_designate_absente(domaine: str):
+    if not sur_lab_reel():
+        return
+    import time
+
+    c = connexion_lab()
+    assert c is not None, "lab réel injoignable"
+    nom_zone = domaine if domaine.endswith(".") else f"{domaine}."
+    # La suppression Designate est asynchrone (PENDING_DELETE → purge par le backend
+    # BIND9) : on attend la disparition réelle au lieu d'exiger l'immédiat.
+    for _ in range(30):
+        if c.dns.find_zone(nom_zone, ignore_missing=True) is None:
+            return
+        time.sleep(3)
+    assert False, f"zone Designate {nom_zone!r} toujours présente : suppression sans impact"
+
 
 async def test_modeles(client):
     r = await client.get("/v1/web/dns/modeles")
@@ -14,6 +45,7 @@ async def test_cycle_zone_dns(client):
     zone = r.json()
     assert zone["domaine"] == "demo-dns.com" and zone["dnssec"] is False
     zid = zone["id"]
+    _affirmer_zone_designate("demo-dns.com")
 
     r = await client.post("/v1/web/dns", json={"domaine": "demo-dns.com"})
     assert r.status_code == 409
@@ -75,3 +107,4 @@ async def test_cycle_zone_dns(client):
 
     r = await client.get("/v1/web/dns")
     assert r.status_code == 200 and all(z["id"] != zid for z in r.json()["donnees"])
+    _affirmer_zone_designate_absente("demo-dns.com")

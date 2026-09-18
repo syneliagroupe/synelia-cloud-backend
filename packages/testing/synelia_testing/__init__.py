@@ -63,7 +63,9 @@ def exiger_lab_reel() -> None:
         pytest.skip("réservé au lab réel (SYNELIA_FOURNISSEUR=openstack)")
 
 
-def corriger_amont(monkeypatch, module_service, nom_simule: str, nom_reel: str, attr: str, valeur) -> None:
+def corriger_amont(
+    monkeypatch, module_service, nom_simule: str, nom_reel: str, attr: str, valeur
+) -> None:
     """Patch `attr` sur les DEUX classes d'amont (simulée ET réelle) d'un module.
 
     Patatcher seulement `XxxSimule` est un faux-positif sur lab réel : `amont()`

@@ -1,5 +1,21 @@
 """Module de référence : création d'un Espace Cloud = 202 + travail exécuté, quota, confirmation."""
 
+from synelia_testing import connexion_lab, sur_lab_reel
+
+
+def _affirmer_projet_keystone(nom: str, present: bool):
+    """Le projet Keystone `espace-<code>` doit exister (création) puis disparaître
+    (suppression) sur lab réel : preuve d'impact OpenStack, pas de ligne DB seule."""
+    if not sur_lab_reel():
+        return
+    c = connexion_lab()
+    assert c is not None, "lab réel injoignable"
+    trouve = c.identity.find_project(nom, ignore_missing=True)
+    if present:
+        assert trouve is not None, f"projet Keystone {nom!r} introuvable : espace sans impact"
+    else:
+        assert trouve is None, f"projet Keystone {nom!r} toujours présent : suppression sans impact"
+
 
 async def test_cycle_espace(client):
     corps = {
@@ -20,6 +36,7 @@ async def test_cycle_espace(client):
     espaces = [e for e in r.json()["donnees"] if e["code"] == "prod-abj"]
     assert len(espaces) == 1 and espaces[0]["statut"] == "active"
     eid = espaces[0]["id"]
+    _affirmer_projet_keystone("espace-prod-abj", True)
 
     r = await client.get(f"/v1/travaux/{travail['id']}")
     assert r.status_code == 200 and r.json()["statut"] == "done"
@@ -37,6 +54,7 @@ async def test_cycle_espace(client):
     assert r.status_code == 202
     r = await client.get("/v1/espaces")
     assert all(e["code"] != "prod-abj" for e in r.json()["donnees"])
+    _affirmer_projet_keystone("espace-prod-abj", False)
 
     r = await client.get(
         "/v1/audit"

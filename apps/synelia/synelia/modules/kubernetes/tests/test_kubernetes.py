@@ -1,5 +1,7 @@
 """Module /kubernetes : cycle de vie d'un cluster (création, kubeconfig, mise à jour, pools, modules, versions)."""
 
+from synelia_testing import corriger_amont
+
 
 async def _espace_demo(client) -> str:
     r = await client.get("/v1/espaces")
@@ -21,6 +23,15 @@ def _corps_cluster(espace_id: str, nom: str = "k8s-test") -> dict:
 
 
 async def _creer_cluster(client, espace_id: str, nom: str = "k8s-test") -> str:
+    from synelia_testing import sur_lab_reel
+
+    if sur_lab_reel():
+        from synelia.modules.kubernetes import service as _svc
+        from synelia_openstack.magnum import MagnumOpenStack
+
+        assert isinstance(_svc.amont(), MagnumOpenStack), (
+            "lab réel mais amont simulé : test en fumée"
+        )
     r = await client.post("/v1/kubernetes", json=_corps_cluster(espace_id, nom))
     assert r.status_code == 202, r.text
     assert r.json()["statut"] == "done"
@@ -145,6 +156,8 @@ async def test_reconciliation_statut_cluster(client, monkeypatch):
     # figé sur `provisioning` indéfiniment. On force ici un statut amont non terminal à la
     # création (comme un vrai `CREATE_IN_PROGRESS` juste après soumission à Magnum), puis on
     # vérifie qu'une lecture ultérieure, une fois l'amont « terminé », rafraîchit bien la DB.
+    # `corriger_amont` patch SIMULÉ + RÉEL : sur lab, `amont()` renvoie `MagnumOpenStack`,
+    # un patch du seul `MagnumSimule` serait sans effet (faux-positif).
     from synelia.modules.kubernetes import service as k8s_service
 
     original_creer = k8s_service.MagnumSimule.creer_cluster
@@ -154,12 +167,24 @@ async def test_reconciliation_statut_cluster(client, monkeypatch):
         r["statut"] = "CREATE_IN_PROGRESS"
         return r
 
-    monkeypatch.setattr(k8s_service.MagnumSimule, "creer_cluster", _creer_cluster_en_cours)
+    corriger_amont(
+        monkeypatch,
+        k8s_service,
+        "MagnumSimule",
+        "MagnumOpenStack",
+        "creer_cluster",
+        _creer_cluster_en_cours,
+    )
     # Sans ce patch, le stub par défaut (`cluster_statut` → `CREATE_COMPLETE`) ferait basculer
     # le cluster dès la première lecture qui suit la création — on veut d'abord observer qu'il
     # reste `provisioning` tant que l'amont l'est réellement.
-    monkeypatch.setattr(
-        k8s_service.MagnumSimule, "cluster_statut", lambda self, cluster_id: "CREATE_IN_PROGRESS"
+    corriger_amont(
+        monkeypatch,
+        k8s_service,
+        "MagnumSimule",
+        "MagnumOpenStack",
+        "cluster_statut",
+        lambda self, cluster_id: "CREATE_IN_PROGRESS",
     )
 
     espace_id = await _espace_demo(client)
@@ -172,15 +197,25 @@ async def test_reconciliation_statut_cluster(client, monkeypatch):
     cid = cluster["id"]
 
     # Toujours en cours côté amont : une relecture ne doit rien changer.
-    monkeypatch.setattr(
-        k8s_service.MagnumSimule, "cluster_statut", lambda self, cluster_id: "CREATE_IN_PROGRESS"
+    corriger_amont(
+        monkeypatch,
+        k8s_service,
+        "MagnumSimule",
+        "MagnumOpenStack",
+        "cluster_statut",
+        lambda self, cluster_id: "CREATE_IN_PROGRESS",
     )
     r = await client.get(f"/v1/kubernetes/{cid}")
     assert r.status_code == 200 and r.json()["statut"] == "provisioning"
 
     # L'amont a maintenant terminé : la lecture doit rafraîchir le statut en base.
-    monkeypatch.setattr(
-        k8s_service.MagnumSimule, "cluster_statut", lambda self, cluster_id: "CREATE_COMPLETE"
+    corriger_amont(
+        monkeypatch,
+        k8s_service,
+        "MagnumSimule",
+        "MagnumOpenStack",
+        "cluster_statut",
+        lambda self, cluster_id: "CREATE_COMPLETE",
     )
     r = await client.get(f"/v1/kubernetes/{cid}")
     assert r.status_code == 200 and r.json()["statut"] == "running"
@@ -212,9 +247,21 @@ async def test_reconciliation_cluster_jamais_abouti_cote_amont(client, monkeypat
     # se fie au statut retourné par la soumission, pas encore à `cluster_statut`) marquerait la
     # ressource `running` immédiatement — on ne pourrait alors jamais observer le `provisioning`
     # figé que ce test reproduit.
-    monkeypatch.setattr(k8s_service.MagnumSimule, "creer_cluster", _creer_cluster_en_cours)
-    monkeypatch.setattr(
-        k8s_service.MagnumSimule, "cluster_statut", lambda self, cluster_id: "CREATE_IN_PROGRESS"
+    corriger_amont(
+        monkeypatch,
+        k8s_service,
+        "MagnumSimule",
+        "MagnumOpenStack",
+        "creer_cluster",
+        _creer_cluster_en_cours,
+    )
+    corriger_amont(
+        monkeypatch,
+        k8s_service,
+        "MagnumSimule",
+        "MagnumOpenStack",
+        "cluster_statut",
+        lambda self, cluster_id: "CREATE_IN_PROGRESS",
     )
     espace_id = await _espace_demo(client)
     r = await client.post("/v1/kubernetes", json=_corps_cluster(espace_id, "k8s-jamais-abouti"))
@@ -226,8 +273,13 @@ async def test_reconciliation_cluster_jamais_abouti_cote_amont(client, monkeypat
 
     # L'amont ne connaît plus (ou n'a jamais connu) ce cluster : reconciliation attendue vers
     # un statut sincère (`degraded`), pas un `provisioning` figé indéfiniment.
-    monkeypatch.setattr(
-        k8s_service.MagnumSimule, "cluster_statut", lambda self, cluster_id: "DELETE_COMPLETE"
+    corriger_amont(
+        monkeypatch,
+        k8s_service,
+        "MagnumSimule",
+        "MagnumOpenStack",
+        "cluster_statut",
+        lambda self, cluster_id: "DELETE_COMPLETE",
     )
     r = await client.get(f"/v1/kubernetes/{cid}")
     assert r.status_code == 200 and r.json()["statut"] == "degraded"
