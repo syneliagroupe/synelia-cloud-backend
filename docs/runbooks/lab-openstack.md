@@ -179,6 +179,92 @@ n'est pas créé par cet exécuteur et doit encore être posé à la main (`open
 + `depot_plateforme.definir_secrets(ctx, espace_id, {"lb_id": ...})`) avant le premier hébergement —
 c'est ce qui a été fait manuellement pour créer `vps-zone` sur ce lab.
 
+## Magnum CAPI remis en service (2026-09-18)
+
+Driver `magnum-cluster-api 0.38.2` (magnum `22.0.1.dev11`, api+conductor),
+management k3s `v1.31.5` sur ctrl1 (CAPI/CAPO/ORC Running). `openstack coe
+cluster create` vérifié de bout en bout : template → LB Octavia ACTIVE →
+VMs → `CREATE_COMPLETE / HEALTHY`, puis cluster de test supprimé (lab
+nettoyé : 0 VM/LB/volume/FIP résiduels).
+
+- Template public `k8s-capi` (`4f72b71f-...`) : image
+  `ubuntu-24.04-v1.33.12`, master `k8s.master`, worker `k8s.worker-mini`
+  (2/4096/10 — le `k8s.worker` 20 Go ne schedule plus sur comp1 plein),
+  `network_driver=calico`, `external_network_id=external-net`,
+  `dns_nameserver=192.168.121.1` (vérifié joignable+résolvant depuis
+  tenant-net ; `1.1.1.1` bloqué, `8.8.8.8` OK aussi),
+  `labels={kube_tag: v1.33.12}`, `master_lb_enabled=true`.
+  Attention : `network_driver=cilium` est REJETÉ à la création (400) —
+  `allowed_network_drivers` du lab = `flannel,calico` (supporté inclut
+  cilium, autorisé non). Changer `flavor_id` d'un template référencé par
+  un cluster → 400 ; supprimer le cluster d'abord.
+- `o-hm0` : après recréation manuelle son MAC (`e6:f9:...`) ne matchait
+  plus le port Neutron (`fa:16:3e:47:61:bf`) pinné dans les flows
+  anti-spoofing br-int → ARP FAILED vers les amphora. Fix :
+  `ip link set o-hm0 address fa:16:3e:47:61:bf`. Persistant via
+  `/etc/systemd/system/octavia-interface.service` (`ExecStartPre` pose
+  déjà la bonne MAC, service `enabled`) — ne pas recréer o-hm0 à la main
+  sans fixer la MAC.
+- Endpoints **public** Keystone/Neutron/Nova/Cinder rebasculés sur les
+  vhosts `https://{keystone,neutron,nova,cinder}.openstack-lab.dev01.ovh.smile.ci`
+  (étaient retombés sur `http://192.168.26.234`, injoignables depuis les
+  VM tenants → CCM crashloop). Ne pas les remettre sur les IP internes.
+- Piège CCM (OCCM v1.33.1) : le cloud-config généré par le driver pointe
+  `auth-url=http://192.168.26.234:5000` (injoignable tenant) ET sans `/v3`
+  la discovery suit le `href` http:// du version-doc Keystone (derrière
+  proxy TLS) → POST http → 301 → GET → 401. Contournement par cluster :
+  patcher le Secret workload `kube-system/cloud-config`
+  (`auth-url=https://keystone.openstack-lab.dev01.ovh.smile.ci/v3` —
+  le `/v3` explicite saute la discovery) + `rollout restart
+  ds/openstack-cloud-controller-manager`. Vérifié : taints retirés,
+  providerID/adresses posés, Machines Ready, `coe cluster show` HEALTHY.
+- Diag utile : `kubectl get secret kube-<stack>-kubeconfig -n magnum-system`
+  donne le kubeconfig workload ; `ip netns exec qdhcp-<net> curl
+  https://<vip>:6443/healthz` prouve le LB ; console série Nova via
+  `compute.get_server_console_output` ; logs CCM injoignables tant que les
+  Nodes n'ont pas d'addresses (`kubectl patch node ... --subresource=status`
+  pour débloquer).
+- Capacité : seul comp1 est up (comp2 éteint, pas de route). Avant un
+  `coe cluster create`, vérifier `os-hypervisors/statistics`
+  (`free_disk_gb` ≥ flavor master + worker + 5 amphora) et les claims
+  placement par consumer pour trouver le squatteur.
+
+## Stack PaaS du cluster Kubernetes (Zot + opérateurs) — 2026-09-18
+
+Procédure ordonnée complète : [[paas-bootstrap]] (`docs/runbooks/paas-bootstrap.md`)
++ script `tools/paas-bootstrap.sh`. Pièges vérifiés en direct :
+
+- **Endpoints publics incomplets** : seuls keystone/neutron/nova/cinder avaient été
+  basculés sur les vhosts. `octavia`, `placement` et `glance` pointaient encore sur
+  `192.168.26.x` → le CCM du cluster (qui lit le catalogue **public**) ne pouvait pas
+  créer de LB (`dial tcp 192.168.26.234:9876: i/o timeout`). Les 3 sont maintenant
+  basculés. Après tout redémarrage du lab, revérifier
+  `openstack endpoint list --interface public | grep 192.168.26` (doit être vide).
+- **`octavia_provider`** : le driver `magnum-cluster-api` défaut à `amphorav2`
+  (`utils.py`, lu dans les **labels du cluster**), provider absent de cet Octavia →
+  400 `Provider 'amphorav2' is not enabled`. Ce lab n'a que `amphora`. Le backend
+  (`packages/openstack/synelia_openstack/magnum.py`) passe désormais
+  `octavia_provider=amphora` à la création (surchargeable par
+  `SYNELIA_PAAS_OCTAVIA_PROVIDER`). Un cluster créé avant ce correctif doit être
+  corrigé à la main : secret workload `kube-system/cloud-config` →
+  `lb-provider=amphora` + `rollout restart ds/openstack-cloud-controller-manager`.
+- **Registre Zot** : `oci://ghcr.io/project-zot/helm-charts/zot`, VIP Octavia
+  (adresse stable), PVC sur `block-ssd` (volume Cinder réel). En HTTP → il faut
+  `certs.d/<vip>:5000/hosts.toml` **et** `config_path = '/etc/containerd/certs.d'`
+  sous `[plugins.'io.containerd.cri.v1.images'.registry]` (containerd 2.x ne lit
+  `certs.d` que si `config_path` est posé, sinon HTTPS only), puis redémarrer
+  containerd. Pousser sans redémarrer le Docker de ctrl1 : `crane copy … --insecure`.
+- **Capacité** : le cluster 1 master + 1 worker sature vite (`Insufficient cpu` pour
+  le dernier opérateur). Retirer le taint control-plane du master, ou ajouter un
+  worker si la capacité compute du lab le permet (`os-hypervisors/statistics`).
+- **Opérateurs** : CNPG, MariaDB, Redis (OT-container-kit), ECK, MongoDB Community.
+  ECK/MongoDB posent leurs CRDs via un chart séparé → conflit d'ownership Helm,
+  réattribuer les annotations `meta.helm.sh/release-*` avant d'installer l'opérateur.
+  MongoDB Community exige `watchNamespace="*"` pour réconcilier hors de son namespace.
+- **stakater/application** (déploiement d'apps) : défauts `runAsNonRoot: true` +
+  `readOnlyRootFilesystem: true` (cassent nginx/nixpacks → désactiver), ports en
+  listes, `env` en map. Build GitHub : `nixpacks build` → push Zot (`railpack` = alternative).
+
 ## État réel vs simulé de l'univers Infrastructure
 
 Voir [[infra-universe-real-vs-simulated]] (mémoire de session) pour le détail à jour — au 2026-09-07,
@@ -187,3 +273,72 @@ lab (Sauvegardes/PRA échouent honnêtement, Karbor n'étant pas déployé). Deu
 un plantage de l'API partagée sous charge concurrente réelle (suspecté : appel SDK OpenStack synchrone
 bloquant la boucle asyncio), et des enregistrements `web_hebergement` orphelins en base dont la VM Nova
 réelle a été supprimée sans nettoyage côté DB.
+
+## Webmail public Zimbra (`POST /v1/web/emails/{id}/ouverture`) — vhost `webmail.cloud.dev01.ovh.smile.ci`
+
+`ZimbraReel.ouvrir_webmail()` (`packages/openstack/synelia_openstack/zimbra.py`) fait un
+`DelegateAuthRequest` SOAP (SSO preauth, jeton 60 s) et rend un lien `/service/preauth?authtoken=…`.
+Avant ce correctif, ce lien pointait `https://zimbra:7071` (console admin interne, injoignable hors
+lab) — il pointe désormais l'hôte public `SYNELIA_WEBMAIL_URL`, repli
+`https://webmail.cloud.dev01.ovh.smile.ci` (`HOTE_WEBMAIL_PUBLIC_DEFAUT`, jamais `zimbra:7071` —
+verrouillé par `test_webmail_publique_jamais_interne`).
+
+**Vhost Apache** (fichiers hors dépôt git, sur dev01 uniquement — `/etc/httpd/conf.d/`, même
+motif que `console.synelia.dev01.ovh.smile.ci` § ci-dessus ; le mailboxd tourne dans Docker sur
+dev01, `127.0.0.1:8443 → 443`, cf. `zimbra/docker-compose.yml`) :
+- `webmail.cloud.dev01.ovh.smile.ci.conf` (port 80, redirection HTTPS + bypass ACME, copier le
+  motif des autres vhosts `*.dev01.ovh.smile.ci`).
+- `webmail.cloud.dev01.ovh.smile.ci-le-ssl.conf` (port 443) :
+  ```
+  <VirtualHost *:443>
+    ServerName webmail.cloud.dev01.ovh.smile.ci
+    SSLEngine on
+    SSLCertificateFile /etc/letsencrypt/live/webmail.cloud.dev01.ovh.smile.ci/fullchain.pem
+    SSLCertificateKeyFile /etc/letsencrypt/live/webmail.cloud.dev01.ovh.smile.ci/privkey.pem
+    SSLProxyEngine on
+    SSLProxyVerify none
+    SSLProxyCheckPeerName off
+    SSLProxyCheckPeerCN off
+    ProxyPreserveHost On
+    ProxyTimeout 300
+    RewriteEngine On
+    RewriteCond %{HTTP:Upgrade} =websocket [NC]
+    RewriteRule /(.*) wss://127.0.0.1:8443/$1 [P,L]
+    RewriteCond %{HTTP:Upgrade} !=websocket [NC]
+    RewriteRule /(.*) https://127.0.0.1:8443/$1 [P,L]
+    ProxyPassReverse / https://127.0.0.1:8443/
+    ProxyPassReverse / https://mail.zimbra.synelia.internal/
+  </VirtualHost>
+  ```
+  (`SSLProxyVerify none` : le mailboxd présente son certificat auto-signé interne ; le périmètre
+  TLS public reste le certificat Let's Encrypt du vhost.)
+- Certificat (`*.dev01.ovh.smile.ci` déjà en wildcard, aucun DNS à ajouter) :
+  `certbot certonly --webroot -w /var/www/html -d webmail.cloud.dev01.ovh.smile.ci --key-type ecdsa`
+- Recharger Apache : `sudo kill -USR1 $(cat /run/httpd/httpd.pid)` (`systemctl reload httpd`
+  échoue sur dev01, cf. § console).
+
+**Vérification** : `curl -ksI https://webmail.cloud.dev01.ovh.smile.ci/ | head -3` doit répondre
+depuis Internet (login Zimbra), puis `POST /v1/web/emails/{id}/ouverture` doit rendre un lien
+`https://webmail.cloud.dev01.ovh.smile.ci/service/preauth?authtoken=…` qui connecte sans mot de
+passe (jeton 60 s, `expire` dans la réponse).
+
+## Comptes FTP/SFTP d'un hébergement (`POST /web/hebergements/{id}/comptes-fichiers`)
+
+Les accès fichiers sont provisionnés par **conteneurs Docker sur le VPS** de l'hébergement
+(projet Compose dédié `/srv/synelia/fichiers`, même logique que les moteurs de bases et les
+sites) — deux services :
+- `sftp` : `atmoz/sftp`, port `2222`, chaque compte **chrooté dans son dossier** (montage
+  hôte → `/home/<utilisateur>`, jamais l'arborescence entière du VPS) ;
+- `ftp` : `delfer/alpine-ftp-server`, port `21` (+ passif `21000-21010`), comptes via `USERS`.
+
+`web_hebergement.service.appliquer_comptes_fichiers()` régénère `users.conf`/`docker-compose.yml`
+depuis la base après chaque création/modification/suppression de compte, les **écrit par SFTP**
+(`ecrire_fichier` — aucun mot de passe en ligne de commande distante), puis lance
+`docker compose up -d` (idempotent). En simulation : no-op ; en réel sans SSH/IP : échec franc
+424, jamais un compte annoncé « actif » sans serveur.
+
+**À valider en lab** (non prouvable depuis le poste de test, le VPS n'est pas routable) :
+`ssh <vps> 'docker compose -f /srv/synelia/fichiers/docker-compose.yml ps'` (deux conteneurs
+`running`) puis un vrai login `sftp -P 2222 <utilisateur>@<ip>` / `ftp <ip>`.
+Images et formats d'env retenus d'après leur documentation publique — à confirmer au premier
+déploiement réel (un `docker logs` tranche).

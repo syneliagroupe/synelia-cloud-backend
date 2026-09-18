@@ -99,21 +99,19 @@ async def test_zone_vps_provisionnee_et_masquee(client_zone_vps):
     assert r.status_code == 200, r.text
     assert all(e["code"] != "vps-zone" for e in r.json()["donnees"])
 
-    # 2) Toujours invisible d'une organisation cliente fraîchement inscrite.
-    r = await client.post(
-        "/v1/auth/inscription",
-        json={
-            "email": "nouvel-org@example.com",
-            "motDePasse": "MotDePasse!2026",
-            "nom": "Nouvel utilisateur",
-            "accepteConditions": True,
-            "organisation": {"nom": "Nouvelle Org Zone VPS", "pays": "CI"},
-        },
+    # 2) Toujours invisible d'une organisation cliente fraîchement inscrite
+    # (inscription + vérification d'email : le helper rejoue ce flux).
+    from synelia_testing import inscrire_et_verifier
+
+    corps = await inscrire_et_verifier(
+        client,
+        "nouvel-org@example.com",
+        "Nouvel utilisateur",
+        "MotDePasse!2026",
+        organisation={"nom": "Nouvelle Org Zone VPS", "pays": "CI"},
     )
-    assert r.status_code == 201, r.text
     nouvel_org = httpx.AsyncClient(transport=client.transport, base_url="http://test")
     try:
-        corps = r.json()
         nouvel_org.headers["Authorization"] = f"Bearer {corps['accessToken']}"
         r2 = await nouvel_org.get(f"{DES}/espaces")
         assert r2.status_code == 200
@@ -132,7 +130,11 @@ async def test_zone_vps_provisionnee_et_masquee(client_zone_vps):
     assert any(e["code"] == "vps-zone" and e["id"] == ESPACE_ID_TEST for e in admin_espaces)
 
     # 4) La lecture des secrets (consommée par web_hebergement/projets) fonctionne toujours de
-    #    bout en bout via le dépôt « plateforme », sans org override.
+    #    bout en bout via le dépôt « plateforme », sans org override. Le domaine doit
+    #    désormais être enregistré au préalable (plus de nom provisoire implicite).
+    from synelia_testing import enregistrer_domaine
+
+    await enregistrer_domaine(client, "zone-vps.test")
     r = await client.post(
         f"{DES}/web/hebergements", json={"palier": "pro", "site": "ABJ", "domaine": "zone-vps.test"}
     )

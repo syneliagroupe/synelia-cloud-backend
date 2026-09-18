@@ -21,3 +21,7 @@ htmlcov/
 tests-rapports/
 .schemathesis/
 zimbra/zimbra-storage/
+# graphify — local knowledge-graph artifacts, not committed
+graphify-out/
+.opencode/
+AGENTS.md

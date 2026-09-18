@@ -5,7 +5,10 @@ from __future__ import annotations
 import os
 import shutil
 import tempfile
+import warnings
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from functools import lru_cache
 from typing import Any
 
 import httpx
@@ -13,6 +16,176 @@ import pytest
 
 ADMIN_EMAIL = "admin@synelia.cloud"
 ADMIN_MDP = "Synelia!2026"
+
+# ── Sondes lab réel + aides de saut ──────────────────────────────────────────
+# La suite pytest tourne contre le VRAI lab OpenStack par défaut
+# (`SYNELIA_FOURNISSEUR=openstack`) : quand une condition connue du lab rend un
+# test voué à l'échec côté amont (pas côté applicatif), le test est SAUTÉ avec
+# une raison honnête plutôt que de FAIL. En simulé (`SYNELIA_FOURNISSEUR=simule`)
+# ces aides sont sans effet : la couverture y reste complète.
+
+RAISON_OCTAVIA_CASSE = (
+    "Octavia cassé lab-wide (LB jamais ACTIVE, statut ERROR — TODO.md ligne 31) : "
+    "test désélectionné sur lab réel (TODO.md ligne 47)"
+)
+
+RAISON_FIP_EPUISE = (
+    "Pool d'IP flottantes external-net épuisé sur le lab réel (0 IP libre visible, "
+    "Neutron 409 « No more IP addresses available » — TODO.md ligne 22) : "
+    "test désélectionné sur lab réel"
+)
+
+RAISON_VM_DEMO_ABSENTE = (
+    "Aucun serveur Nova réel nommé vm-demo-web sur le lab "
+    "(attachement volume → Nova 404) : test désélectionné sur lab réel"
+)
+
+VM_DEMO = "vm-demo-web"
+
+
+def _sur_lab_reel() -> bool:
+    from synelia_openstack.fabrique import mode
+
+    return mode() == "openstack"
+
+
+def _sonde_tcp(hote: str, port: int, delai_s: float = 4.0) -> bool:
+    """Joignabilité TCP brute, sans exception : les backends hors réseau du lab
+    (Zimbra, relais SMTP — noms Docker non résolus depuis le poste de test) ne
+    doivent jamais faire échouer la suite, seulement la désélectionner."""
+    import socket
+
+    try:
+        socket.create_connection((hote, port), timeout=delai_s).close()
+        return True
+    except OSError:
+        return False
+
+
+def ignorer_si_zimbra_injoignable() -> None:
+    """Saute les preuves Zimbra réelles quand le serveur n'est pas joignable depuis
+    le poste de test (réseau Docker du lab uniquement) ; sans effet là où il l'est —
+    la preuve tourne alors pour de vrai, jamais en simulé silencieux."""
+    import os
+
+    url = os.environ.get("SYNELIA_ZIMBRA_URL", "")
+    hote = url.split("://", 1)[-1].split(":", 1)[0].split("/", 1)[0]
+    try:
+        port = int(url.rsplit(":", 1)[-1].rstrip("/")) if ":" in url.split("://", 1)[-1] else 443
+    except ValueError:
+        port = 443
+    if not hote or not _sonde_tcp(hote, port):
+        import pytest
+
+        pytest.skip(f"Zimbra injoignable depuis ce poste ({url or 'non configuré'})")
+
+
+def sur_lab_reel() -> bool:
+    """Alias public de la sonde de mode : `True` quand la suite tourne contre le
+    vrai lab OpenStack (`SYNELIA_FOURNISSEUR=openstack`)."""
+    return _sur_lab_reel()
+
+
+def exiger_lab_reel() -> None:
+    """Saute le test quand il ne tourne pas contre le vrai lab : les assertions
+    d'impact amont (Nova/Neutron/Cinder/…) n'ont de sens que sur l'infra réelle."""
+    import pytest
+
+    if not _sur_lab_reel():
+        pytest.skip("réservé au lab réel (SYNELIA_FOURNISSEUR=openstack)")
+
+
+def corriger_amont(
+    monkeypatch, module_service, nom_simule: str, nom_reel: str, attr: str, valeur
+) -> None:
+    """Patch `attr` sur les DEUX classes d'amont (simulée ET réelle) d'un module.
+
+    Patatcher seulement `XxxSimule` est un faux-positif sur lab réel : `amont()`
+    y renvoie `XxxOpenStack` via `fournisseur()`, donc le patch ne touche jamais
+    le code exécuté et le test passe « en fumée ». En mode simulé la classe réelle
+    existe toujours (importée pour le dispatch) : la patcher aussi est sans effet.
+    """
+    for nom_classe in (nom_simule, nom_reel):
+        cls = getattr(module_service, nom_classe, None)
+        if cls is not None:
+            monkeypatch.setattr(cls, attr, valeur)
+
+
+def connexion_lab():
+    """Connexion admin au lab réel, ou `None` si indisponible (mode simulé ou
+    lab injoignable) — ne lève jamais : l'appelant saute ou dégrade."""
+    if not _sur_lab_reel():
+        return None
+    try:
+        from synelia_openstack.fabrique import connexion
+
+        return connexion()
+    except Exception:
+        return None
+
+
+@lru_cache(maxsize=1)
+def _sonde_fip_libres() -> int | None:
+    """Nombre d'IP flottantes libres (non associées) visibles sur le réseau externe
+    du lab — `None` si le réseau externe est introuvable (état inconnu, pas « 0 »).
+    Lecture seule, mise en cache pour la session."""
+    from synelia_openstack.fabrique import connexion
+
+    c = connexion()
+    ext = next((n for n in c.network.networks(is_router_external=True)), None)
+    if ext is None:
+        return None
+    return sum(1 for ip in c.network.ips(floating_network_id=ext.id) if not ip.port_id)
+
+
+@lru_cache(maxsize=1)
+def _sonde_vm_demo_presente() -> bool:
+    """`True` si un vrai serveur Nova nommé `vm-demo-web` existe sur le lab.
+    Lecture seule, mise en cache pour la session."""
+    from synelia_openstack.fabrique import connexion
+
+    c = connexion()
+    return c.compute.find_server(VM_DEMO, ignore_missing=True) is not None
+
+
+def ignorer_si_octavia_casse() -> None:
+    """Saute le test sur lab réel tant qu'Octavia est cassé ; sans effet en simulé."""
+    if _sur_lab_reel():
+        pytest.skip(RAISON_OCTAVIA_CASSE)
+
+
+def ignorer_si_fip_epuise() -> None:
+    """Saute les tests qui allouent une IP flottante quand le pool est épuisé sur
+    lab réel ; sans effet en simulé. Une sonde en échec ne fait jamais échouer la
+    suite : on laisse alors le test parler (pas de saut)."""
+    if not _sur_lab_reel():
+        return
+    try:
+        libres = _sonde_fip_libres()
+    except Exception as exc:  # noqa: BLE001 — sonde best effort, le test tranche
+        warnings.warn(
+            f"sonde FIP lab indisponible ({exc!r}) : test exécuté quand même", stacklevel=2
+        )
+        return
+    if libres is not None and libres <= 0:
+        pytest.skip(RAISON_FIP_EPUISE)
+
+
+def ignorer_si_vm_demo_absente() -> None:
+    """Saute les tests qui attachent à la VM de démo quand Nova ne la connaît pas
+    sur lab réel ; sans effet en simulé. Même politique qu'au-dessus : une sonde
+    en échec ne saute jamais, le test tranche."""
+    if not _sur_lab_reel():
+        return
+    try:
+        presente = _sonde_vm_demo_presente()
+    except Exception as exc:  # noqa: BLE001 — sonde best effort, le test tranche
+        warnings.warn(
+            f"sonde Nova lab indisponible ({exc!r}) : test exécuté quand même", stacklevel=2
+        )
+        return
+    if not presente:
+        pytest.skip(RAISON_VM_DEMO_ABSENTE)
 
 
 def configurer_env() -> str:
@@ -51,14 +224,94 @@ class ClientApi(httpx.AsyncClient):
         return corps
 
 
+CODE_VERIFICATION_TEST = "123456"
+
+
+async def forcer_code_verification(email: str, code: str = CODE_VERIFICATION_TEST) -> None:
+    """Pose un code de vérification connu pour `email` (tests uniquement) : l'inscription
+    réelle émet un code aléatoire envoyé par email, que les tests API ne peuvent pas lire.
+    Le code injecté consomme les précédents, comme `_emettre_code` côté routeur."""
+    from sqlalchemy import select
+    from synelia.securite import hacher_jeton
+    from synelia_db import session as db
+    from synelia_db.modeles import Utilisateur, VerificationEmail
+    from synelia_kernel.dates import dans, maintenant
+
+    async with db.fabrique()() as s:
+        u = (
+            await s.execute(select(Utilisateur).where(Utilisateur.email == email.lower()))
+        ).scalar_one()
+        precedents = (
+            await s.execute(
+                select(VerificationEmail).where(
+                    VerificationEmail.utilisateur_id == u.id,
+                    VerificationEmail.consommee_le.is_(None),
+                )
+            )
+        ).scalars()
+        for p in precedents:
+            p.consommee_le = maintenant()
+        s.add(
+            VerificationEmail(
+                utilisateur_id=u.id, code_hash=hacher_jeton(code), expire_le=dans(900)
+            )
+        )
+        await s.commit()
+
+
+async def enregistrer_domaine(client, nom: str) -> None:
+    """Commande un domaine pour l'organisation du client (202). Un hébergement exige
+    désormais un domaine déjà enregistré et payé — les tests passent donc par la vraie
+    commande de domaine avant de créer un hébergement."""
+    r = await client.post(
+        "/v1/web/domaines",
+        json={
+            "nom": nom,
+            "dureeAnnees": 1,
+            "titulaire": {
+                "nom": "Synelia Test",
+                "email": "test@synelia.ci",
+                "telephone": "+22500000000",
+                "adresse": "x",
+                "ville": "Abidjan",
+                "pays": "CI",
+            },
+        },
+    )
+    assert r.status_code == 202, r.text
+
+
+async def inscrire_et_verifier(
+    client, email: str, nom: str, mot_de_passe: str, organisation: dict | None = None
+) -> dict[str, Any]:
+    """Inscription complète côté tests : 202 + code forcé + vérification → session."""
+    corps: dict[str, Any] = {
+        "email": email,
+        "nom": nom,
+        "motDePasse": mot_de_passe,
+        "accepteConditions": True,
+    }
+    if organisation is not None:
+        corps["organisation"] = organisation
+    r = await client.post("/v1/auth/inscription", json=corps)
+    assert r.status_code == 202, r.text
+    await forcer_code_verification(email)
+    r = await client.post(
+        "/v1/auth/verification-email",
+        json={"email": email, "code": CODE_VERIFICATION_TEST},
+    )
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
 @pytest.fixture(scope="session")
 def anyio_backend() -> str:
     return "asyncio"
 
 
-@pytest.fixture
-async def client() -> AsyncIterator[ClientApi]:
-    """Application neuve (base SQLite éphémère), admin connecté."""
+@asynccontextmanager
+async def _application_neuve() -> AsyncIterator[ClientApi]:
+    """Application neuve (base SQLite éphémère), client non connecté."""
     d = configurer_env()
     from synelia_kernel import config
 
@@ -75,8 +328,48 @@ async def client() -> AsyncIterator[ClientApi]:
         async with app.router.lifespan_context(app):
             transport = httpx.ASGITransport(app=app)
             async with ClientApi(transport=transport, base_url="http://test") as c:
-                await c.connecter()
                 yield c
         await db.fermer()
     finally:
         shutil.rmtree(d, ignore_errors=True)
+
+
+@pytest.fixture
+async def client() -> AsyncIterator[ClientApi]:
+    """Application neuve, admin plateforme connecté — réservé aux chemins `/admin/**`
+    (équipe Synelia), seul rôle qui peut les appeler. Tout le reste doit passer par
+    `client_org` (compte client réel, jamais admin en superutilisateur)."""
+    async with _application_neuve() as c:
+        await c.connecter()
+        yield c
+
+
+ORG_CLIENT_NOM = "Organisation Test Client"
+ORG_CLIENT_EMAIL = "org-admin@test-client.ci"
+ORG_CLIENT_MDP = "OrgAdmin!2026"
+
+
+@pytest.fixture
+async def client_org() -> AsyncIterator[ClientApi]:
+    """Application neuve + organisation cliente fraîchement inscrite, session scellée
+    sur elle (`X-Organisation-Id`) en rôle `org_admin`.
+
+    Compte client réel : c'est ce que voit un vrai utilisateur de la plateforme.
+    Les tests d'API consommateur ne doivent jamais tourner en `super_admin` — un
+    endpoint cassé pour un rôle réel resterait vert sous admin (admin court-circuite
+    `rbac.autorise` via `est_admin_plateforme`)."""
+    async with _application_neuve() as c:
+        session = await inscrire_et_verifier(
+            c,
+            ORG_CLIENT_EMAIL,
+            "Admin Organisation Test",
+            ORG_CLIENT_MDP,
+            organisation={"nom": ORG_CLIENT_NOM, "pays": "CI"},
+        )
+        assert session.get("organisationActive"), session
+        c.jeton = session["accessToken"]
+        c.org_id = session["organisationActive"]
+        c.headers["Authorization"] = f"Bearer {c.jeton}"
+        c.headers["X-Organisation-Id"] = c.org_id
+        assert session.get("roleActif") == "org_admin", session
+        yield c

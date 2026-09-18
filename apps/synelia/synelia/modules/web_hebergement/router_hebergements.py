@@ -15,6 +15,7 @@ from synelia.modules.web_hebergement import service
 from synelia.modules.web_hebergement.service import (
     SERVICES_PARTAGES,
     VERSIONS_PHP,
+    appliquer_comptes_fichiers,
     depot,
     depot_comptes,
     depot_domaines,
@@ -25,6 +26,24 @@ from synelia.modules.web_hebergement.service import (
 from synelia.travaux import demarrer_travail
 
 router = APIRouter(prefix="/web/hebergements", tags=["Web Cloud — hébergement"])
+
+
+async def _exiger_domaine_detenu(ctx: Contexte, domaine: str) -> None:
+    """Un hébergement ne se crée pas sur un nom provisoire : le domaine doit avoir été
+    enregistré et payé au préalable (ressource `web_domaine` de l'organisation). Sans
+    cette garde, `domaine` acceptait n'importe quelle chaîne et l'hébergement partait
+    sur un nom que le client ne possédait pas."""
+    nom = (domaine or "").strip().lower()
+    if not nom:
+        raise erreurs.validation(
+            "Un domaine est requis.", {"domaine": "Enregistrez d'abord le domaine à servir."}
+        )
+    if await depot_domaines.par_nom(ctx, nom) is None:
+        raise erreurs.validation(
+            "Domaine non enregistré : commandez-le (et réglez-le) avant de l’attacher à un "
+            "hébergement.",
+            {"domaine": "Domaine inconnu de votre organisation — voir /app/web/domaines."},
+        )
 
 
 @router.get("", response_model=m.WebHebergementsGetResponse, response_model_exclude_none=True)
@@ -82,8 +101,8 @@ async def creer_hebergement(
                 "fois l'hébergement en ligne."
             },
         )
-    if corps.domaine:
-        await depot.exiger_nom_libre(ctx, corps.domaine)
+    await _exiger_domaine_detenu(ctx, corps.domaine)
+    await depot.exiger_nom_libre(ctx, corps.domaine)
     hebergement = service.construire_hebergement(ctx, corps)
     await depot.creer(ctx, hebergement)
     await journaliser(
@@ -130,6 +149,7 @@ async def modifier_hebergement(
 ) -> Any:  # noqa: N803
     h = await depot.obtenir(ctx, hebergementId)
     if corps.domaine and corps.domaine != h.domaine:
+        await _exiger_domaine_detenu(ctx, corps.domaine)
         await depot.exiger_nom_libre(ctx, corps.domaine)
     await depot.modifier(ctx, hebergementId, corps)
     await journaliser(
@@ -259,6 +279,10 @@ async def creer_compte_fichiers(
     await depot_comptes.creer(ctx, compte, parent_id=hebergementId)
     if corps.motDePasse:
         await depot_comptes.definir_secrets(ctx, compte.id, {"mot_de_passe": corps.motDePasse})
+    # Provisionnement réel sur le VPS (conteneurs SFTP/FTP, cf. `appliquer_comptes_fichiers`) :
+    # no-op simulé, 424 franc en réel si le VPS n'est pas joignable — jamais un compte
+    # annoncé « actif » sans serveur derrière.
+    await appliquer_comptes_fichiers(ctx, hebergementId)
     await journaliser(
         ctx,
         action="hebergement.compte_fichiers.creation",
@@ -289,6 +313,7 @@ async def modifier_compte_fichiers(
         await depot_comptes.remplacer(ctx, compteId, compte)
     else:
         await depot_comptes.modifier(ctx, compteId, patch)
+    await appliquer_comptes_fichiers(ctx, hebergementId)
     await journaliser(
         ctx,
         action="hebergement.compte_fichiers.modification",
@@ -312,6 +337,7 @@ async def supprimer_compte_fichiers(
     compte = await depot_comptes.obtenir(ctx, compteId)
     exiger_confirmation(compte.utilisateur, confirmation)
     await depot_comptes.supprimer(ctx, compteId)
+    await appliquer_comptes_fichiers(ctx, hebergementId)
     await journaliser(
         ctx,
         action="hebergement.compte_fichiers.suppression",

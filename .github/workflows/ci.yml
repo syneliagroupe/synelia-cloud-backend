@@ -12,8 +12,78 @@ jobs:
       - run: uv sync --frozen
       - run: uv run ruff check .
       - run: uv run ruff format --check .
+  # Suite pytest découpée en 4 groupes équilibrés (~75-80 tests chacun) plutôt
+  # qu'une passe unique de ~13 min : chaque job `tests (A..D)` tourne en parallèle.
+  # Groupes équilibrés par nombre de tests (le coût dominant est le boot applicatif
+  # par test, à peu près uniforme) — chemins par dossier quand le dossier ne contient
+  # que les tests du groupe, par fichier sinon (packages/openstack/tests et
+  # apps/synelia/synelia/tests sont à cheval sur deux groupes).
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - groupe: A-infra-ecriture
+            chemins: >
+              apps/synelia/synelia/modules/vms
+              apps/synelia/synelia/modules/securite
+              apps/synelia/synelia/modules/projets
+              apps/synelia/synelia/tests/test_relais_smtp.py
+              apps/synelia/synelia/tests/test_socle.py
+              packages/openstack/tests/test_compute.py
+              apps/synelia/synelia/tests/test_zone_vps_plateforme.py
+              apps/synelia/synelia/tests/test_espaces.py
+              apps/synelia/synelia/modules/web_backup
+              apps/synelia/synelia/modules/bases
+          - groupe: B-plateforme
+            chemins: >
+              apps/synelia/synelia/modules/admin
+              apps/synelia/synelia/modules/facturation
+              apps/synelia/synelia/modules/kubernetes
+              apps/synelia/synelia/modules/support
+              apps/synelia/synelia/modules/pra
+              apps/synelia/synelia/modules/docs
+              apps/synelia/synelia/modules/sauvegarde
+              apps/synelia/synelia/modules/observabilite
+              apps/synelia/synelia/modules/catalogue
+              apps/synelia/synelia/modules/web_dns
+          - groupe: C-reseau-web
+            chemins: >
+              apps/synelia/synelia/modules/public
+              apps/synelia/synelia/modules/reseau
+              apps/synelia/synelia/modules/web_hebergement
+              apps/synelia/synelia/modules/modeles
+              apps/synelia/synelia/modules/audit
+              apps/synelia/synelia/modules/deploiements
+              apps/synelia/synelia/modules/stockage
+              apps/synelia/synelia/modules/membres
+              apps/synelia/synelia/tests/test_travaux_worker.py
+              packages/openstack/tests/test_k8s_workload.py
+              packages/db/tests/test_schema_diff.py
+              apps/synelia/synelia/tests/test_transverses.py
+          - groupe: D-ia-applications
+            chemins: >
+              apps/synelia/synelia/modules/ia_agents
+              apps/synelia/synelia/modules/admin_catalogue
+              apps/synelia/synelia/modules/applications
+              apps/synelia/synelia/modules/web_smtp
+              apps/synelia/synelia/modules/web_domaines
+              apps/synelia/synelia/modules/tableau_de_bord
+              apps/synelia/synelia/modules/conformite
+              apps/synelia/synelia/modules/web_ssl
+              apps/synelia/synelia/modules/web_drive
+              apps/synelia/synelia/modules/services_manages
+              apps/synelia/synelia/modules/organisations
+              apps/synelia/synelia/modules/compte
+              apps/synelia/synelia/modules/web_emails
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with: { enable-cache: true }
+      - run: uv sync --frozen
       # extra `temporal` : couvre les définitions enregistrées par `synelia worker`
-      - run: uv run --frozen --extra temporal pytest -q
+      - run: uv run --frozen --extra temporal pytest -q ${{ matrix.chemins }}
       - name: Couverture du contrat
         run: uv run python tools/contrat_diff.py --strict
       - name: Image Docker

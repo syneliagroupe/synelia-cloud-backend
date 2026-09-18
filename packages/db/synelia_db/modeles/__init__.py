@@ -6,6 +6,7 @@ from synelia_db.modeles.identite import (
     Organisation,
     SessionAuth,
     Utilisateur,
+    VerificationEmail,
 )
 from synelia_db.modeles.ressources import Ressource
 from synelia_db.modeles.travaux import Travail
@@ -20,4 +21,5 @@ __all__ = [
     "SessionAuth",
     "Travail",
     "Utilisateur",
+    "VerificationEmail",
 ]

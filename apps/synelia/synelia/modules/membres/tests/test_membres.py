@@ -3,6 +3,8 @@
 Le client est l'admin plateforme (super_admin) : on crée une organisation puis on y
 travaille via `X-Organisation-Id` pour sceller les opérations sur les membres de celle-ci."""
 
+from synelia_testing import inscrire_et_verifier
+
 ORG_NOM = "Membre Org"
 
 
@@ -37,18 +39,10 @@ async def test_cycle_membre(client):
     assert r.status_code == 200 and r.json()["userId"] == mem["userId"]
 
     # Un second admin est nécessaire avant de pouvoir rétrograder le premier — sinon
-    # `dernier_admin` bloque (voir test_patch_dernier_admin_bloque).
-    r = await client.post(
-        "/v1/auth/inscription",
-        json={
-            "email": "co-admin@membre.ci",
-            "nom": "Co Admin",
-            "motDePasse": "CoAdmin!2026",
-            "accepteConditions": True,
-        },
-    )
-    assert r.status_code == 201, r.text
-    co_admin_id = r.json()["utilisateur"]["id"]
+    # `dernier_admin` bloque (voir test_patch_dernier_admin_bloque). L'inscription
+    # impose désormais la vérification d'email (202 + code) : le helper rejoue ce flux.
+    session = await inscrire_et_verifier(client, "co-admin@membre.ci", "Co Admin", "CoAdmin!2026")
+    co_admin_id = session["utilisateur"]["id"]
     r = await client.post(
         "/v1/membres",
         json={"userId": co_admin_id, "role": "org_admin", "scopeType": "org"},
@@ -95,18 +89,13 @@ async def test_role_change_effet_immediat_sans_relogin(client):
     """Un changement de rôle doit s'appliquer dès la requête suivante du membre déjà
     connecté — pas seulement à l'expiration/rafraîchissement de son jeton déjà émis
     (régression du bug : `claims.get("role")` figé à la connexion primait sur la base)."""
-    r = await client.post(
-        "/v1/auth/inscription",
-        json={
-            "email": "cible@membre.ci",
-            "nom": "Cible",
-            "motDePasse": "Cible!2026",
-            "accepteConditions": True,
-            "organisation": {"nom": "Org Cible", "pays": "CI"},
-        },
+    session = await inscrire_et_verifier(
+        client,
+        "cible@membre.ci",
+        "Cible",
+        "Cible!2026",
+        organisation={"nom": "Org Cible", "pays": "CI"},
     )
-    assert r.status_code == 201, r.text
-    session = r.json()
     membre_jeton = session["accessToken"]
     oid = session["organisationActive"]
     membre_headers = {"Authorization": f"Bearer {membre_jeton}"}
@@ -117,17 +106,10 @@ async def test_role_change_effet_immediat_sans_relogin(client):
     memId = next(mm["id"] for mm in r.json()["donnees"] if mm["role"] == "org_admin")
 
     # Un second admin, sinon `dernier_admin` bloque la rétrogradation.
-    r = await client.post(
-        "/v1/auth/inscription",
-        json={
-            "email": "co-admin-cible@membre.ci",
-            "nom": "Co Admin Cible",
-            "motDePasse": "CoAdmin!2026",
-            "accepteConditions": True,
-        },
+    session = await inscrire_et_verifier(
+        client, "co-admin-cible@membre.ci", "Co Admin Cible", "CoAdmin!2026"
     )
-    assert r.status_code == 201, r.text
-    co_admin_id = r.json()["utilisateur"]["id"]
+    co_admin_id = session["utilisateur"]["id"]
     r = await client.post(
         "/v1/membres",
         json={"userId": co_admin_id, "role": "org_admin", "scopeType": "org"},

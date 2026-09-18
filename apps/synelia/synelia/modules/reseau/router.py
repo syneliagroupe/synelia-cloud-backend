@@ -25,6 +25,10 @@ from synelia.modules.reseau.service import (
     dissocier_ip_amont,
     liberer_ip_amont,
     metriques_vides,
+    reconcilier_groupe,
+    reconcilier_ip,
+    reconcilier_lb,
+    reconcilier_reseau,
     reserver_ip_amont,
     resoudre_cible_attachement_ip,
     sante_defaut,
@@ -89,7 +93,7 @@ async def creer_reseau(
 async def obtenir_reseau(
     reseauId: str, ctx: Contexte = Depends(exige(_rbac_lecture, lecture=True))
 ) -> Any:  # noqa: N803
-    return await depot_reseau.obtenir(ctx, reseauId)
+    return await reconcilier_reseau(ctx, await depot_reseau.obtenir(ctx, reseauId))
 
 
 @router_reseaux.patch("/{reseauId}", response_model=m.Reseau, response_model_exclude_none=True)
@@ -173,7 +177,7 @@ async def reserver_ip(
 
 @router_ips.get("/{ipId}", response_model=m.IpPublique, response_model_exclude_none=True)
 async def obtenir_ip(ipId: str, ctx: Contexte = Depends(exige(_rbac_lecture, lecture=True))) -> Any:  # noqa: N803
-    return await depot_ip.obtenir(ctx, ipId)
+    return await reconcilier_ip(ctx, await depot_ip.obtenir(ctx, ipId))
 
 
 @router_ips.patch("/{ipId}", response_model=m.IpPublique, response_model_exclude_none=True)
@@ -319,7 +323,7 @@ async def creer_groupe_securite(
 async def obtenir_groupe_securite(
     groupeId: str, ctx: Contexte = Depends(exige(_rbac_lecture, lecture=True))
 ) -> Any:  # noqa: N803
-    return await depot_groupe.obtenir(ctx, groupeId)
+    return await reconcilier_groupe(ctx, await depot_groupe.obtenir(ctx, groupeId))
 
 
 @router_groupes.patch(
@@ -560,7 +564,7 @@ async def creer_load_balancer(
 async def obtenir_load_balancer(
     lbId: str, ctx: Contexte = Depends(exige(_rbac_lecture, lecture=True))
 ) -> Any:  # noqa: N803
-    return await depot_lb.obtenir(ctx, lbId)
+    return await reconcilier_lb(ctx, await depot_lb.obtenir(ctx, lbId))
 
 
 @router_lb.patch("/{lbId}", response_model=m.LoadBalancer, response_model_exclude_none=True)

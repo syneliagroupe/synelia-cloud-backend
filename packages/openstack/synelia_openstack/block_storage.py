@@ -29,6 +29,12 @@ class BlockStorageSimule:
     ) -> None:
         return None
 
+    def statut_volume(self, volume_id: str, identifiants: dict[str, Any] | None = None) -> str:
+        # Le simulé ne retient aucun état (`attacher` est un no-op) : après un
+        # attachement, le volume est considéré comme utilisable immédiatement —
+        # la boucle d'attente de `ExecuteurVolumeAttach` réussit au premier sondage.
+        return "in-use"
+
     def etendre(
         self, volume_id: str, taille_go: int, identifiants: dict[str, Any] | None = None
     ) -> None:
@@ -104,6 +110,9 @@ class BlockStorageOpenStack(BlockStorageSimule):
         self._connexion(identifiants).compute.delete_volume_attachment(
             vm_id, volume_id, ignore_missing=True
         )
+
+    def statut_volume(self, volume_id: str, identifiants: dict[str, Any] | None = None) -> str:
+        return str(self._connexion(identifiants).block_storage.get_volume(volume_id).status)
 
     def etendre(
         self, volume_id: str, taille_go: int, identifiants: dict[str, Any] | None = None
