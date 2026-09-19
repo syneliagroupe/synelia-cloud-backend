@@ -177,7 +177,36 @@ vrai avec le même exécuteur que la création normale d'un Espace (`ExecuteurEs
 exception près : le load balancer Octavia public partagé (`lb_id` dans les secrets de l'Espace)
 n'est pas créé par cet exécuteur et doit encore être posé à la main (`openstack loadbalancer create`
 + `depot_plateforme.definir_secrets(ctx, espace_id, {"lb_id": ...})`) avant le premier hébergement —
-c'est ce qui a été fait manuellement pour créer `vps-zone` sur ce lab.
+c'est ce qui a été fait manuellement pour créer `vps-zone` sur ce lab. Depuis 2026-09-19, l'amorçage
+peut aussi poser `lb_id` / `lb_listener_id` via `SYNELIA_VPS_ZONE_LB_ID` et
+`SYNELIA_VPS_ZONE_LB_LISTENER_ID` (cf. `.env.example`).
+
+### Octavia `vps-zone-lb` bloqué en `PENDING_UPDATE` / pools 409 immutable
+
+Symptôme : `hebergement.creer` échoue à l'étape pool L7 avec « Load Balancer … is immutable ».
+Cause fréquente : pools `ERROR` / `PENDING_CREATE` laissés par des pytest infra + worker Octavia qui
+repasse le LB en `PENDING_UPDATE`.
+
+Sur **ctrl1** (SSH mgmt `192.168.121.186` depuis dev01), après sauvegarde si besoin :
+
+```bash
+docker stop octavia_worker octavia_housekeeping
+OCTPW=$(grep ^octavia_database_password: /etc/kolla/passwords.yml | awk '{print $2}')
+LB=fd03a60f-ded4-4fbf-8555-589b1212b591   # vps-zone-lb sur ce lab
+docker exec mariadb mariadb -uoctavia -p"$OCTPW" octavia -e "
+  DELETE FROM l7rule WHERE l7policy_id IN (SELECT id FROM l7policy WHERE listener_id IN (SELECT id FROM listener WHERE load_balancer_id='$LB'));
+  DELETE FROM l7policy WHERE listener_id IN (SELECT id FROM listener WHERE load_balancer_id='$LB');
+  DELETE FROM member WHERE pool_id IN (SELECT id FROM pool WHERE load_balancer_id='$LB');
+  DELETE FROM pool WHERE load_balancer_id='$LB';
+  UPDATE amphora SET status='ALLOCATED' WHERE load_balancer_id='$LB';
+  UPDATE load_balancer SET provisioning_status='ACTIVE' WHERE id='$LB';"
+docker restart octavia_api
+# Vérifier : curl Octavia API → provisioning_status ACTIVE, POST pool → 201
+# Pour une batterie pytest Web Cloud : laisser worker/housekeeping arrêtés le temps des tests, puis docker start octavia_worker octavia_housekeeping
+```
+
+Routeurs `vps-zone-net-rtr` orphelins (pool IP externe épuisé) : script `/tmp/clean-vps-routers.sh` sur
+ctrl1 (enlever ports d'interface, unset gateway, delete) — voir aussi nettoyage historique dans `DEMO-TODO.md`.
 
 ## Magnum CAPI remis en service (2026-09-18)
 
