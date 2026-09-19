@@ -10,6 +10,7 @@ from synelia_kernel import erreurs
 from synelia_kernel.config import reglages
 from synelia_kernel.journal import journal
 from synelia_openstack import fournisseur
+from synelia_openstack.fabrique import connexion_avec
 from synelia_openstack.identite import IdentiteOpenStack, IdentiteSimule
 
 from synelia.depot import Depot
@@ -51,6 +52,49 @@ ESPACE_ZONE_VPS_ID = "01a072e1-e303-76c2-bb8a-c3142f1e8f01"
 
 def amont() -> IdentiteSimule:
     return fournisseur(IdentiteSimule, IdentiteOpenStack)
+
+
+def _ac_encore_valide(application_credential_id: str | None, secret: str | None) -> bool:
+    if not application_credential_id or not secret:
+        return False
+    try:
+        connexion_avec(application_credential_id, secret).session.get_token()
+        return True
+    except Exception:
+        return False
+
+
+async def _rafraichir_application_credential_secrets(
+    ctx: Contexte,
+    depot_espace: Depot[Any],
+    espace_id: str,
+    secrets: dict[str, str],
+) -> None:
+    """Regénère l'AC Keystone quand le lab a été reconstruit mais la ligne DB est restée."""
+    projet_id = secrets.get("projet_id")
+    if not projet_id or reglages().fournisseur != "openstack":
+        return
+    if _ac_encore_valide(
+        secrets.get("application_credential_id"), secrets.get("application_credential_secret")
+    ):
+        return
+    a = amont()
+    domaine_id = secrets.get("domaine_id")
+    if not domaine_id:
+        domaine_id = await asyncio.to_thread(
+            lambda: a._conn().identity.get_project(projet_id).domain_id
+        )
+    ac = await asyncio.to_thread(a.creer_application_credential, projet_id, domaine_id)
+    await depot_espace.definir_secrets(
+        ctx,
+        espace_id,
+        {
+            "application_credential_id": ac["id"],
+            "application_credential_secret": ac["secret"],
+            "domaine_id": domaine_id,
+        },
+    )
+    log.info("espace.application_credential_regenere", espace_id=espace_id, projet_id=projet_id)
 
 
 async def usage(ctx: Contexte, espace_id: str) -> dict[str, float]:
@@ -241,6 +285,13 @@ async def semer_zone_vps(session: AsyncSession) -> None:
             ligne.org_id = None
             await session.flush()
             log.info("zone_vps.bascule_plateforme", espace_id=espace_id)
+        ctx = _ctx_amorcage_plateforme(session)
+        try:
+            zone = await depot_plateforme.secrets(ctx, espace_id)
+            await _rafraichir_application_credential_secrets(ctx, depot_plateforme, espace_id, zone)
+        except erreurs.AppError as exc:
+            if exc.code != "introuvable":
+                raise
         await _assurer_lb_secrets_zone_vps(session, espace_id)
         return
     if not r.vps_zone_org_id:
@@ -356,9 +407,40 @@ async def assurer_secrets_openstack_espace(
     if ligne is None or ligne.type != "espace" or ligne.supprime_le is not None:
         return None
     secrets_bruts = dict(ligne.secrets or {})
-    # Secrets chiffrés : présence de la clé suffit pour considérer déjà branché.
+    from synelia_kernel.chiffrement import dechiffrer
+
+    # Déjà branché : rafraîchir l'AC si le lab Keystone a été reconstruit entre-temps.
     if secrets_bruts.get("projet_id") and secrets_bruts.get("reseau_id"):
-        return None
+        clairs = {k: dechiffrer(v) for k, v in secrets_bruts.items()}
+        if _ac_encore_valide(
+            clairs.get("application_credential_id"), clairs.get("application_credential_secret")
+        ):
+            return None
+        from synelia.deps.contexte import Contexte as _Contexte
+        from types import SimpleNamespace
+
+        from synelia.deps.contexte import Principal
+
+        faux_request: Any = SimpleNamespace(
+            headers={}, client=None, state=SimpleNamespace(correlation_id="amorcage-demo-espace")
+        )
+        ctx_demo = _Contexte(
+            request=faux_request,
+            session=session,
+            reglages=r,
+            correlation_id="amorcage-demo-espace",
+            principal=Principal(
+                utilisateur_id=None,
+                email="amorcage@synelia.cloud",
+                nom="Amorçage démo",
+                org_id=ligne.org_id,
+                role="platform_operator",
+                equipe=True,
+                role_equipe="platform_operator",
+            ),
+        )
+        await _rafraichir_application_credential_secrets(ctx_demo, depot, espace_id, clairs)
+        return clairs
 
     e = m.EspaceCloud.model_validate(ligne.donnees)
     a = amont()
@@ -396,6 +478,7 @@ async def assurer_secrets_openstack_espace(
 
     clairs = {
         "projet_id": projet_id,
+        "domaine_id": domaine_id,
         "reseau_id": reseau["reseau_id"],
         "routeur_id": reseau.get("routeur_id") or "",
         "application_credential_id": ac["id"],
