@@ -1,30 +1,17 @@
 """Déploiements : cycle de vie, approbation, canari, promotion, rollback, journaux, branches."""
 
 
-async def _environnement(client_org):
-    r = await client_org.post(
-        "/v1/applications",
-        json={
-            "espaceId": "espace-demo",
-            "nom": "app-deploy",
-            "source": "git",
-            "repo": {
-                "provider": "github",
-                "url": "https://github.com/acme/app-deploy",
-                "branche": "main",
-            },
-            "cible": "vm",
-        },
-    )
-    assert r.status_code == 202, r.text
-    app = (await client_org.get("/v1/applications")).json()["donnees"][0]
-    r = await client_org.post(f"/v1/applications/{app['id']}/environnements", json={"nom": "prod"})
+async def _environnement(client_org, *, nom: str = "prod", protection: dict | None = None):
+    corps: dict = {"nom": nom}
+    if protection is not None:
+        corps["protection"] = protection
+    r = await client_org.post("/v1/environnements", json=corps)
     assert r.status_code == 201, r.text
-    return app, r.json()
+    return r.json()
 
 
 async def test_cycle_deploiement(client_org):
-    _, env = await _environnement(client_org)
+    env = await _environnement(client_org)
     r = await client_org.post(
         "/v1/deploiements",
         json={"envId": env["id"], "branche": "main", "commit": "abc123", "message": "fix: panneau"},
@@ -64,15 +51,9 @@ async def test_cycle_deploiement(client_org):
 
 
 async def test_approbation(client_org):
-    app, _ = await _environnement(client_org)
-    # environnement protégé → approbation requise
-    env_app = app["id"]
-    r = await client_org.post(
-        f"/v1/applications/{env_app}/environnements",
-        json={"nom": "prod-protege", "protection": {"approbationRequise": True}},
+    env_protege = await _environnement(
+        client_org, nom="prod-protege", protection={"approbationRequise": True}
     )
-    assert r.status_code == 201, r.text
-    env_protege = r.json()
 
     r = await client_org.post(
         "/v1/deploiements", json={"envId": env_protege["id"], "branche": "main", "commit": "aaa111"}
@@ -106,7 +87,7 @@ async def test_approbation(client_org):
 
 
 async def test_canari_promotion(client_org):
-    app, env = await _environnement(client_org)
+    env = await _environnement(client_org)
     r = await client_org.post(
         "/v1/deploiements", json={"envId": env["id"], "branche": "main", "commit": "c1"}
     )
@@ -118,8 +99,7 @@ async def test_canari_promotion(client_org):
     )
     assert r.status_code == 202 and r.json()["statut"] == "live"
 
-    r = await client_org.post(f"/v1/applications/{app['id']}/environnements", json={"nom": "prod2"})
-    env2 = r.json()
+    env2 = await _environnement(client_org, nom="prod2")
     r = await client_org.post(
         f"/v1/deploiements/{dep['id']}/promotion", json={"envCibleId": env2["id"]}
     )
@@ -135,7 +115,7 @@ async def test_canari_promotion(client_org):
 
 
 async def test_rollback_sans_rien(client_org):
-    _, env = await _environnement(client_org)
+    env = await _environnement(client_org)
     r = await client_org.post(
         "/v1/deploiements",
         json={"envId": env["id"], "branche": "main", "commit": "x1", "ignorerScan": True},

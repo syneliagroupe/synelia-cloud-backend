@@ -20,6 +20,8 @@ depot_deploy = Depot(
 depot_env = Depot("environnement", m.Environnement)
 depot_app = Depot("application", m.ApplicationPaas)
 
+SANTE_NULLE = m.Sante(cpu=0.0, ram=0.0, latenceMs=0.0, erreursPct=0.0)
+
 _CLE_APPROBATION = "approbation_requise"
 _CLE_LIVE = "aete_live"
 
@@ -90,3 +92,9 @@ class ExecuteurAppDeploy(Executeur):
 class ExecuteurAppRollback(Executeur):
     async def terminer(self, ctx: Contexte, travail: Travail) -> None:
         await depot_deploy.modifier(ctx, travail.cible_id or "", {"statut": "rolled_back"})
+
+
+@executeur("environnement.delete")
+class ExecuteurEnvDelete(Executeur):
+    async def terminer(self, ctx: Contexte, travail: Travail) -> None:
+        await depot_env.supprimer(ctx, travail.cible_id or "", logique=True)

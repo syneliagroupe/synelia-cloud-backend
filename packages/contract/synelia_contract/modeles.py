@@ -83,35 +83,6 @@ class AgentInvocationResponse(BaseModel):
     latenceMs: int
 
 
-class Constat(BaseModel):
-    fichier: str
-    constat: str
-    consequence: str | None = None
-    niveau: Literal["info", "attention", "bloquant"] | None = None
-
-
-class ServicesDetecte(BaseModel):
-    nom: str
-    type: str
-    port: int | None = None
-    image: str | None = None
-
-
-class AnalyseDepot(BaseModel):
-    """
-    Lecture d'un dépôt avant création : ce que la plateforme y a vu et ce qu'elle en déduit.
-    """
-
-    depot: str
-    branche: str
-    commit: str | None = None
-    constats: list[Constat]
-    builderPropose: Literal["nixpacks", "dockerfile", "image"] | None = None
-    ciblePropose: Literal["vm", "k8s"] | None = None
-    servicesDetectes: list[ServicesDetecte] | None = None
-    variablesRequises: list[str] | None = None
-
-
 class Portee(BaseModel):
     type: str
     id: str | None = None
@@ -190,29 +161,6 @@ class ApplicationPaas(BaseModel):
     description: str | None = None
 
 
-class Repo1(BaseModel):
-    provider: Literal["github", "gitlab"] | None = None
-    url: str | None = None
-    branche: str | None = None
-
-
-class ApplicationPaasCreation(BaseModel):
-    espaceId: str
-    nom: str
-    source: Literal["git", "image", "canvas"]
-    repo: Repo1 | None = None
-    image: Annotated[
-        str | None, Field(description="Référence d’image quand `source` vaut `image`.")
-    ] = None
-    builder: Literal["nixpacks", "dockerfile", "image"] | None = None
-    cible: Literal["vm", "k8s"]
-    domainePrincipal: str | None = None
-    description: str | None = None
-    briques: Annotated[
-        list[str] | None, Field(description="Briques du canvas quand `source` vaut `canvas`.")
-    ] = None
-
-
 class ArticleKb(BaseModel):
     id: str
     titre: str
@@ -289,7 +237,7 @@ class BaseHebergement(BaseModel):
     id: str
     hebergementId: str
     nom: str
-    moteur: Literal["mariadb", "mysql", "postgresql", "mongodb"]
+    moteur: Literal["mariadb", "postgresql"]
     version: str
     tailleMo: float
     jeuCaracteres: str
@@ -382,14 +330,6 @@ class BrancheDepot(BaseModel):
     protegee: bool | None = None
 
 
-class BriqueCanvas(BaseModel):
-    id: str
-    nom: str
-    categorie: str
-    image: str
-    teinte: str | None = None
-
-
 class ObjectLock(BaseModel):
     actif: bool
     retentionJours: int
@@ -402,7 +342,12 @@ class Replication(BaseModel):
 class Bucket(BaseModel):
     id: str
     orgId: str
-    espaceId: str
+    espaceId: Annotated[
+        str,
+        Field(
+            description="L'Espace Cloud auquel le bucket est rattaché — c'est lui qui borne les listes."
+        ),
+    ]
     nom: str
     region: Literal["ABJ", "GBM"]
     classe: Literal["chaud", "froid"]
@@ -766,24 +711,6 @@ class Emplacement(BaseModel):
     vms: list[str] | None = None
     namespace: str | None = None
     pods: list[str] | None = None
-
-
-class Ressources1(BaseModel):
-    cpu: float | None = None
-    ramMo: int | None = None
-    diskGo: int | None = None
-
-
-class Port1(BaseModel):
-    interne: int | None = None
-    expose: int | None = None
-    type: Literal["ClusterIP", "LoadBalancer"] | None = None
-
-
-class StorageItem1(BaseModel):
-    chemin: str | None = None
-    tailleGo: int | None = None
-    classe: str | None = None
 
 
 class CompteFichiers(BaseModel):
@@ -1391,7 +1318,12 @@ class Canari(BaseModel):
 
 class Environnement(BaseModel):
     id: str
-    appId: str
+    appId: Annotated[
+        str | None,
+        Field(
+            description="Absent quand l’environnement n’est rattaché à aucune application PaaS legacy."
+        ),
+    ] = None
     nom: str
     domaines: list[str]
     couleur: str
@@ -1416,6 +1348,12 @@ class Canari1(BaseModel):
 
 class EnvironnementCreation(BaseModel):
     nom: str
+    appId: Annotated[
+        str | None,
+        Field(
+            description="Application parente ; absent pour un environnement autonome (modèle déploiements)."
+        ),
+    ] = None
     couleur: str | None = None
     domaines: list[str] | None = None
     autoDeploy: AutoDeploy1 | None = None
@@ -1618,7 +1556,6 @@ class Facture(BaseModel):
     moyen: Literal["carte", "virement", "orange_money", "mtn_momo", "wave", "prepaye"] | None = None
     pdfUrl: str
     echeance: date_aliased | None = None
-    relances: int = 0
 
 
 class FenetrePatching(BaseModel):
@@ -1859,8 +1796,7 @@ class HebergementCreation(BaseModel):
     domaine: Annotated[
         str | None,
         Field(
-            description="Nom de domaine déjà détenu (enregistré et payé) à attacher. "
-            "Requis à la création : l’hébergement n’a plus de nom provisoire."
+            description="Nom déjà détenu à attacher ; sinon l’hébergement démarre sur un nom provisoire."
         ),
     ] = None
     versionPhp: str | None = None
@@ -2327,12 +2263,6 @@ class MiseAJourSite(BaseModel):
     compatibilitePhp: str | None = None
 
 
-class Ressources2(BaseModel):
-    cpu: float
-    ramMo: int
-    diskGo: int
-
-
 class Dependance(BaseModel):
     nom: str
     type: Literal["base", "cache", "file", "stockage"]
@@ -2353,7 +2283,7 @@ class VolumeInline(BaseModel):
     role: str
 
 
-class Port2(BaseModel):
+class Port1(BaseModel):
     conteneur: int
     protocole: Literal["http", "tcp"]
     role: str
@@ -2385,11 +2315,11 @@ class ModeleApplicatif(BaseModel):
     logoTeinte: str | None = None
     version: Annotated[str, Field(description="Version qualifiée par Synelia — jamais « latest ».")]
     chart: str | None = None
-    ressources: Ressources2
+    ressources: Ressources
     dependances: list[Dependance]
     variables: list[Variable]
     volumes: list[VolumeInline] | None = None
-    ports: list[Port2]
+    ports: list[Port1]
     sousDomaine: str
     configuration: Annotated[
         str | None,
@@ -2900,6 +2830,12 @@ class Projet(BaseModel):
             description="Le cluster Kubernetes qui héberge les services du projet — dédié ou partagé avec d'autres projets du même Espace."
         ),
     ]
+    lbId: Annotated[
+        str | None,
+        Field(
+            description="Le load balancer L7 dédié provisionné avec le projet, quand il y en a un — la porte d’entrée de ses services."
+        ),
+    ] = None
     cible: Annotated[
         Literal["vm", "k8s"] | None,
         Field(
@@ -3375,7 +3311,7 @@ class ServeurBases(BaseModel):
     id: str
     hebergementId: str
     serveur: str
-    moteur: Literal["mariadb", "mysql", "postgresql", "mongodb", "redis"]
+    moteur: Literal["mariadb", "postgresql", "redis"]
     version: str
     actif: Annotated[bool, Field(description="Un moteur non activé est proposé, pas facturé.")]
     hoteInterne: Annotated[
@@ -3537,7 +3473,7 @@ class ServiceProjet(BaseModel):
     type: Literal["application", "base", "statique", "cron", "worker"]
     environnement: str
     statut: Literal["running", "building", "stopped", "degraded", "failed"]
-    ressources: Ressources2
+    ressources: Ressources
     emplacement: Annotated[
         Emplacement1,
         Field(
@@ -3562,7 +3498,7 @@ class ServiceProjet(BaseModel):
     file: File | None = None
 
 
-class Ressources4(BaseModel):
+class Ressources3(BaseModel):
     cpu: float | None = None
     ramMo: int | None = None
     diskGo: int | None = None
@@ -3992,6 +3928,25 @@ class Ventilation(BaseModel):
     total: Annotated[int, Field(description="Montant en FCFA.")]
 
 
+class VerificationEmailConfirmation(BaseModel):
+    email: EmailStr
+    code: Annotated[str, Field(description="Code à six chiffres reçu par courriel.")]
+
+
+class VerificationEmailDemande(BaseModel):
+    email: EmailStr
+
+
+class VerificationEmailEtat(BaseModel):
+    """
+    Compte créé, en attente du code reçu par courriel avant toute session.
+    """
+
+    email: EmailStr
+    expire: AwareDatetime
+    essaisRestants: int
+
+
 class VersionK8s(BaseModel):
     version: str
     statut: Literal["recommandee", "supportee", "depreciee"]
@@ -4112,7 +4067,6 @@ class VmModification(BaseModel):
     tags: list[str] | None = None
     backupPlanId: str | None = None
     applicationId: str | None = None
-    applicationNom: str | None = None
 
 
 class VmRedimensionnement(BaseModel):
@@ -4529,24 +4483,6 @@ class AnomaliesGetResponse(BaseModel):
     pagination: Pagination
 
 
-class ApplicationsGetResponse(BaseModel):
-    donnees: list[ApplicationPaas]
-    pagination: Pagination
-
-
-class ApplicationsAppIdEnvironnementsGetResponse(RootModel[list[Environnement]]):
-    root: list[Environnement]
-
-
-class ApplicationsAnalyseDepotPostRequest(BaseModel):
-    provider: Literal["github", "gitlab"]
-    url: str
-    branche: str | None = None
-    jetonAcces: Annotated[
-        str | None, Field(description="Nécessaire pour un dépôt privé ; jamais conservé.")
-    ] = None
-
-
 class AttestationsGetResponse(RootModel[list[Attestation]]):
     root: list[Attestation]
 
@@ -4689,10 +4625,6 @@ class BucketsBucketIdUsageGetResponse(BaseModel):
     series: list[Serie] | None = None
 
 
-class CanvasBriquesGetResponse(RootModel[list[BriqueCanvas]]):
-    root: list[BriqueCanvas]
-
-
 class CatalogueGabaritsGetResponse(RootModel[list[Gabarit]]):
     root: list[Gabarit]
 
@@ -4713,13 +4645,6 @@ class CatalogueServicesPartagesGetResponse(RootModel[list[FicheCatalogue]]):
 class ClesS3GetResponse(BaseModel):
     donnees: list[CleS3]
     pagination: Pagination
-
-
-class ComposantsComposantIdDimensionnementPostRequest(BaseModel):
-    cpu: int | None = None
-    ramMo: int | None = None
-    diskGo: int | None = None
-    replicas: int | None = None
 
 
 class ConformiteRapportsGetResponseItem(BaseModel):
@@ -4810,30 +4735,6 @@ class DocsSectionsGetResponse(RootModel[list[DocsSectionsGetResponseItem]]):
 class DomainesApplicatifsGetResponse(BaseModel):
     donnees: list[DomaineApplicatif]
     pagination: Pagination
-
-
-class EnvironnementsEnvIdVariablesGetResponse(RootModel[list[VariableEnvironnement]]):
-    root: list[VariableEnvironnement]
-
-
-class Variable2(BaseModel):
-    cle: str
-    valeur: str | None = None
-    secret: bool | None = None
-    scope: Literal["build", "runtime"] | None = None
-    supprimer: bool | None = None
-
-
-class EnvironnementsEnvIdVariablesPutRequest(BaseModel):
-    variables: list[Variable2]
-    redeployer: Annotated[
-        bool | None,
-        Field(description="Applique les nouvelles valeurs en redéployant l’environnement."),
-    ] = None
-
-
-class EnvironnementsEnvIdVariablesPutResponse(RootModel[list[VariableEnvironnement]]):
-    root: list[VariableEnvironnement]
 
 
 class EspacesEspaceIdPlacementsGetResponse(RootModel[list[Placement]]):
@@ -5068,14 +4969,14 @@ class ModelesGetResponse(BaseModel):
     pagination: Pagination
 
 
-class Ressources5(BaseModel):
+class Ressources4(BaseModel):
     cpu: int | None = None
     ramMo: int | None = None
     diskGo: int | None = None
 
 
 class ModelesSlugEstimationPostRequest(BaseModel):
-    ressources: Ressources5 | None = None
+    ressources: Ressources4 | None = None
     sieges: int | None = None
     environnement: str | None = None
 
@@ -5243,7 +5144,7 @@ class ProjetsProjetIdVariablesGetResponse(RootModel[list[ProjetsProjetIdVariable
     root: list[ProjetsProjetIdVariablesGetResponseItem]
 
 
-class Variable3(BaseModel):
+class Variable2(BaseModel):
     cle: str
     valeur: str | None = None
     secret: bool | None = None
@@ -5253,7 +5154,7 @@ class Variable3(BaseModel):
 
 
 class ProjetsProjetIdVariablesPutRequest(BaseModel):
-    variables: list[Variable3]
+    variables: list[Variable2]
     redeployer: bool | None = None
 
 
@@ -6129,19 +6030,6 @@ class Composant(BaseModel):
     dependances: list[str] | None = None
 
 
-class ComposantCreation(BaseModel):
-    nom: str
-    kind: Literal["vm", "k8s"]
-    role: Literal["web", "api", "db", "cache", "proxy", "worker", "cron", "observabilite"]
-    image: str
-    version: str | None = None
-    ressources: Ressources1 | None = None
-    ports: list[Port1] | None = None
-    envVars: list[VariableEnvironnement] | None = None
-    storage: list[StorageItem1] | None = None
-    dependances: list[str] | None = None
-
-
 class ConnaissanceRechercheResponse(BaseModel):
     fragments: list[FragmentRecherche]
 
@@ -6229,21 +6117,6 @@ class Inscription(BaseModel):
     accepteConditions: bool
 
 
-class VerificationEmailDemande(BaseModel):
-    email: EmailStr
-
-
-class VerificationEmailConfirmation(BaseModel):
-    email: EmailStr
-    code: str
-
-
-class VerificationEmailEtat(BaseModel):
-    email: EmailStr
-    expire: AwareDatetime
-    essaisRestants: int
-
-
 class Membre(BaseModel):
     id: str
     userId: str
@@ -6282,7 +6155,7 @@ class ServiceProjetCreation(BaseModel):
     nom: str
     type: Literal["application", "base", "statique", "cron", "worker"]
     environnement: str
-    ressources: Ressources4 | None = None
+    ressources: Ressources3 | None = None
     modeleSlug: Annotated[
         str | None,
         Field(
@@ -6379,10 +6252,6 @@ class SyntheseClient(BaseModel):
 class AdminBackendsGetResponse(BaseModel):
     donnees: list[Backend]
     pagination: Pagination
-
-
-class EnvironnementsEnvIdComposantsGetResponse(RootModel[list[Composant]]):
-    root: list[Composant]
 
 
 class EspacesGetResponse(BaseModel):

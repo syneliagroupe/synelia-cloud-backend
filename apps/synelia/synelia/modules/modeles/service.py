@@ -34,11 +34,11 @@ SEMENCES: list[m.ModeleApplicatif] = [
         logoTeinte="#21759b",
         version="6.7.1",
         chart="wordpress",
-        ressources=m.Ressources2(cpu=1, ramMo=2048, diskGo=20),
+        ressources=m.Ressources(cpu=1, ramMo=2048, diskGo=20),
         dependances=[m.Dependance(nom="MariaDB", type="base", detail="Base de données du CMS")],
         variables=[],
         volumes=[m.VolumeInline(chemin="/var/www/html", tailleGo=20, role="contenu")],
-        ports=[m.Port2(conteneur=8080, protocole="http", role="http")],
+        ports=[m.Port1(conteneur=8080, protocole="http", role="http")],
         sousDomaine="site",
         configuration="wordpress",
         sauvegardeParDefaut=m.SauvegardeParDefaut(
@@ -60,10 +60,10 @@ SEMENCES: list[m.ModeleApplicatif] = [
         logoTeinte="#000000",
         version="15.1.3",
         chart="nextjs",
-        ressources=m.Ressources2(cpu=1, ramMo=1024, diskGo=10),
+        ressources=m.Ressources(cpu=1, ramMo=1024, diskGo=10),
         dependances=[],
         variables=[],
-        ports=[m.Port2(conteneur=3000, protocole="http", role="http")],
+        ports=[m.Port1(conteneur=3000, protocole="http", role="http")],
         sousDomaine="app",
         configuration="nextjs",
         sauvegardeParDefaut=m.SauvegardeParDefaut(
@@ -85,13 +85,13 @@ SEMENCES: list[m.ModeleApplicatif] = [
         logoTeinte="#092e20",
         version="5.1.4",
         chart="django",
-        ressources=m.Ressources2(cpu=1, ramMo=1024, diskGo=10),
+        ressources=m.Ressources(cpu=1, ramMo=1024, diskGo=10),
         dependances=[
             m.Dependance(nom="PostgreSQL", type="base", detail="Base de données application")
         ],
         variables=[],
         volumes=[],
-        ports=[m.Port2(conteneur=8000, protocole="http", role="http")],
+        ports=[m.Port1(conteneur=8000, protocole="http", role="http")],
         sousDomaine="api",
         configuration="django",
         sauvegardeParDefaut=m.SauvegardeParDefaut(
@@ -113,11 +113,11 @@ SEMENCES: list[m.ModeleApplicatif] = [
         logoTeinte="#ff2d20",
         version="11.31.0",
         chart="laravel",
-        ressources=m.Ressources2(cpu=1, ramMo=1024, diskGo=10),
+        ressources=m.Ressources(cpu=1, ramMo=1024, diskGo=10),
         dependances=[m.Dependance(nom="MySQL", type="base", detail="Base de données application")],
         variables=[],
         volumes=[],
-        ports=[m.Port2(conteneur=9000, protocole="http", role="http")],
+        ports=[m.Port1(conteneur=9000, protocole="http", role="http")],
         sousDomaine="web",
         configuration="laravel",
         sauvegardeParDefaut=m.SauvegardeParDefaut(
@@ -139,13 +139,13 @@ SEMENCES: list[m.ModeleApplicatif] = [
         logoTeinte="#714b67",
         version="17.0",
         chart="odoo",
-        ressources=m.Ressources2(cpu=2, ramMo=4096, diskGo=40),
+        ressources=m.Ressources(cpu=2, ramMo=4096, diskGo=40),
         dependances=[
             m.Dependance(nom="PostgreSQL", type="base", detail="Base de données de l'ERP")
         ],
         variables=[],
         volumes=[m.VolumeInline(chemin="/var/lib/odoo", tailleGo=40, role="donnees")],
-        ports=[m.Port2(conteneur=8069, protocole="http", role="http")],
+        ports=[m.Port1(conteneur=8069, protocole="http", role="http")],
         sousDomaine="erp",
         configuration="odoo",
         sauvegardeParDefaut=m.SauvegardeParDefaut(
@@ -167,11 +167,11 @@ SEMENCES: list[m.ModeleApplicatif] = [
         logoTeinte="#ea4b71",
         version="1.63.0",
         chart="n8n",
-        ressources=m.Ressources2(cpu=1, ramMo=1024, diskGo=10),
+        ressources=m.Ressources(cpu=1, ramMo=1024, diskGo=10),
         dependances=[],
         variables=[],
         volumes=[m.VolumeInline(chemin="/home/node/.n8n", tailleGo=10, role="workflows")],
-        ports=[m.Port2(conteneur=5678, protocole="http", role="http")],
+        ports=[m.Port1(conteneur=5678, protocole="http", role="http")],
         sousDomaine="automation",
         configuration="n8n",
         sauvegardeParDefaut=m.SauvegardeParDefaut(
@@ -193,11 +193,11 @@ SEMENCES: list[m.ModeleApplicatif] = [
         logoTeinte="#509ee3",
         version="v0.52.2",
         chart="metabase",
-        ressources=m.Ressources2(cpu=1, ramMo=2048, diskGo=20),
+        ressources=m.Ressources(cpu=1, ramMo=2048, diskGo=20),
         dependances=[m.Dependance(nom="PostgreSQL", type="base", detail="Métadonnées Metabase")],
         variables=[],
         volumes=[],
-        ports=[m.Port2(conteneur=3000, protocole="http", role="http")],
+        ports=[m.Port1(conteneur=3000, protocole="http", role="http")],
         sousDomaine="bi",
         configuration="metabase",
         sauvegardeParDefaut=m.SauvegardeParDefaut(
@@ -219,14 +219,14 @@ SEMENCES: list[m.ModeleApplicatif] = [
         logoTeinte="#fc6d26",
         version="17.7.0",
         chart="gitlab",
-        ressources=m.Ressources2(cpu=2, ramMo=4096, diskGo=50),
+        ressources=m.Ressources(cpu=2, ramMo=4096, diskGo=50),
         dependances=[
             m.Dependance(nom="PostgreSQL", type="base", detail="Base de données principale"),
             m.Dependance(nom="Redis", type="cache", detail="Cache et files internes"),
         ],
         variables=[],
         volumes=[m.VolumeInline(chemin="/var/opt/gitlab", tailleGo=50, role="donnees")],
-        ports=[m.Port2(conteneur=8080, protocole="http", role="http")],
+        ports=[m.Port1(conteneur=8080, protocole="http", role="http")],
         sousDomaine="git",
         configuration="gitlab",
         sauvegardeParDefaut=m.SauvegardeParDefaut(
@@ -312,9 +312,9 @@ def _ht(cpu: float, ram_go: float, disk_go: float, sieges: int) -> tuple[list[m.
 
 
 def estimer(
-    modele: m.ModeleApplicatif, ressources: m.Ressources5 | None, sieges: int | None
+    modele: m.ModeleApplicatif, ressources: m.Ressources3 | None, sieges: int | None
 ) -> m.EstimationCout:
-    res = ressources or m.Ressources5()
+    res = ressources or m.Ressources3()
     cpu = res.cpu if res.cpu is not None else modele.ressources.cpu
     ram_go = (res.ramMo if res.ramMo is not None else modele.ressources.ramMo) / 1024
     disk_go = res.diskGo if res.diskGo is not None else modele.ressources.diskGo
