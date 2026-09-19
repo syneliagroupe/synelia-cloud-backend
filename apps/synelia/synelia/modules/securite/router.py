@@ -456,13 +456,21 @@ async def tester_sso(ctx: Contexte = Depends(exige("sso.configure"))) -> Any:
             "ok": True,
             "detail": sso.get("protocole", "o") and f"Protocole {sso.get('protocole')}.",
         },
-        {"nom": "Connectivité vers l'émetteur", "ok": True, "detail": "Émetteur joignable."},
-        {"nom": "Validation du flux de connexion", "ok": True, "detail": "Flux de test réussi."},
+        {
+            "nom": "Connectivité vers l'émetteur",
+            "ok": False,
+            "detail": "Aucun courtier d’identité n’est configuré sur cette plateforme.",
+        },
+        {
+            "nom": "Validation du flux de connexion",
+            "ok": False,
+            "detail": "Le flux réel n’est pas encore disponible.",
+        },
     ]
-    resultat = {"succes": True, "etapes": etapes, "correlationId": ctx.correlation_id}
+    resultat = {"succes": False, "etapes": etapes, "correlationId": ctx.correlation_id}
     o.sso = {
         **(o.sso or {}),
-        "dernierTest": {"horodatage": maintenant().isoformat(), "succes": True},
+        "dernierTest": {"horodatage": maintenant().isoformat(), "succes": False},
     }
     await ctx.session.flush()
     await journaliser(
