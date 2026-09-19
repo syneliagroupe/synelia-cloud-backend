@@ -218,7 +218,7 @@ async def lister_services_projet(
 
 async def _ressources(
     corps: m.ServiceProjetCreation, modele: m.ModeleApplicatif | None, site: Literal["ABJ", "GBM"]
-) -> tuple[m.Ressources, m.Emplacement]:
+) -> tuple[m.Ressources, m.Emplacement1]:
     if corps.ressources and corps.ressources.cpu:
         ressources = m.Ressources(
             cpu=corps.ressources.cpu,
@@ -233,7 +233,7 @@ async def _ressources(
         )
     else:
         ressources = m.Ressources(cpu=0.5, ramMo=512, diskGo=10)
-    emplacement = m.Emplacement(
+    emplacement = m.Emplacement1(
         site=site, backend="openstack-abj" if site == "ABJ" else "openstack-gbm"
     )
     return ressources, emplacement
