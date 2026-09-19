@@ -167,6 +167,54 @@ class ExecuteurEspaceDelete(Executeur):
         await depot.supprimer(ctx, travail.cible_id or "", logique=True)
 
 
+def _ctx_amorcage_plateforme(session: AsyncSession) -> Contexte:
+    from types import SimpleNamespace
+
+    from synelia.deps.contexte import Contexte as _Contexte
+    from synelia.deps.contexte import Principal
+
+    r = reglages()
+    faux_request: Any = SimpleNamespace(
+        headers={}, client=None, state=SimpleNamespace(correlation_id="amorcage-zone-vps")
+    )
+    return _Contexte(
+        request=faux_request,
+        session=session,
+        reglages=r,
+        correlation_id="amorcage-zone-vps",
+        principal=Principal(
+            utilisateur_id=None,
+            email="amorcage@synelia.cloud",
+            nom="Amorçage plateforme",
+            org_id=None,
+            role="platform_operator",
+            equipe=True,
+            role_equipe="platform_operator",
+        ),
+    )
+
+
+async def _assurer_lb_secrets_zone_vps(session: AsyncSession, espace_id: str) -> None:
+    """Pose `lb_id` / `lb_listener_id` depuis la config quand le LB Octavia est géré à la main."""
+    r = reglages()
+    if not r.vps_zone_lb_id:
+        return
+    ctx = _ctx_amorcage_plateforme(session)
+    try:
+        actuels = await depot_plateforme.secrets(ctx, espace_id)
+    except erreurs.AppError as exc:
+        if exc.code != "introuvable":
+            raise
+        return
+    if actuels.get("lb_id"):
+        return
+    patch: dict[str, str] = {"lb_id": r.vps_zone_lb_id}
+    if r.vps_zone_lb_listener_id:
+        patch["lb_listener_id"] = r.vps_zone_lb_listener_id
+    await depot_plateforme.definir_secrets(ctx, espace_id, patch)
+    log.info("zone_vps.lb_secrets_poses", espace_id=espace_id)
+
+
 async def semer_zone_vps(session: AsyncSession) -> None:
     """Garantit l'existence réelle de l'Espace Cloud partagé de la zone VPS (réseau + LB
     Octavia public, cf. `web_hebergement.zone_vps_secrets`), sans dépendre d'un bootstrap
@@ -193,6 +241,7 @@ async def semer_zone_vps(session: AsyncSession) -> None:
             ligne.org_id = None
             await session.flush()
             log.info("zone_vps.bascule_plateforme", espace_id=espace_id)
+        await _assurer_lb_secrets_zone_vps(session, espace_id)
         return
     if not r.vps_zone_org_id:
         # Pas d'organisation admin configurée (tests, environnement sans zone VPS) : rien de
@@ -279,13 +328,9 @@ async def _provisionner_zone_vps(session: AsyncSession, espace_id: str, org_id: 
         ligne.org_id = None
         await session.flush()
     log.info("zone_vps.provisionnee", espace_id=espace_id)
-    # `ExecuteurEspaceCreate` provisionne domaine/projet/réseau/application credential — pas
-    # le load balancer Octavia public partagé (`lb_id` dans les secrets) : sur ce lab, il a
-    # été créé une seule fois à la main (cf. docstring de `zone_vps_secrets`) et n'a jamais eu
-    # besoin d'être recréé depuis. Cette branche ne s'exécutant jamais ici, ce n'est pas
-    # comblé automatiquement ; un vrai nouvel environnement devrait encore créer ce LB à la
-    # main et poser `lb_id` via `depot_plateforme.definir_secrets` avant le premier hébergement.
-    log.warning("zone_vps.lb_id_non_provisionne", espace_id=espace_id)
+    await _assurer_lb_secrets_zone_vps(session, espace_id)
+    if not reglages().vps_zone_lb_id:
+        log.warning("zone_vps.lb_id_non_provisionne", espace_id=espace_id)
 
 
 ESPACE_DEMO_ABJ_ID = "espace-demo-abj"

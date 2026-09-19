@@ -67,6 +67,9 @@ class Reglages(BaseSettings):
     # n'est alors plus consultée.
     vps_zone_espace_id: str | None = None
     vps_zone_org_id: str | None = None
+    # LB Octavia partagé (lab) : non créé par `ExecuteurEspaceCreate`, posé à la main une fois.
+    vps_zone_lb_id: str | None = None
+    vps_zone_lb_listener_id: str | None = None
 
     # Audit : ancrage quotidien hors-rôle (SYNELIA_AUDIT_ANCRAGE_EMAIL), cf. `synelia.audit.ancrer`
     # et §3 de docs/PLAN-ARCHITECTURE-SUITE.md. Optionnelle : sans elle, seul le journal
