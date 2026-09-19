@@ -134,7 +134,12 @@ def capacites() -> None:
     from synelia_openstack.registre_capacites import REGISTRE
 
     # ANSI minimal — vert reel, jaune simule, cyan persiste, rouge maquette
-    couleurs = {"reel": "\x1b[32m", "simule": "\x1b[33m", "persiste": "\x1b[36m", "maquette": "\x1b[31m"}
+    couleurs = {
+        "reel": "\x1b[32m",
+        "simule": "\x1b[33m",
+        "persiste": "\x1b[36m",
+        "maquette": "\x1b[31m",
+    }
     reset = "\x1b[0m"
     typer.echo(f"{'id':<26} {'etat':<9} {'gate':<28} {'detail'}")
     typer.echo("-" * 90)
