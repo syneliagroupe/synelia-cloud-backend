@@ -1126,6 +1126,10 @@ class Domaine(BaseModel):
     hebergementId: Annotated[
         str | None, Field(description="Un domaine est attaché à un serveur et à un seul.")
     ] = None
+    provisionnement: Annotated[
+        Literal["automatique", "manuel"] | None,
+        Field(description="Mode de provisionnement amont — manuel = traitement ops sous ~48h"),
+    ] = "manuel"
 
 
 class Certificat1(BaseModel):
