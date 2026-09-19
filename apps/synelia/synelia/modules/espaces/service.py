@@ -416,9 +416,9 @@ async def assurer_secrets_openstack_espace(
             clairs.get("application_credential_id"), clairs.get("application_credential_secret")
         ):
             return None
-        from synelia.deps.contexte import Contexte as _Contexte
         from types import SimpleNamespace
 
+        from synelia.deps.contexte import Contexte as _Contexte
         from synelia.deps.contexte import Principal
 
         faux_request: Any = SimpleNamespace(
