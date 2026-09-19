@@ -62,11 +62,10 @@ jobs:
               packages/openstack/tests/test_k8s_workload.py
               packages/db/tests/test_schema_diff.py
               apps/synelia/synelia/tests/test_transverses.py
-          - groupe: D-ia-applications
+          - groupe: D-ia-web
             chemins: >
               apps/synelia/synelia/modules/ia_agents
               apps/synelia/synelia/modules/admin_catalogue
-              apps/synelia/synelia/modules/applications
               apps/synelia/synelia/modules/web_smtp
               apps/synelia/synelia/modules/web_domaines
               apps/synelia/synelia/modules/tableau_de_bord
