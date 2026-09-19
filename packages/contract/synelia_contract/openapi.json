@@ -41040,6 +41040,9 @@
       "BucketCreation": {
         "type": "object",
         "properties": {
+          "espaceId": {
+            "type": "string"
+          },
           "nom": {
             "type": "string"
           },
@@ -41101,6 +41104,7 @@
           }
         },
         "required": [
+          "espaceId",
           "nom",
           "region",
           "classe"
@@ -42351,6 +42355,172 @@
           "nom",
           "dureeAnnees",
           "titulaire"
+        ]
+      },
+      "Composant": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "envId": {
+            "type": "string"
+          },
+          "nom": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "vm",
+              "k8s"
+            ]
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "web",
+              "api",
+              "db",
+              "cache",
+              "proxy",
+              "worker",
+              "cron",
+              "observabilite"
+            ]
+          },
+          "image": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "ressources": {
+            "type": "object",
+            "properties": {
+              "cpu": {
+                "type": "number"
+              },
+              "ramMo": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "diskGo": {
+                "type": "integer",
+                "format": "int32"
+              }
+            },
+            "required": [
+              "cpu",
+              "ramMo",
+              "diskGo"
+            ]
+          },
+          "ports": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "interne": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "expose": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "ClusterIP",
+                    "LoadBalancer"
+                  ]
+                }
+              },
+              "required": [
+                "interne",
+                "type"
+              ]
+            }
+          },
+          "envVars": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VariableEnvironnement"
+            }
+          },
+          "storage": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "chemin": {
+                  "type": "string"
+                },
+                "tailleGo": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "classe": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "chemin",
+                "tailleGo",
+                "classe"
+              ]
+            }
+          },
+          "emplacement": {
+            "type": "object",
+            "properties": {
+              "vms": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "namespace": {
+                "type": "string"
+              },
+              "pods": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "statut": {
+            "type": "string",
+            "enum": [
+              "deployed",
+              "degraded",
+              "stopped",
+              "failed"
+            ]
+          },
+          "dependances": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "envId",
+          "nom",
+          "kind",
+          "role",
+          "image",
+          "version",
+          "ressources",
+          "ports",
+          "envVars",
+          "emplacement",
+          "statut"
         ]
       },
       "CompteFichiers": {

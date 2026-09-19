@@ -370,6 +370,7 @@ class Replication1(BaseModel):
 
 
 class BucketCreation(BaseModel):
+    espaceId: str
     nom: str
     region: Literal["ABJ", "GBM"]
     classe: Literal["chaud", "froid"]
@@ -686,6 +687,30 @@ class CommandeDomaine(BaseModel):
     titulaire: Titulaire
     creerZoneDns: bool | None = None
     attacherHebergementId: str | None = None
+
+
+class Ressources(BaseModel):
+    cpu: float
+    ramMo: int
+    diskGo: int
+
+
+class Port(BaseModel):
+    interne: int
+    expose: int | None = None
+    type: Literal["ClusterIP", "LoadBalancer"]
+
+
+class StorageItem(BaseModel):
+    chemin: str
+    tailleGo: int
+    classe: str
+
+
+class Emplacement(BaseModel):
+    vms: list[str] | None = None
+    namespace: str | None = None
+    pods: list[str] | None = None
 
 
 class CompteFichiers(BaseModel):
@@ -2238,12 +2263,6 @@ class MiseAJourSite(BaseModel):
     compatibilitePhp: str | None = None
 
 
-class Ressources(BaseModel):
-    cpu: float
-    ramMo: int
-    diskGo: int
-
-
 class Dependance(BaseModel):
     nom: str
     type: Literal["base", "cache", "file", "stockage"]
@@ -2264,7 +2283,7 @@ class VolumeInline(BaseModel):
     role: str
 
 
-class Port(BaseModel):
+class Port1(BaseModel):
     conteneur: int
     protocole: Literal["http", "tcp"]
     role: str
@@ -2300,7 +2319,7 @@ class ModeleApplicatif(BaseModel):
     dependances: list[Dependance]
     variables: list[Variable]
     volumes: list[VolumeInline] | None = None
-    ports: list[Port]
+    ports: list[Port1]
     sousDomaine: str
     configuration: Annotated[
         str | None,
@@ -3385,7 +3404,7 @@ class ServicePartage(BaseModel):
     actif: bool
 
 
-class Emplacement(BaseModel):
+class Emplacement1(BaseModel):
     """
     Emplacement réel d'exécution, exposé volontairement : on ne demande pas au client de faire confiance à vide.
     """
@@ -3456,7 +3475,7 @@ class ServiceProjet(BaseModel):
     statut: Literal["running", "building", "stopped", "degraded", "failed"]
     ressources: Ressources
     emplacement: Annotated[
-        Emplacement,
+        Emplacement1,
         Field(
             description="Emplacement réel d'exécution, exposé volontairement : on ne demande pas au client de faire confiance à vide."
         ),
@@ -3479,7 +3498,7 @@ class ServiceProjet(BaseModel):
     file: File | None = None
 
 
-class Ressources2(BaseModel):
+class Ressources3(BaseModel):
     cpu: float | None = None
     ramMo: int | None = None
     diskGo: int | None = None
@@ -4950,14 +4969,14 @@ class ModelesGetResponse(BaseModel):
     pagination: Pagination
 
 
-class Ressources3(BaseModel):
+class Ressources4(BaseModel):
     cpu: int | None = None
     ramMo: int | None = None
     diskGo: int | None = None
 
 
 class ModelesSlugEstimationPostRequest(BaseModel):
-    ressources: Ressources3 | None = None
+    ressources: Ressources4 | None = None
     sieges: int | None = None
     environnement: str | None = None
 
@@ -5994,6 +6013,23 @@ class ClusterK8sCreation(BaseModel):
     ] = None
 
 
+class Composant(BaseModel):
+    id: str
+    envId: str
+    nom: str
+    kind: Literal["vm", "k8s"]
+    role: Literal["web", "api", "db", "cache", "proxy", "worker", "cron", "observabilite"]
+    image: str
+    version: str
+    ressources: Ressources
+    ports: list[Port]
+    envVars: list[VariableEnvironnement]
+    storage: list[StorageItem] | None = None
+    emplacement: Emplacement
+    statut: Literal["deployed", "degraded", "stopped", "failed"]
+    dependances: list[str] | None = None
+
+
 class ConnaissanceRechercheResponse(BaseModel):
     fragments: list[FragmentRecherche]
 
@@ -6119,7 +6155,7 @@ class ServiceProjetCreation(BaseModel):
     nom: str
     type: Literal["application", "base", "statique", "cron", "worker"]
     environnement: str
-    ressources: Ressources2 | None = None
+    ressources: Ressources3 | None = None
     modeleSlug: Annotated[
         str | None,
         Field(
