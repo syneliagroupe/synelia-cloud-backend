@@ -10,10 +10,12 @@ from synelia_kernel.ids import nouvel_id
 
 from synelia.audit import journaliser
 from synelia.depot import Depot
-from synelia.deps import Contexte, Page, exige
+from synelia.deps import Contexte, Page, exige, exiger_confirmation
 from synelia.modules.deploiements import service
 from synelia.modules.deploiements.service import (
     _CLE_APPROBATION,
+    SANTE_NULLE,
+    depot_app,
     depot_deploy,
     depot_env,
 )
@@ -75,7 +77,7 @@ async def lancer_deploiement(
         id=nouvel_id(),
         envId=env.id,
         envNom=env.nom,
-        appId=env.appId,
+        appId=env.appId or "",
         version=version,
         commit=corps.commit,
         commitMessage=corps.message,
@@ -322,6 +324,109 @@ async def annuler_deploiement(
     )
     await depot_deploy.modifier(ctx, d.id, {"statut": "rolled_back"})
     return await _deploiement_depuis_id(ctx, d.id)
+
+
+# ── environnements ───────────────────────────────────────────────────────
+@router.post(
+    "/environnements",
+    response_model=m.Environnement,
+    status_code=status.HTTP_201_CREATED,
+    response_model_exclude_none=True,
+)
+async def creer_environnement(
+    corps: m.EnvironnementCreation, ctx: Contexte = Depends(exige("app.deploy"))
+) -> Any:
+    app_id = corps.appId
+    parent_id = app_id
+    domaine_defaut = f"{corps.nom}.synelia.app"
+    if app_id:
+        app = await depot_app.obtenir(ctx, app_id)
+        domaine_defaut = f"{corps.nom}.{app.domainePrincipal}"
+    await depot_env.exiger_nom_libre(ctx, corps.nom, parent_id=parent_id)
+    env = m.Environnement(
+        id=nouvel_id(),
+        appId=app_id,
+        nom=corps.nom,
+        domaines=corps.domaines or [domaine_defaut],
+        couleur=corps.couleur or "#6366f1",
+        statut="building",
+        autoDeploy=m.AutoDeploy(
+            branche=corps.autoDeploy.branche, previewParPR=corps.autoDeploy.previewParPR
+        )
+        if corps.autoDeploy
+        else None,
+        protection=corps.protection,
+        sante=SANTE_NULLE,
+        strategie=corps.strategie,
+        canari=corps.canari,
+    )
+    await depot_env.creer(ctx, env, parent_id=parent_id)
+    if app_id:
+        nb = len(await depot_env.tous(ctx, parent_id=app_id))
+        await depot_app.modifier(ctx, app_id, {"environnements": nb})
+    await journaliser(
+        ctx,
+        action="environnement.creation",
+        cible_type="environnement",
+        cible_id=env.id,
+        cible=env.nom,
+    )
+    return env
+
+
+@router.get(
+    "/environnements/{envId}", response_model=m.Environnement, response_model_exclude_none=True
+)
+async def obtenir_environnement(envId: str, ctx: Contexte = Depends(exige(None))) -> Any:  # noqa: N803
+    return await depot_env.obtenir(ctx, envId)
+
+
+@router.patch(
+    "/environnements/{envId}", response_model=m.Environnement, response_model_exclude_none=True
+)
+async def modifier_environnement(
+    envId: str, corps: m.EnvironnementCreation, ctx: Contexte = Depends(exige("app.deploy"))
+) -> Any:  # noqa: N803
+    env = await depot_env.obtenir(ctx, envId)
+    if corps.nom and corps.nom != env.nom:
+        await depot_env.exiger_nom_libre(ctx, corps.nom, parent_id=env.appId)
+    await depot_env.modifier(ctx, envId, corps)
+    await journaliser(
+        ctx,
+        action="environnement.modification",
+        cible_type="environnement",
+        cible_id=envId,
+        details=corps.model_dump(mode="json", exclude_none=True),
+    )
+    return await depot_env.obtenir(ctx, envId)
+
+
+@router.delete(
+    "/environnements/{envId}",
+    response_model=m.TravailProvisioning,
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model_exclude_none=True,
+)
+async def supprimer_environnement(
+    envId: str, confirmation: str | None = None, ctx: Contexte = Depends(exige("app.deploy"))
+) -> Any:  # noqa: N803
+    env = await depot_env.obtenir(ctx, envId)
+    exiger_confirmation(env.nom, confirmation)
+    await journaliser(
+        ctx,
+        action="environnement.suppression",
+        cible_type="environnement",
+        cible_id=envId,
+        cible=env.nom,
+    )
+    return await demarrer_travail(
+        ctx,
+        "environnement.delete",
+        env.nom,
+        cible_type="environnement",
+        cible_id=envId,
+        etapes=[{"nom": "Retirer l'environnement", "dureeS": 5}],
+    )
 
 
 # ── dépôts ───────────────────────────────────────────────────────────────

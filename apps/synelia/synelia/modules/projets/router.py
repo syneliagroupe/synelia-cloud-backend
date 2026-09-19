@@ -36,7 +36,7 @@ def _mot_de_passe() -> str:
     return jeton_opaque(16)
 
 
-def _cout(ressources: m.Ressources2) -> int:
+def _cout(ressources: m.Ressources) -> int:
     cpu = int(ressources.cpu * PRIX["vcpu_heure"] * HEURES_MOIS)
     ram = int((ressources.ramMo / 1024) * PRIX["ram_go_heure"] * HEURES_MOIS)
     disk = int(ressources.diskGo * PRIX["stockage_to_jour"] * JOURS_MOIS)
@@ -218,22 +218,22 @@ async def lister_services_projet(
 
 async def _ressources(
     corps: m.ServiceProjetCreation, modele: m.ModeleApplicatif | None, site: Literal["ABJ", "GBM"]
-) -> tuple[m.Ressources2, m.Emplacement1]:
+) -> tuple[m.Ressources, m.Emplacement]:
     if corps.ressources and corps.ressources.cpu:
-        ressources = m.Ressources2(
+        ressources = m.Ressources(
             cpu=corps.ressources.cpu,
             ramMo=corps.ressources.ramMo or 512,
             diskGo=corps.ressources.diskGo or 10,
         )
     elif modele:
-        ressources = m.Ressources2(
+        ressources = m.Ressources(
             cpu=modele.ressources.cpu,
             ramMo=modele.ressources.ramMo,
             diskGo=modele.ressources.diskGo,
         )
     else:
-        ressources = m.Ressources2(cpu=0.5, ramMo=512, diskGo=10)
-    emplacement = m.Emplacement1(
+        ressources = m.Ressources(cpu=0.5, ramMo=512, diskGo=10)
+    emplacement = m.Emplacement(
         site=site, backend="openstack-abj" if site == "ABJ" else "openstack-gbm"
     )
     return ressources, emplacement
@@ -373,7 +373,7 @@ async def modifier_service_projet(
         await s.depot_service.exiger_nom_libre(ctx, corps.nom, parent_id=projetId)
         changements["nom"] = corps.nom
     if corps.ressources and corps.ressources.cpu:
-        ressources = m.Ressources2(
+        ressources = m.Ressources(
             cpu=corps.ressources.cpu,
             ramMo=corps.ressources.ramMo or svc.ressources.ramMo,
             diskGo=corps.ressources.diskGo or svc.ressources.diskGo,

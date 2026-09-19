@@ -90,12 +90,8 @@
       "description": "Plans, points de restauration, conformité 3-2-1, plans de reprise."
     },
     {
-      "name": "Applications",
-      "description": "Applications, environnements, composants, dépôts."
-    },
-    {
       "name": "Déploiements",
-      "description": "Construction, analyse, mise en service, retour arrière."
+      "description": "Construction, analyse, mise en service, retour arrière, choix de branche."
     },
     {
       "name": "Projets applicatifs",
@@ -4999,585 +4995,6 @@
         }
       }
     },
-    "/applications": {
-      "get": {
-        "tags": [
-          "Applications"
-        ],
-        "operationId": "listerApplications",
-        "summary": "Lister les applications",
-        "x-rbac": "org.dashboard.view",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Organisation"
-          },
-          {
-            "$ref": "#/components/parameters/Langue"
-          },
-          {
-            "$ref": "#/components/parameters/Page"
-          },
-          {
-            "$ref": "#/components/parameters/ParPage"
-          },
-          {
-            "$ref": "#/components/parameters/Tri"
-          },
-          {
-            "$ref": "#/components/parameters/Ordre"
-          },
-          {
-            "$ref": "#/components/parameters/Recherche"
-          },
-          {
-            "name": "espaceId",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "cible",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "enum": [
-                "vm",
-                "k8s"
-              ]
-            }
-          },
-          {
-            "name": "sante",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "enum": [
-                "sain",
-                "degrade",
-                "arrete",
-                "echec"
-              ]
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Succès.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "donnees": {
-                      "type": "array",
-                      "items": {
-                        "$ref": "#/components/schemas/ApplicationPaas"
-                      }
-                    },
-                    "pagination": {
-                      "$ref": "#/components/schemas/Pagination"
-                    }
-                  },
-                  "required": [
-                    "donnees",
-                    "pagination"
-                  ]
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/Invalide"
-          },
-          "401": {
-            "$ref": "#/components/responses/NonAuthentifie"
-          },
-          "403": {
-            "$ref": "#/components/responses/Interdit"
-          },
-          "422": {
-            "$ref": "#/components/responses/Invalidee"
-          },
-          "429": {
-            "$ref": "#/components/responses/TropDeRequetes"
-          },
-          "500": {
-            "$ref": "#/components/responses/Serveur"
-          }
-        }
-      },
-      "post": {
-        "tags": [
-          "Applications"
-        ],
-        "operationId": "creerApplication",
-        "summary": "Créer une application",
-        "x-rbac": "app.deploy",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Organisation"
-          },
-          {
-            "$ref": "#/components/parameters/Langue"
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ApplicationPaasCreation"
-              }
-            }
-          }
-        },
-        "responses": {
-          "202": {
-            "description": "Accepté — travail de provisioning créé.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TravailProvisioning"
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/Invalide"
-          },
-          "401": {
-            "$ref": "#/components/responses/NonAuthentifie"
-          },
-          "402": {
-            "$ref": "#/components/responses/Quota"
-          },
-          "403": {
-            "$ref": "#/components/responses/Interdit"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflit"
-          },
-          "422": {
-            "$ref": "#/components/responses/Invalidee"
-          },
-          "429": {
-            "$ref": "#/components/responses/TropDeRequetes"
-          },
-          "500": {
-            "$ref": "#/components/responses/Serveur"
-          }
-        }
-      }
-    },
-    "/applications/{appId}": {
-      "get": {
-        "tags": [
-          "Applications"
-        ],
-        "operationId": "obtenirApplication",
-        "summary": "Obtenir une application",
-        "x-rbac": "org.dashboard.view",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Organisation"
-          },
-          {
-            "$ref": "#/components/parameters/Langue"
-          },
-          {
-            "name": "appId",
-            "in": "path",
-            "required": true,
-            "description": "Identifiant de l’application.",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Succès.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApplicationPaas"
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/Invalide"
-          },
-          "401": {
-            "$ref": "#/components/responses/NonAuthentifie"
-          },
-          "403": {
-            "$ref": "#/components/responses/Interdit"
-          },
-          "404": {
-            "$ref": "#/components/responses/Introuvable"
-          },
-          "429": {
-            "$ref": "#/components/responses/TropDeRequetes"
-          },
-          "500": {
-            "$ref": "#/components/responses/Serveur"
-          }
-        }
-      },
-      "patch": {
-        "tags": [
-          "Applications"
-        ],
-        "operationId": "modifierApplication",
-        "summary": "Modifier une application",
-        "x-rbac": "app.deploy",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Organisation"
-          },
-          {
-            "$ref": "#/components/parameters/Langue"
-          },
-          {
-            "name": "appId",
-            "in": "path",
-            "required": true,
-            "description": "Identifiant de l’application.",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ApplicationPaasCreation"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Succès.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApplicationPaas"
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/Invalide"
-          },
-          "401": {
-            "$ref": "#/components/responses/NonAuthentifie"
-          },
-          "403": {
-            "$ref": "#/components/responses/Interdit"
-          },
-          "404": {
-            "$ref": "#/components/responses/Introuvable"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflit"
-          },
-          "422": {
-            "$ref": "#/components/responses/Invalidee"
-          },
-          "429": {
-            "$ref": "#/components/responses/TropDeRequetes"
-          },
-          "500": {
-            "$ref": "#/components/responses/Serveur"
-          }
-        }
-      },
-      "delete": {
-        "tags": [
-          "Applications"
-        ],
-        "operationId": "supprimerApplication",
-        "summary": "Supprimer une application",
-        "description": "Action destructive : le nom exact de la ressource est exigé en confirmation.",
-        "x-rbac": "app.deploy",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Organisation"
-          },
-          {
-            "$ref": "#/components/parameters/Langue"
-          },
-          {
-            "$ref": "#/components/parameters/Confirmation"
-          },
-          {
-            "name": "appId",
-            "in": "path",
-            "required": true,
-            "description": "Identifiant de l’application.",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "202": {
-            "description": "Accepté — travail de provisioning créé.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TravailProvisioning"
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/Invalide"
-          },
-          "401": {
-            "$ref": "#/components/responses/NonAuthentifie"
-          },
-          "403": {
-            "$ref": "#/components/responses/Interdit"
-          },
-          "404": {
-            "$ref": "#/components/responses/Introuvable"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflit"
-          },
-          "422": {
-            "$ref": "#/components/responses/Invalidee"
-          },
-          "429": {
-            "$ref": "#/components/responses/TropDeRequetes"
-          },
-          "500": {
-            "$ref": "#/components/responses/Serveur"
-          }
-        }
-      }
-    },
-    "/applications/{appId}/environnements": {
-      "get": {
-        "tags": [
-          "Applications"
-        ],
-        "operationId": "listerEnvironnements",
-        "summary": "Lister les environnements d’une application",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Organisation"
-          },
-          {
-            "$ref": "#/components/parameters/Langue"
-          },
-          {
-            "name": "appId",
-            "in": "path",
-            "required": true,
-            "description": "Identifiant de l’application.",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Succès.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/Environnement"
-                  }
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/Invalide"
-          },
-          "401": {
-            "$ref": "#/components/responses/NonAuthentifie"
-          },
-          "403": {
-            "$ref": "#/components/responses/Interdit"
-          },
-          "404": {
-            "$ref": "#/components/responses/Introuvable"
-          },
-          "429": {
-            "$ref": "#/components/responses/TropDeRequetes"
-          },
-          "500": {
-            "$ref": "#/components/responses/Serveur"
-          }
-        }
-      },
-      "post": {
-        "tags": [
-          "Applications"
-        ],
-        "operationId": "creerEnvironnement",
-        "summary": "Créer un environnement",
-        "x-rbac": "app.deploy",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Organisation"
-          },
-          {
-            "$ref": "#/components/parameters/Langue"
-          },
-          {
-            "name": "appId",
-            "in": "path",
-            "required": true,
-            "description": "Identifiant de l’application.",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/EnvironnementCreation"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "Succès.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Environnement"
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/Invalide"
-          },
-          "401": {
-            "$ref": "#/components/responses/NonAuthentifie"
-          },
-          "403": {
-            "$ref": "#/components/responses/Interdit"
-          },
-          "404": {
-            "$ref": "#/components/responses/Introuvable"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflit"
-          },
-          "422": {
-            "$ref": "#/components/responses/Invalidee"
-          },
-          "429": {
-            "$ref": "#/components/responses/TropDeRequetes"
-          },
-          "500": {
-            "$ref": "#/components/responses/Serveur"
-          }
-        }
-      }
-    },
-    "/applications/analyse-depot": {
-      "post": {
-        "tags": [
-          "Applications"
-        ],
-        "operationId": "analyserDepot",
-        "summary": "Analyser un dépôt avant création",
-        "description": "Lit le dépôt et dit ce qu’il y a vu : services détectés, constructeur proposé, variables attendues. Rien n’est créé.",
-        "x-rbac": "app.deploy",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Organisation"
-          },
-          {
-            "$ref": "#/components/parameters/Langue"
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "provider": {
-                    "type": "string",
-                    "enum": [
-                      "github",
-                      "gitlab"
-                    ]
-                  },
-                  "url": {
-                    "type": "string"
-                  },
-                  "branche": {
-                    "type": "string"
-                  },
-                  "jetonAcces": {
-                    "type": "string",
-                    "description": "Nécessaire pour un dépôt privé ; jamais conservé."
-                  }
-                },
-                "required": [
-                  "provider",
-                  "url"
-                ]
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Succès.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AnalyseDepot"
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/Invalide"
-          },
-          "401": {
-            "$ref": "#/components/responses/NonAuthentifie"
-          },
-          "403": {
-            "$ref": "#/components/responses/Interdit"
-          },
-          "422": {
-            "$ref": "#/components/responses/Invalidee"
-          },
-          "429": {
-            "$ref": "#/components/responses/TropDeRequetes"
-          },
-          "500": {
-            "$ref": "#/components/responses/Serveur"
-          }
-        }
-      }
-    },
     "/attestations": {
       "get": {
         "tags": [
@@ -6169,6 +5586,7 @@
         ],
         "operationId": "sInscrire",
         "summary": "Créer un compte et son organisation",
+        "description": "Le compte naît non vérifié : aucune session n’est ouverte tant que le code reçu par courriel n’a pas été confirmé (`POST /auth/verification-email`).",
         "security": [],
         "parameters": [
           {
@@ -6186,12 +5604,12 @@
           }
         },
         "responses": {
-          "201": {
-            "description": "Succès.",
+          "202": {
+            "description": "Accepté — travail de provisioning créé.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Session"
+                  "$ref": "#/components/schemas/VerificationEmailEtat"
                 }
               }
             }
@@ -6741,6 +6159,122 @@
           },
           "403": {
             "$ref": "#/components/responses/Interdit"
+          },
+          "422": {
+            "$ref": "#/components/responses/Invalidee"
+          },
+          "429": {
+            "$ref": "#/components/responses/TropDeRequetes"
+          },
+          "500": {
+            "$ref": "#/components/responses/Serveur"
+          }
+        }
+      }
+    },
+    "/auth/verification-email": {
+      "post": {
+        "tags": [
+          "Authentification"
+        ],
+        "operationId": "verifierEmail",
+        "summary": "Confirmer le code reçu par courriel et ouvrir la session",
+        "security": [],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Langue"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerificationEmailConfirmation"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Succès.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Invalide"
+          },
+          "401": {
+            "$ref": "#/components/responses/NonAuthentifie"
+          },
+          "403": {
+            "$ref": "#/components/responses/Interdit"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflit"
+          },
+          "422": {
+            "$ref": "#/components/responses/Invalidee"
+          },
+          "429": {
+            "$ref": "#/components/responses/TropDeRequetes"
+          },
+          "500": {
+            "$ref": "#/components/responses/Serveur"
+          }
+        }
+      }
+    },
+    "/auth/verification-email/renvoi": {
+      "post": {
+        "tags": [
+          "Authentification"
+        ],
+        "operationId": "renvoyerCodeVerification",
+        "summary": "Renvoyer un code de vérification",
+        "security": [],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Langue"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerificationEmailDemande"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepté — travail de provisioning créé.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerificationEmailEtat"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Invalide"
+          },
+          "401": {
+            "$ref": "#/components/responses/NonAuthentifie"
+          },
+          "403": {
+            "$ref": "#/components/responses/Interdit"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflit"
           },
           "422": {
             "$ref": "#/components/responses/Invalidee"
@@ -7986,54 +7520,6 @@
         }
       }
     },
-    "/canvas/briques": {
-      "get": {
-        "tags": [
-          "Applications"
-        ],
-        "operationId": "listerBriquesCanvas",
-        "summary": "Lister les briques assemblables",
-        "description": "Images qualifiées proposées dans la composition visuelle d’une application.",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Organisation"
-          },
-          {
-            "$ref": "#/components/parameters/Langue"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Succès.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/BriqueCanvas"
-                  }
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/Invalide"
-          },
-          "401": {
-            "$ref": "#/components/responses/NonAuthentifie"
-          },
-          "403": {
-            "$ref": "#/components/responses/Interdit"
-          },
-          "429": {
-            "$ref": "#/components/responses/TropDeRequetes"
-          },
-          "500": {
-            "$ref": "#/components/responses/Serveur"
-          }
-        }
-      }
-    },
     "/catalogue/contrat-integration": {
       "get": {
         "tags": [
@@ -8722,396 +8208,6 @@
           },
           "422": {
             "$ref": "#/components/responses/Invalidee"
-          },
-          "429": {
-            "$ref": "#/components/responses/TropDeRequetes"
-          },
-          "500": {
-            "$ref": "#/components/responses/Serveur"
-          }
-        }
-      }
-    },
-    "/composants/{composantId}": {
-      "get": {
-        "tags": [
-          "Applications"
-        ],
-        "operationId": "obtenirComposant",
-        "summary": "Obtenir un composant",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Organisation"
-          },
-          {
-            "$ref": "#/components/parameters/Langue"
-          },
-          {
-            "name": "composantId",
-            "in": "path",
-            "required": true,
-            "description": "Identifiant du composant.",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Succès.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Composant"
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/Invalide"
-          },
-          "401": {
-            "$ref": "#/components/responses/NonAuthentifie"
-          },
-          "403": {
-            "$ref": "#/components/responses/Interdit"
-          },
-          "404": {
-            "$ref": "#/components/responses/Introuvable"
-          },
-          "429": {
-            "$ref": "#/components/responses/TropDeRequetes"
-          },
-          "500": {
-            "$ref": "#/components/responses/Serveur"
-          }
-        }
-      },
-      "patch": {
-        "tags": [
-          "Applications"
-        ],
-        "operationId": "modifierComposant",
-        "summary": "Modifier un composant",
-        "x-rbac": "app.deploy",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Organisation"
-          },
-          {
-            "$ref": "#/components/parameters/Langue"
-          },
-          {
-            "name": "composantId",
-            "in": "path",
-            "required": true,
-            "description": "Identifiant du composant.",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ComposantCreation"
-              }
-            }
-          }
-        },
-        "responses": {
-          "202": {
-            "description": "Accepté — travail de provisioning créé.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TravailProvisioning"
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/Invalide"
-          },
-          "401": {
-            "$ref": "#/components/responses/NonAuthentifie"
-          },
-          "403": {
-            "$ref": "#/components/responses/Interdit"
-          },
-          "404": {
-            "$ref": "#/components/responses/Introuvable"
-          },
-          "422": {
-            "$ref": "#/components/responses/Invalidee"
-          },
-          "429": {
-            "$ref": "#/components/responses/TropDeRequetes"
-          },
-          "500": {
-            "$ref": "#/components/responses/Serveur"
-          }
-        }
-      },
-      "delete": {
-        "tags": [
-          "Applications"
-        ],
-        "operationId": "supprimerComposant",
-        "summary": "Supprimer un composant",
-        "x-rbac": "app.deploy",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Organisation"
-          },
-          {
-            "$ref": "#/components/parameters/Langue"
-          },
-          {
-            "$ref": "#/components/parameters/Confirmation"
-          },
-          {
-            "name": "composantId",
-            "in": "path",
-            "required": true,
-            "description": "Identifiant du composant.",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "202": {
-            "description": "Accepté — travail de provisioning créé.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TravailProvisioning"
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/Invalide"
-          },
-          "401": {
-            "$ref": "#/components/responses/NonAuthentifie"
-          },
-          "403": {
-            "$ref": "#/components/responses/Interdit"
-          },
-          "404": {
-            "$ref": "#/components/responses/Introuvable"
-          },
-          "422": {
-            "$ref": "#/components/responses/Invalidee"
-          },
-          "429": {
-            "$ref": "#/components/responses/TropDeRequetes"
-          },
-          "500": {
-            "$ref": "#/components/responses/Serveur"
-          }
-        }
-      }
-    },
-    "/composants/{composantId}/arret": {
-      "post": {
-        "tags": [
-          "Applications"
-        ],
-        "operationId": "arreterComposant",
-        "summary": "Arrêter un composant",
-        "x-rbac": "component.restart",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Organisation"
-          },
-          {
-            "$ref": "#/components/parameters/Langue"
-          },
-          {
-            "name": "composantId",
-            "in": "path",
-            "required": true,
-            "description": "Identifiant du composant.",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "202": {
-            "description": "Accepté — travail de provisioning créé.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TravailProvisioning"
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/Invalide"
-          },
-          "401": {
-            "$ref": "#/components/responses/NonAuthentifie"
-          },
-          "403": {
-            "$ref": "#/components/responses/Interdit"
-          },
-          "404": {
-            "$ref": "#/components/responses/Introuvable"
-          },
-          "429": {
-            "$ref": "#/components/responses/TropDeRequetes"
-          },
-          "500": {
-            "$ref": "#/components/responses/Serveur"
-          }
-        }
-      }
-    },
-    "/composants/{composantId}/dimensionnement": {
-      "post": {
-        "tags": [
-          "Applications"
-        ],
-        "operationId": "dimensionnerComposant",
-        "summary": "Ajuster les ressources d’un composant",
-        "x-rbac": "app.deploy",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Organisation"
-          },
-          {
-            "$ref": "#/components/parameters/Langue"
-          },
-          {
-            "name": "composantId",
-            "in": "path",
-            "required": true,
-            "description": "Identifiant du composant.",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "cpu": {
-                    "type": "integer",
-                    "format": "int32"
-                  },
-                  "ramMo": {
-                    "type": "integer",
-                    "format": "int32"
-                  },
-                  "diskGo": {
-                    "type": "integer",
-                    "format": "int32"
-                  },
-                  "replicas": {
-                    "type": "integer",
-                    "format": "int32"
-                  }
-                }
-              }
-            }
-          }
-        },
-        "responses": {
-          "202": {
-            "description": "Accepté — travail de provisioning créé.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TravailProvisioning"
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/Invalide"
-          },
-          "401": {
-            "$ref": "#/components/responses/NonAuthentifie"
-          },
-          "402": {
-            "$ref": "#/components/responses/Quota"
-          },
-          "403": {
-            "$ref": "#/components/responses/Interdit"
-          },
-          "404": {
-            "$ref": "#/components/responses/Introuvable"
-          },
-          "422": {
-            "$ref": "#/components/responses/Invalidee"
-          },
-          "429": {
-            "$ref": "#/components/responses/TropDeRequetes"
-          },
-          "500": {
-            "$ref": "#/components/responses/Serveur"
-          }
-        }
-      }
-    },
-    "/composants/{composantId}/redemarrage": {
-      "post": {
-        "tags": [
-          "Applications"
-        ],
-        "operationId": "redemarrerComposant",
-        "summary": "Redémarrer un composant",
-        "x-rbac": "component.restart",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Organisation"
-          },
-          {
-            "$ref": "#/components/parameters/Langue"
-          },
-          {
-            "name": "composantId",
-            "in": "path",
-            "required": true,
-            "description": "Identifiant du composant.",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "202": {
-            "description": "Accepté — travail de provisioning créé.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TravailProvisioning"
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/Invalide"
-          },
-          "401": {
-            "$ref": "#/components/responses/NonAuthentifie"
-          },
-          "403": {
-            "$ref": "#/components/responses/Interdit"
-          },
-          "404": {
-            "$ref": "#/components/responses/Introuvable"
           },
           "429": {
             "$ref": "#/components/responses/TropDeRequetes"
@@ -10038,7 +9134,7 @@
     "/depots/branches": {
       "get": {
         "tags": [
-          "Applications"
+          "Déploiements"
         ],
         "operationId": "listerBranchesDepot",
         "summary": "Lister les branches d’un dépôt",
@@ -11054,10 +10150,75 @@
         }
       }
     },
+    "/environnements": {
+      "post": {
+        "tags": [
+          "Déploiements"
+        ],
+        "operationId": "creerEnvironnement",
+        "summary": "Créer un environnement de déploiement",
+        "description": "Remplace l’ancienne création sous `/applications/{appId}/environnements`. `appId` est optionnel : absent, l’environnement est autonome au niveau organisation.",
+        "x-rbac": "app.deploy",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Organisation"
+          },
+          {
+            "$ref": "#/components/parameters/Langue"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnvironnementCreation"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Succès.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Environnement"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Invalide"
+          },
+          "401": {
+            "$ref": "#/components/responses/NonAuthentifie"
+          },
+          "403": {
+            "$ref": "#/components/responses/Interdit"
+          },
+          "404": {
+            "$ref": "#/components/responses/Introuvable"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflit"
+          },
+          "422": {
+            "$ref": "#/components/responses/Invalidee"
+          },
+          "429": {
+            "$ref": "#/components/responses/TropDeRequetes"
+          },
+          "500": {
+            "$ref": "#/components/responses/Serveur"
+          }
+        }
+      }
+    },
     "/environnements/{envId}": {
       "get": {
         "tags": [
-          "Applications"
+          "Déploiements"
         ],
         "operationId": "obtenirEnvironnement",
         "summary": "Obtenir un environnement",
@@ -11111,7 +10272,7 @@
       },
       "patch": {
         "tags": [
-          "Applications"
+          "Déploiements"
         ],
         "operationId": "modifierEnvironnement",
         "summary": "Modifier un environnement",
@@ -11179,7 +10340,7 @@
       },
       "delete": {
         "tags": [
-          "Applications"
+          "Déploiements"
         ],
         "operationId": "supprimerEnvironnement",
         "summary": "Supprimer un environnement",
@@ -11211,307 +10372,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TravailProvisioning"
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/Invalide"
-          },
-          "401": {
-            "$ref": "#/components/responses/NonAuthentifie"
-          },
-          "403": {
-            "$ref": "#/components/responses/Interdit"
-          },
-          "404": {
-            "$ref": "#/components/responses/Introuvable"
-          },
-          "422": {
-            "$ref": "#/components/responses/Invalidee"
-          },
-          "429": {
-            "$ref": "#/components/responses/TropDeRequetes"
-          },
-          "500": {
-            "$ref": "#/components/responses/Serveur"
-          }
-        }
-      }
-    },
-    "/environnements/{envId}/composants": {
-      "get": {
-        "tags": [
-          "Applications"
-        ],
-        "operationId": "listerComposants",
-        "summary": "Lister les composants d’un environnement",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Organisation"
-          },
-          {
-            "$ref": "#/components/parameters/Langue"
-          },
-          {
-            "name": "envId",
-            "in": "path",
-            "required": true,
-            "description": "Identifiant de l’environnement.",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Succès.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/Composant"
-                  }
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/Invalide"
-          },
-          "401": {
-            "$ref": "#/components/responses/NonAuthentifie"
-          },
-          "403": {
-            "$ref": "#/components/responses/Interdit"
-          },
-          "404": {
-            "$ref": "#/components/responses/Introuvable"
-          },
-          "429": {
-            "$ref": "#/components/responses/TropDeRequetes"
-          },
-          "500": {
-            "$ref": "#/components/responses/Serveur"
-          }
-        }
-      },
-      "post": {
-        "tags": [
-          "Applications"
-        ],
-        "operationId": "creerComposant",
-        "summary": "Ajouter un composant",
-        "x-rbac": "app.deploy",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Organisation"
-          },
-          {
-            "$ref": "#/components/parameters/Langue"
-          },
-          {
-            "name": "envId",
-            "in": "path",
-            "required": true,
-            "description": "Identifiant de l’environnement.",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ComposantCreation"
-              }
-            }
-          }
-        },
-        "responses": {
-          "202": {
-            "description": "Accepté — travail de provisioning créé.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TravailProvisioning"
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/Invalide"
-          },
-          "401": {
-            "$ref": "#/components/responses/NonAuthentifie"
-          },
-          "402": {
-            "$ref": "#/components/responses/Quota"
-          },
-          "403": {
-            "$ref": "#/components/responses/Interdit"
-          },
-          "404": {
-            "$ref": "#/components/responses/Introuvable"
-          },
-          "422": {
-            "$ref": "#/components/responses/Invalidee"
-          },
-          "429": {
-            "$ref": "#/components/responses/TropDeRequetes"
-          },
-          "500": {
-            "$ref": "#/components/responses/Serveur"
-          }
-        }
-      }
-    },
-    "/environnements/{envId}/variables": {
-      "get": {
-        "tags": [
-          "Applications"
-        ],
-        "operationId": "listerVariablesEnvironnement",
-        "summary": "Lister les variables d’un environnement",
-        "description": "La valeur d’un secret n’est jamais renvoyée : seule son existence est visible.",
-        "x-rbac": "secrets.update",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Organisation"
-          },
-          {
-            "$ref": "#/components/parameters/Langue"
-          },
-          {
-            "name": "envId",
-            "in": "path",
-            "required": true,
-            "description": "Identifiant de l’environnement.",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Succès.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/VariableEnvironnement"
-                  }
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/Invalide"
-          },
-          "401": {
-            "$ref": "#/components/responses/NonAuthentifie"
-          },
-          "403": {
-            "$ref": "#/components/responses/Interdit"
-          },
-          "404": {
-            "$ref": "#/components/responses/Introuvable"
-          },
-          "429": {
-            "$ref": "#/components/responses/TropDeRequetes"
-          },
-          "500": {
-            "$ref": "#/components/responses/Serveur"
-          }
-        }
-      },
-      "put": {
-        "tags": [
-          "Applications"
-        ],
-        "operationId": "modifierVariablesEnvironnement",
-        "summary": "Remplacer les variables d’un environnement",
-        "x-rbac": "secrets.update",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Organisation"
-          },
-          {
-            "$ref": "#/components/parameters/Langue"
-          },
-          {
-            "name": "envId",
-            "in": "path",
-            "required": true,
-            "description": "Identifiant de l’environnement.",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "variables": {
-                    "type": "array",
-                    "items": {
-                      "type": "object",
-                      "properties": {
-                        "cle": {
-                          "type": "string"
-                        },
-                        "valeur": {
-                          "type": "string"
-                        },
-                        "secret": {
-                          "type": "boolean"
-                        },
-                        "scope": {
-                          "type": "string",
-                          "enum": [
-                            "build",
-                            "runtime"
-                          ]
-                        },
-                        "supprimer": {
-                          "type": "boolean"
-                        }
-                      },
-                      "required": [
-                        "cle"
-                      ]
-                    }
-                  },
-                  "redeployer": {
-                    "type": "boolean",
-                    "description": "Applique les nouvelles valeurs en redéployant l’environnement."
-                  }
-                },
-                "required": [
-                  "variables"
-                ]
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Succès.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/VariableEnvironnement"
-                  }
                 }
               }
             }
@@ -29493,6 +28353,64 @@
             "$ref": "#/components/responses/Serveur"
           }
         }
+      },
+      "delete": {
+        "tags": [
+          "Travaux de provisioning"
+        ],
+        "operationId": "purgerTravail",
+        "summary": "Retirer une tâche terminée du centre de tâches",
+        "description": "Refusé si le travail est encore en file ou en cours. Le journal d’audit garde la trace après la purge.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Organisation"
+          },
+          {
+            "$ref": "#/components/parameters/Langue"
+          },
+          {
+            "$ref": "#/components/parameters/Confirmation"
+          },
+          {
+            "name": "travailId",
+            "in": "path",
+            "required": true,
+            "description": "Identifiant du travail.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "job-1"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Supprimé. Aucun corps."
+          },
+          "400": {
+            "$ref": "#/components/responses/Invalide"
+          },
+          "401": {
+            "$ref": "#/components/responses/NonAuthentifie"
+          },
+          "403": {
+            "$ref": "#/components/responses/Interdit"
+          },
+          "404": {
+            "$ref": "#/components/responses/Introuvable"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflit"
+          },
+          "422": {
+            "$ref": "#/components/responses/Invalidee"
+          },
+          "429": {
+            "$ref": "#/components/responses/TropDeRequetes"
+          },
+          "500": {
+            "$ref": "#/components/responses/Serveur"
+          }
+        }
       }
     },
     "/travaux/{travailId}/annulation": {
@@ -39741,7 +38659,7 @@
           "Web Cloud — relais SMTP"
         ],
         "operationId": "testerWebhookSmtp",
-        "summary": "Envoyer un appel de test au webhook",
+        "summary": "Envoyer un événement de test au webhook",
         "x-rbac": "service.admin",
         "parameters": [
           {
@@ -40925,101 +39843,6 @@
           "latenceMs"
         ]
       },
-      "AnalyseDepot": {
-        "type": "object",
-        "description": "Lecture d'un dépôt avant création : ce que la plateforme y a vu et ce qu'elle en déduit.",
-        "properties": {
-          "depot": {
-            "type": "string"
-          },
-          "branche": {
-            "type": "string"
-          },
-          "commit": {
-            "type": "string"
-          },
-          "constats": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "fichier": {
-                  "type": "string"
-                },
-                "constat": {
-                  "type": "string"
-                },
-                "consequence": {
-                  "type": "string"
-                },
-                "niveau": {
-                  "type": "string",
-                  "enum": [
-                    "info",
-                    "attention",
-                    "bloquant"
-                  ]
-                }
-              },
-              "required": [
-                "fichier",
-                "constat"
-              ]
-            }
-          },
-          "builderPropose": {
-            "type": "string",
-            "enum": [
-              "nixpacks",
-              "dockerfile",
-              "image"
-            ]
-          },
-          "ciblePropose": {
-            "type": "string",
-            "enum": [
-              "vm",
-              "k8s"
-            ]
-          },
-          "servicesDetectes": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "nom": {
-                  "type": "string"
-                },
-                "type": {
-                  "type": "string"
-                },
-                "port": {
-                  "type": "integer",
-                  "format": "int32"
-                },
-                "image": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "nom",
-                "type"
-              ]
-            }
-          },
-          "variablesRequises": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          }
-        },
-        "required": [
-          "depot",
-          "branche",
-          "constats"
-        ]
-      },
       "Anomalie": {
         "type": "object",
         "description": "Écart relevé par la plateforme — ressource sans sauvegarde, certificat qui expire, quota bientôt atteint, socle en sortie encore utilisé.",
@@ -41259,81 +40082,6 @@
           "stack",
           "dernierDeploiement",
           "environnements"
-        ]
-      },
-      "ApplicationPaasCreation": {
-        "type": "object",
-        "properties": {
-          "espaceId": {
-            "type": "string"
-          },
-          "nom": {
-            "type": "string"
-          },
-          "source": {
-            "type": "string",
-            "enum": [
-              "git",
-              "image",
-              "canvas"
-            ]
-          },
-          "repo": {
-            "type": "object",
-            "properties": {
-              "provider": {
-                "type": "string",
-                "enum": [
-                  "github",
-                  "gitlab"
-                ]
-              },
-              "url": {
-                "type": "string"
-              },
-              "branche": {
-                "type": "string"
-              }
-            }
-          },
-          "image": {
-            "type": "string",
-            "description": "Référence d’image quand `source` vaut `image`."
-          },
-          "builder": {
-            "type": "string",
-            "enum": [
-              "nixpacks",
-              "dockerfile",
-              "image"
-            ]
-          },
-          "cible": {
-            "type": "string",
-            "enum": [
-              "vm",
-              "k8s"
-            ]
-          },
-          "domainePrincipal": {
-            "type": "string"
-          },
-          "description": {
-            "type": "string"
-          },
-          "briques": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "Briques du canvas quand `source` vaut `canvas`."
-          }
-        },
-        "required": [
-          "espaceId",
-          "nom",
-          "source",
-          "cible"
         ]
       },
       "ArticleKb": {
@@ -41809,9 +40557,7 @@
             "type": "string",
             "enum": [
               "mariadb",
-              "mysql",
-              "postgresql",
-              "mongodb"
+              "postgresql"
             ]
           },
           "version": {
@@ -42194,32 +40940,6 @@
           "etapes"
         ]
       },
-      "BriqueCanvas": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "nom": {
-            "type": "string"
-          },
-          "categorie": {
-            "type": "string"
-          },
-          "image": {
-            "type": "string"
-          },
-          "teinte": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "nom",
-          "categorie",
-          "image"
-        ]
-      },
       "Bucket": {
         "type": "object",
         "properties": {
@@ -42228,6 +40948,10 @@
           },
           "orgId": {
             "type": "string"
+          },
+          "espaceId": {
+            "type": "string",
+            "description": "L'Espace Cloud auquel le bucket est rattaché — c'est lui qui borne les listes."
           },
           "nom": {
             "type": "string"
@@ -42302,6 +41026,7 @@
         "required": [
           "id",
           "orgId",
+          "espaceId",
           "nom",
           "region",
           "classe",
@@ -43626,281 +42351,6 @@
           "nom",
           "dureeAnnees",
           "titulaire"
-        ]
-      },
-      "Composant": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "envId": {
-            "type": "string"
-          },
-          "nom": {
-            "type": "string"
-          },
-          "kind": {
-            "type": "string",
-            "enum": [
-              "vm",
-              "k8s"
-            ]
-          },
-          "role": {
-            "type": "string",
-            "enum": [
-              "web",
-              "api",
-              "db",
-              "cache",
-              "proxy",
-              "worker",
-              "cron",
-              "observabilite"
-            ]
-          },
-          "image": {
-            "type": "string"
-          },
-          "version": {
-            "type": "string"
-          },
-          "ressources": {
-            "type": "object",
-            "properties": {
-              "cpu": {
-                "type": "number"
-              },
-              "ramMo": {
-                "type": "integer",
-                "format": "int32"
-              },
-              "diskGo": {
-                "type": "integer",
-                "format": "int32"
-              }
-            },
-            "required": [
-              "cpu",
-              "ramMo",
-              "diskGo"
-            ]
-          },
-          "ports": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "interne": {
-                  "type": "integer",
-                  "format": "int32"
-                },
-                "expose": {
-                  "type": "integer",
-                  "format": "int32"
-                },
-                "type": {
-                  "type": "string",
-                  "enum": [
-                    "ClusterIP",
-                    "LoadBalancer"
-                  ]
-                }
-              },
-              "required": [
-                "interne",
-                "type"
-              ]
-            }
-          },
-          "envVars": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/VariableEnvironnement"
-            }
-          },
-          "storage": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "chemin": {
-                  "type": "string"
-                },
-                "tailleGo": {
-                  "type": "integer",
-                  "format": "int32"
-                },
-                "classe": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "chemin",
-                "tailleGo",
-                "classe"
-              ]
-            }
-          },
-          "emplacement": {
-            "type": "object",
-            "properties": {
-              "vms": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "namespace": {
-                "type": "string"
-              },
-              "pods": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "statut": {
-            "type": "string",
-            "enum": [
-              "deployed",
-              "degraded",
-              "stopped",
-              "failed"
-            ]
-          },
-          "dependances": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          }
-        },
-        "required": [
-          "id",
-          "envId",
-          "nom",
-          "kind",
-          "role",
-          "image",
-          "version",
-          "ressources",
-          "ports",
-          "envVars",
-          "emplacement",
-          "statut"
-        ]
-      },
-      "ComposantCreation": {
-        "type": "object",
-        "properties": {
-          "nom": {
-            "type": "string"
-          },
-          "kind": {
-            "type": "string",
-            "enum": [
-              "vm",
-              "k8s"
-            ]
-          },
-          "role": {
-            "type": "string",
-            "enum": [
-              "web",
-              "api",
-              "db",
-              "cache",
-              "proxy",
-              "worker",
-              "cron",
-              "observabilite"
-            ]
-          },
-          "image": {
-            "type": "string"
-          },
-          "version": {
-            "type": "string"
-          },
-          "ressources": {
-            "type": "object",
-            "properties": {
-              "cpu": {
-                "type": "number"
-              },
-              "ramMo": {
-                "type": "integer",
-                "format": "int32"
-              },
-              "diskGo": {
-                "type": "integer",
-                "format": "int32"
-              }
-            }
-          },
-          "ports": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "interne": {
-                  "type": "integer",
-                  "format": "int32"
-                },
-                "expose": {
-                  "type": "integer",
-                  "format": "int32"
-                },
-                "type": {
-                  "type": "string",
-                  "enum": [
-                    "ClusterIP",
-                    "LoadBalancer"
-                  ]
-                }
-              }
-            }
-          },
-          "envVars": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/VariableEnvironnement"
-            }
-          },
-          "storage": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "chemin": {
-                  "type": "string"
-                },
-                "tailleGo": {
-                  "type": "integer",
-                  "format": "int32"
-                },
-                "classe": {
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "dependances": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          }
-        },
-        "required": [
-          "nom",
-          "kind",
-          "role",
-          "image"
         ]
       },
       "CompteFichiers": {
@@ -45644,7 +44094,8 @@
             "type": "string"
           },
           "appId": {
-            "type": "string"
+            "type": "string",
+            "description": "Absent quand l’environnement n’est rattaché à aucune application PaaS legacy."
           },
           "nom": {
             "type": "string"
@@ -45758,7 +44209,6 @@
         },
         "required": [
           "id",
-          "appId",
           "nom",
           "domaines",
           "couleur",
@@ -45771,6 +44221,10 @@
         "properties": {
           "nom": {
             "type": "string"
+          },
+          "appId": {
+            "type": "string",
+            "description": "Application parente ; absent pour un environnement autonome (modèle déploiements)."
           },
           "couleur": {
             "type": "string"
@@ -51265,6 +49719,10 @@
             "type": "string",
             "description": "Le cluster Kubernetes qui héberge les services du projet — dédié ou partagé avec d'autres projets du même Espace."
           },
+          "lbId": {
+            "type": "string",
+            "description": "Le load balancer L7 dédié provisionné avec le projet, quand il y en a un — la porte d’entrée de ses services."
+          },
           "cible": {
             "type": "string",
             "enum": [
@@ -52536,9 +50994,7 @@
             "type": "string",
             "enum": [
               "mariadb",
-              "mysql",
               "postgresql",
-              "mongodb",
               "redis"
             ]
           },
@@ -54895,6 +53351,58 @@
           "axe",
           "lignes",
           "total"
+        ]
+      },
+      "VerificationEmailConfirmation": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "code": {
+            "type": "string",
+            "description": "Code à six chiffres reçu par courriel."
+          }
+        },
+        "required": [
+          "email",
+          "code"
+        ]
+      },
+      "VerificationEmailDemande": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email"
+          }
+        },
+        "required": [
+          "email"
+        ]
+      },
+      "VerificationEmailEtat": {
+        "type": "object",
+        "description": "Compte créé, en attente du code reçu par courriel avant toute session.",
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "expire": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "essaisRestants": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "required": [
+          "email",
+          "expire",
+          "essaisRestants"
         ]
       },
       "VersionK8s": {
