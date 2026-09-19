@@ -143,7 +143,8 @@ async def test_sso(client):
     assert r.json()["secretDefini"] is False
 
     r = await client.post("/v1/securite/sso/test")
-    assert r.status_code == 200 and r.json()["succes"] is True
+    assert r.status_code == 200 and r.json()["succes"] is False
+    assert "courtier" in r.json()["etapes"][1]["detail"]
 
 
 async def test_mfa_obligatoire_bloque_la_connexion_sans_enrolement(client):

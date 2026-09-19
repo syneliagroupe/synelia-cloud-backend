@@ -1,3 +1,9 @@
+"""API expérimentale application/environnement/composant.
+
+Le portail utilise le modèle ``projets``/``deploiements``. Ces routes restent
+montées uniquement pour compatibilité du contrat et n'ont aucun appelant frontend.
+"""
+
 from __future__ import annotations
 
 import json
