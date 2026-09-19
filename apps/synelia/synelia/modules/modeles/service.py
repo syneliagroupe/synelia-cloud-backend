@@ -38,7 +38,7 @@ SEMENCES: list[m.ModeleApplicatif] = [
         dependances=[m.Dependance(nom="MariaDB", type="base", detail="Base de données du CMS")],
         variables=[],
         volumes=[m.VolumeInline(chemin="/var/www/html", tailleGo=20, role="contenu")],
-        ports=[m.Port(conteneur=8080, protocole="http", role="http")],
+        ports=[m.Port1(conteneur=8080, protocole="http", role="http")],
         sousDomaine="site",
         configuration="wordpress",
         sauvegardeParDefaut=m.SauvegardeParDefaut(
@@ -63,7 +63,7 @@ SEMENCES: list[m.ModeleApplicatif] = [
         ressources=m.Ressources(cpu=1, ramMo=1024, diskGo=10),
         dependances=[],
         variables=[],
-        ports=[m.Port(conteneur=3000, protocole="http", role="http")],
+        ports=[m.Port1(conteneur=3000, protocole="http", role="http")],
         sousDomaine="app",
         configuration="nextjs",
         sauvegardeParDefaut=m.SauvegardeParDefaut(
@@ -91,7 +91,7 @@ SEMENCES: list[m.ModeleApplicatif] = [
         ],
         variables=[],
         volumes=[],
-        ports=[m.Port(conteneur=8000, protocole="http", role="http")],
+        ports=[m.Port1(conteneur=8000, protocole="http", role="http")],
         sousDomaine="api",
         configuration="django",
         sauvegardeParDefaut=m.SauvegardeParDefaut(
@@ -117,7 +117,7 @@ SEMENCES: list[m.ModeleApplicatif] = [
         dependances=[m.Dependance(nom="MySQL", type="base", detail="Base de données application")],
         variables=[],
         volumes=[],
-        ports=[m.Port(conteneur=9000, protocole="http", role="http")],
+        ports=[m.Port1(conteneur=9000, protocole="http", role="http")],
         sousDomaine="web",
         configuration="laravel",
         sauvegardeParDefaut=m.SauvegardeParDefaut(
@@ -145,7 +145,7 @@ SEMENCES: list[m.ModeleApplicatif] = [
         ],
         variables=[],
         volumes=[m.VolumeInline(chemin="/var/lib/odoo", tailleGo=40, role="donnees")],
-        ports=[m.Port(conteneur=8069, protocole="http", role="http")],
+        ports=[m.Port1(conteneur=8069, protocole="http", role="http")],
         sousDomaine="erp",
         configuration="odoo",
         sauvegardeParDefaut=m.SauvegardeParDefaut(
@@ -171,7 +171,7 @@ SEMENCES: list[m.ModeleApplicatif] = [
         dependances=[],
         variables=[],
         volumes=[m.VolumeInline(chemin="/home/node/.n8n", tailleGo=10, role="workflows")],
-        ports=[m.Port(conteneur=5678, protocole="http", role="http")],
+        ports=[m.Port1(conteneur=5678, protocole="http", role="http")],
         sousDomaine="automation",
         configuration="n8n",
         sauvegardeParDefaut=m.SauvegardeParDefaut(
@@ -197,7 +197,7 @@ SEMENCES: list[m.ModeleApplicatif] = [
         dependances=[m.Dependance(nom="PostgreSQL", type="base", detail="Métadonnées Metabase")],
         variables=[],
         volumes=[],
-        ports=[m.Port(conteneur=3000, protocole="http", role="http")],
+        ports=[m.Port1(conteneur=3000, protocole="http", role="http")],
         sousDomaine="bi",
         configuration="metabase",
         sauvegardeParDefaut=m.SauvegardeParDefaut(
@@ -226,7 +226,7 @@ SEMENCES: list[m.ModeleApplicatif] = [
         ],
         variables=[],
         volumes=[m.VolumeInline(chemin="/var/opt/gitlab", tailleGo=50, role="donnees")],
-        ports=[m.Port(conteneur=8080, protocole="http", role="http")],
+        ports=[m.Port1(conteneur=8080, protocole="http", role="http")],
         sousDomaine="git",
         configuration="gitlab",
         sauvegardeParDefaut=m.SauvegardeParDefaut(
