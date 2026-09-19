@@ -75,6 +75,7 @@ async def commander_domaine(
         verrouTransfert=True,
         zoneId=None,
         hebergementId=corps.attacherHebergementId,
+        provisionnement="manuel",
     )
     await depot.creer(ctx, domaine)
     await journaliser(
@@ -135,6 +136,7 @@ async def transferer_domaine(
         renouvellementAuto=bool(corps.renouvellementAuto),
         whoisProtege=True,
         verrouTransfert=True,
+        provisionnement="manuel",
     )
     await depot.creer(ctx, domaine)
     await journaliser(

@@ -25788,6 +25788,8 @@
         "operationId": "obtenirConfigurationSso",
         "summary": "Obtenir la configuration de fédération",
         "x-rbac": "sso.configure",
+        "x-etat": "persiste",
+        "x-capacite": "securite.sso",
         "parameters": [
           {
             "$ref": "#/components/parameters/Organisation"
@@ -25831,6 +25833,8 @@
         "operationId": "modifierConfigurationSso",
         "summary": "Configurer la fédération d’identité",
         "x-rbac": "sso.configure",
+        "x-etat": "persiste",
+        "x-capacite": "securite.sso",
         "parameters": [
           {
             "$ref": "#/components/parameters/Organisation"
@@ -25889,6 +25893,8 @@
         "operationId": "testerSso",
         "summary": "Tester la fédération sans l’activer",
         "x-rbac": "sso.configure",
+        "x-etat": "persiste",
+        "x-capacite": "securite.sso",
         "parameters": [
           {
             "$ref": "#/components/parameters/Organisation"
@@ -33424,6 +33430,9 @@
         "summary": "Commander un domaine",
         "description": "Crée la zone DNS et, si demandé, attache le nom à un hébergement existant.",
         "x-rbac": "marketplace.subscribe",
+        "x-etat": "simule",
+        "x-capacite": "registrar.domain",
+        "x-provisionnement": "manuel",
         "parameters": [
           {
             "$ref": "#/components/parameters/Organisation"
@@ -33663,6 +33672,9 @@
         "summary": "Obtenir le code d’autorisation de transfert sortant",
         "description": "La réversibilité fait partie de l’offre : le code est délivré sans friction.",
         "x-rbac": "network.manage",
+        "x-etat": "simule",
+        "x-capacite": "registrar.domain",
+        "x-provisionnement": "manuel",
         "parameters": [
           {
             "$ref": "#/components/parameters/Organisation"
@@ -33733,6 +33745,9 @@
         "operationId": "renouvelerDomaine",
         "summary": "Renouveler un domaine",
         "x-rbac": "marketplace.subscribe",
+        "x-etat": "simule",
+        "x-capacite": "registrar.domain",
+        "x-provisionnement": "manuel",
         "parameters": [
           {
             "$ref": "#/components/parameters/Organisation"
@@ -33815,6 +33830,9 @@
         ],
         "operationId": "verifierDisponibiliteDomaine",
         "summary": "Vérifier la disponibilité d’un nom",
+        "x-etat": "simule",
+        "x-capacite": "registrar.domain",
+        "x-provisionnement": "manuel",
         "parameters": [
           {
             "$ref": "#/components/parameters/Organisation"
@@ -33884,6 +33902,9 @@
         "operationId": "transfererDomaine",
         "summary": "Transférer un domaine entrant",
         "x-rbac": "marketplace.subscribe",
+        "x-etat": "simule",
+        "x-capacite": "registrar.domain",
+        "x-provisionnement": "manuel",
         "parameters": [
           {
             "$ref": "#/components/parameters/Organisation"
@@ -38852,6 +38873,9 @@
         "summary": "Commander un certificat",
         "description": "Un certificat Let’s Encrypt est gratuit et automatique ; un DV, OV ou EV a une échéance commerciale en plus de la technique.",
         "x-rbac": "marketplace.subscribe",
+        "x-etat": "simule",
+        "x-capacite": "acme.certificat",
+        "x-provisionnement": "manuel",
         "parameters": [
           {
             "$ref": "#/components/parameters/Organisation"
@@ -39106,6 +39130,9 @@
         "operationId": "renouvelerCertificat",
         "summary": "Renouveler un certificat",
         "x-rbac": "service.admin",
+        "x-etat": "simule",
+        "x-capacite": "acme.certificat",
+        "x-provisionnement": "manuel",
         "parameters": [
           {
             "$ref": "#/components/parameters/Organisation"
@@ -39187,6 +39214,9 @@
         "summary": "Relancer la validation de domaine",
         "description": "Renvoie l’enregistrement ou le fichier de validation attendu quand il manque encore.",
         "x-rbac": "service.admin",
+        "x-etat": "simule",
+        "x-capacite": "acme.certificat",
+        "x-provisionnement": "manuel",
         "parameters": [
           {
             "$ref": "#/components/parameters/Organisation"
@@ -43739,6 +43769,15 @@
           "hebergementId": {
             "type": "string",
             "description": "Un domaine est attaché à un serveur et à un seul."
+          },
+          "provisionnement": {
+            "type": "string",
+            "enum": [
+              "automatique",
+              "manuel"
+            ],
+            "description": "Mode de provisionnement amont — manuel = traitement ops sous ~48h",
+            "default": "manuel"
           }
         },
         "required": [
