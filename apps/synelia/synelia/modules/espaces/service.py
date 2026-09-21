@@ -64,37 +64,112 @@ def _ac_encore_valide(application_credential_id: str | None, secret: str | None)
         return False
 
 
+def _projet_keystone_existe(projet_id: str | None) -> bool:
+    if not projet_id:
+        return False
+    try:
+        amont()._conn().identity.get_project(projet_id)
+        return True
+    except Exception:
+        return False
+
+
+async def _rebrancher_infra_openstack_espace(
+    ctx: Contexte,
+    depot_espace: Depot[Any],
+    espace_id: str,
+    espace: m.EspaceCloud,
+) -> dict[str, str]:
+    """Recrée projet / réseau / AC OpenStack quand le lab a été reconstruit (secrets DB obsolètes)."""
+    a = amont()
+    if espace.code == "vps-zone":
+        domaine_nom = "synelia-vps-zone"
+    elif espace_id == ESPACE_DEMO_ABJ_ID:
+        domaine_nom = "synelia-demo"
+    else:
+        domaine_nom = f"org-{espace.orgId}"
+    domaine_id = await asyncio.to_thread(a.creer_domaine, domaine_nom)
+    projet_id = await asyncio.to_thread(
+        a.creer_projet,
+        domaine_id,
+        f"espace-{espace.code}",
+        "RegionOne" if espace.site == "ABJ" else "GBM",
+    )
+    await asyncio.to_thread(
+        a.poser_quotas, projet_id, espace.quota.vcpu, espace.quota.ramGo, espace.quota.stockageTo
+    )
+    reseau = await asyncio.to_thread(a.creer_reseau, projet_id, f"{espace.code}-net", espace.cidr)
+    ac = await asyncio.to_thread(a.creer_application_credential, projet_id, domaine_id)
+    clairs = {
+        "projet_id": projet_id,
+        "domaine_id": domaine_id,
+        "reseau_id": reseau["reseau_id"],
+        "routeur_id": reseau.get("routeur_id") or "",
+        "application_credential_id": ac["id"],
+        "application_credential_secret": ac["secret"],
+    }
+    await depot_espace.definir_secrets(ctx, espace_id, clairs)
+    log.info("espace.infra_openstack_rebranchee", espace_id=espace_id, projet_id=projet_id)
+    return clairs
+
+
 async def _rafraichir_application_credential_secrets(
     ctx: Contexte,
     depot_espace: Depot[Any],
     espace_id: str,
     secrets: dict[str, str],
-) -> None:
+) -> bool:
     """Regénère l'AC Keystone quand le lab a été reconstruit mais la ligne DB est restée."""
     projet_id = secrets.get("projet_id")
     if not projet_id or reglages().fournisseur != "openstack":
-        return
+        return True
     if _ac_encore_valide(
         secrets.get("application_credential_id"), secrets.get("application_credential_secret")
     ):
-        return
+        return True
+    if not _projet_keystone_existe(projet_id):
+        log.warning(
+            "espace.ac_refresh_projet_introuvable",
+            espace_id=espace_id,
+            projet_id=projet_id,
+        )
+        return False
     a = amont()
     domaine_id = secrets.get("domaine_id")
     if not domaine_id:
-        domaine_id = await asyncio.to_thread(
-            lambda: a._conn().identity.get_project(projet_id).domain_id
+        try:
+            domaine_id = await asyncio.to_thread(
+                lambda: a._conn().identity.get_project(projet_id).domain_id
+            )
+        except Exception as exc:
+            log.warning(
+                "espace.ac_refresh_echec",
+                espace_id=espace_id,
+                projet_id=projet_id,
+                erreur=str(exc),
+            )
+            return False
+    try:
+        ac = await asyncio.to_thread(a.creer_application_credential, projet_id, domaine_id)
+        await depot_espace.definir_secrets(
+            ctx,
+            espace_id,
+            {
+                "application_credential_id": ac["id"],
+                "application_credential_secret": ac["secret"],
+                "domaine_id": domaine_id,
+            },
         )
-    ac = await asyncio.to_thread(a.creer_application_credential, projet_id, domaine_id)
-    await depot_espace.definir_secrets(
-        ctx,
-        espace_id,
-        {
-            "application_credential_id": ac["id"],
-            "application_credential_secret": ac["secret"],
-            "domaine_id": domaine_id,
-        },
-    )
+    except Exception as exc:
+        log.warning(
+            "espace.ac_refresh_echec",
+            espace_id=espace_id,
+            projet_id=projet_id,
+            erreur=str(exc),
+        )
+        return False
     log.info("espace.application_credential_regenere", espace_id=espace_id, projet_id=projet_id)
+    return True
 
 
 async def usage(ctx: Contexte, espace_id: str) -> dict[str, float]:
@@ -288,10 +363,23 @@ async def semer_zone_vps(session: AsyncSession) -> None:
         ctx = _ctx_amorcage_plateforme(session)
         try:
             zone = await depot_plateforme.secrets(ctx, espace_id)
-            await _rafraichir_application_credential_secrets(ctx, depot_plateforme, espace_id, zone)
         except erreurs.AppError as exc:
             if exc.code != "introuvable":
                 raise
+            zone = {}
+        e = m.EspaceCloud.model_validate(ligne.donnees)
+        if r.fournisseur == "openstack" and (
+            not zone.get("reseau_id")
+            or not zone.get("projet_id")
+            or not _projet_keystone_existe(str(zone.get("projet_id") or ""))
+        ):
+            await _rebrancher_infra_openstack_espace(ctx, depot_plateforme, espace_id, e)
+        else:
+            ok = await _rafraichir_application_credential_secrets(
+                ctx, depot_plateforme, espace_id, zone
+            )
+            if not ok:
+                await _rebrancher_infra_openstack_espace(ctx, depot_plateforme, espace_id, e)
         await _assurer_lb_secrets_zone_vps(session, espace_id)
         return
     if not r.vps_zone_org_id:
@@ -409,7 +497,7 @@ async def assurer_secrets_openstack_espace(
     secrets_bruts = dict(ligne.secrets or {})
     from synelia_kernel.chiffrement import dechiffrer
 
-    # Déjà branché : rafraîchir l'AC si le lab Keystone a été reconstruit entre-temps.
+    # Déjà branché : rafraîchir l'AC ou rebrancher si le lab OpenStack a été reconstruit.
     if secrets_bruts.get("projet_id") and secrets_bruts.get("reseau_id"):
         clairs = {k: dechiffrer(v) for k, v in secrets_bruts.items()}
         if _ac_encore_valide(
@@ -439,8 +527,13 @@ async def assurer_secrets_openstack_espace(
                 role_equipe="platform_operator",
             ),
         )
-        await _rafraichir_application_credential_secrets(ctx_demo, depot, espace_id, clairs)
-        return clairs
+        e = m.EspaceCloud.model_validate(ligne.donnees)
+        if not _projet_keystone_existe(str(clairs.get("projet_id") or "")):
+            return await _rebrancher_infra_openstack_espace(ctx_demo, depot, espace_id, e)
+        ok = await _rafraichir_application_credential_secrets(ctx_demo, depot, espace_id, clairs)
+        if ok:
+            return clairs
+        return await _rebrancher_infra_openstack_espace(ctx_demo, depot, espace_id, e)
 
     e = m.EspaceCloud.model_validate(ligne.donnees)
     a = amont()
