@@ -390,7 +390,10 @@ async def provisionner_lb_zone_vps(session: AsyncSession, espace_id: str) -> dic
 
     if lb_id and await asyncio.to_thread(_lb_octavia_existe, lb_id):
         listener_id = (
-            zone.get("lb_listener_id") or r.vps_zone_lb_listener_id or _listener_http_80(lb_id) or ""
+            zone.get("lb_listener_id")
+            or r.vps_zone_lb_listener_id
+            or _listener_http_80(lb_id)
+            or ""
         )
         patch: dict[str, str] = {}
         if zone.get("lb_id") != lb_id:

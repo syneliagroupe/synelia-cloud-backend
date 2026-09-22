@@ -125,6 +125,7 @@ def seed_zone_vps() -> None:
 
     async def _run() -> None:
         from synelia_db.session import fabrique, initialiser_schema
+
         from synelia.modules.espaces.service import semer_zone_vps_hebergement
 
         await initialiser_schema()
