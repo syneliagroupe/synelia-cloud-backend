@@ -1,4 +1,4 @@
-"""CLI : `synelia api|worker|scheduler|contrat|amorcer`."""
+"""CLI : `synelia api|worker|scheduler|contrat|amorcer|seed`."""
 
 from __future__ import annotations
 
@@ -13,6 +13,8 @@ import typer
 cli = typer.Typer(help="Synelia Cloud — backend", no_args_is_help=True)
 contrat = typer.Typer(help="Contrat OpenAPI : synchronisation et couverture")
 cli.add_typer(contrat, name="contrat")
+seed = typer.Typer(help="Amorçage ciblé (pool Web Cloud partagé, etc.)")
+cli.add_typer(seed, name="seed")
 
 RACINE = Path(__file__).resolve().parents[3]
 
@@ -110,6 +112,35 @@ def amorcer() -> None:
 
     asyncio.run(_run())
     typer.echo("amorçage terminé")
+
+
+@seed.command("zone-vps")
+def seed_zone_vps() -> None:
+    """Pool Web Cloud partagé : espace `vps-zone`, réseau OpenStack, LB Octavia, clé SSH zone.
+
+    Prérequis : `SYNELIA_FOURNISSEUR=openstack`, credentials plateforme, `SYNELIA_VPS_ZONE_ORG_ID`
+    (org admin existante). Optionnel : `SYNELIA_VPS_ZONE_ESPACE_ID` (sinon id stable par défaut).
+    Sur lab Octavia instable, arrêter `octavia_worker`/`octavia_housekeeping` le temps du seed LB
+    (cf. docs/runbooks/lab-openstack.md)."""
+
+    async def _run() -> None:
+        from synelia_db.session import fabrique, initialiser_schema
+        from synelia.modules.espaces.service import semer_zone_vps_hebergement
+
+        await initialiser_schema()
+        async with fabrique()() as session:
+            info = await semer_zone_vps_hebergement(session)
+            await session.commit()
+        return info
+
+    info = asyncio.run(_run())
+    typer.echo("zone VPS partagée (seed) terminée")
+    if info.get("lb_id"):
+        typer.echo("Ajoutez ou vérifiez dans .env :")
+        typer.echo(f"  SYNELIA_VPS_ZONE_ESPACE_ID={info.get('espace_id', '')}")
+        typer.echo(f"  SYNELIA_VPS_ZONE_LB_ID={info.get('lb_id', '')}")
+        if info.get("lb_listener_id"):
+            typer.echo(f"  SYNELIA_VPS_ZONE_LB_LISTENER_ID={info.get('lb_listener_id')}")
 
 
 @contrat.command("sync")

@@ -325,13 +325,134 @@ async def _assurer_lb_secrets_zone_vps(session: AsyncSession, espace_id: str) ->
         if exc.code != "introuvable":
             raise
         return
-    if actuels.get("lb_id"):
-        return
-    patch: dict[str, str] = {"lb_id": r.vps_zone_lb_id}
-    if r.vps_zone_lb_listener_id:
+    patch: dict[str, str] = {}
+    if actuels.get("lb_id") != r.vps_zone_lb_id:
+        patch["lb_id"] = r.vps_zone_lb_id
+    if r.vps_zone_lb_listener_id and actuels.get("lb_listener_id") != r.vps_zone_lb_listener_id:
         patch["lb_listener_id"] = r.vps_zone_lb_listener_id
+    if not patch:
+        return
     await depot_plateforme.definir_secrets(ctx, espace_id, patch)
-    log.info("zone_vps.lb_secrets_poses", espace_id=espace_id)
+    log.info("zone_vps.lb_secrets_poses", espace_id=espace_id, **patch)
+
+
+def _lb_octavia_existe(lb_id: str) -> bool:
+    if not lb_id:
+        return False
+    try:
+        from synelia_openstack.fabrique import connexion
+
+        connexion().load_balancer.get_load_balancer(lb_id)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _sous_reseau_pour_reseau(reseau_id: str) -> str | None:
+    from synelia_openstack.fabrique import connexion
+
+    subs = list(connexion().network.subnets(network_id=reseau_id))
+    return subs[0].id if subs else None
+
+
+def _listener_http_80(lb_id: str) -> str | None:
+    from synelia_openstack.fabrique import connexion
+
+    for ecouteur in connexion().load_balancer.listeners(loadbalancer_id=lb_id):
+        if ecouteur.protocol_port == 80 and (ecouteur.protocol or "").upper() == "HTTP":
+            return ecouteur.id
+    return None
+
+
+async def provisionner_lb_zone_vps(session: AsyncSession, espace_id: str) -> dict[str, str] | None:
+    """Crée ou rattache le load balancer Octavia public partagé (Web Cloud / zone VPS).
+
+    Idempotent : si `lb_id` en secrets ou `.env` pointe vers un LB existant, ne recrée rien —
+    complète seulement `lb_listener_id` / `sous_reseau_id` manquants."""
+    r = reglages()
+    if r.fournisseur != "openstack":
+        return None
+    ctx = _ctx_amorcage_plateforme(session)
+    try:
+        zone = await depot_plateforme.secrets(ctx, espace_id)
+    except erreurs.AppError as exc:
+        if exc.code == "introuvable":
+            log.warning("zone_vps.lb_skip_pas_espace", espace_id=espace_id)
+            return None
+        raise
+    projet_id, reseau_id = zone.get("projet_id"), zone.get("reseau_id")
+    if not projet_id or not reseau_id:
+        log.warning("zone_vps.lb_skip_pas_reseau", espace_id=espace_id)
+        return None
+
+    sous_reseau_id = zone.get("sous_reseau_id") or _sous_reseau_pour_reseau(reseau_id) or ""
+    lb_id = zone.get("lb_id") or r.vps_zone_lb_id or ""
+
+    if lb_id and await asyncio.to_thread(_lb_octavia_existe, lb_id):
+        listener_id = (
+            zone.get("lb_listener_id") or r.vps_zone_lb_listener_id or _listener_http_80(lb_id) or ""
+        )
+        patch: dict[str, str] = {}
+        if zone.get("lb_id") != lb_id:
+            patch["lb_id"] = lb_id
+        if listener_id and zone.get("lb_listener_id") != listener_id:
+            patch["lb_listener_id"] = listener_id
+        if sous_reseau_id and zone.get("sous_reseau_id") != sous_reseau_id:
+            patch["sous_reseau_id"] = sous_reseau_id
+        if patch:
+            await depot_plateforme.definir_secrets(ctx, espace_id, patch)
+        return {
+            "lb_id": lb_id,
+            "lb_listener_id": listener_id,
+            "sous_reseau_id": sous_reseau_id,
+        }
+
+    from synelia_openstack.network import NetworkOpenStack
+
+    n = NetworkOpenStack()
+    try:
+        result = await asyncio.to_thread(
+            n.creer_load_balancer,
+            projet_id=projet_id,
+            nom="vps-zone-lb",
+            reseau_id=reseau_id,
+            layer="l7",
+            exposure="public",
+            listeners=[{"protocole": "http", "port": 80}],
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.error("zone_vps.lb_provision_echoue", espace_id=espace_id, erreur=str(exc))
+        return None
+    listener_id = result.get("listener_id") or ""
+    patch = {
+        "lb_id": result["id"],
+        "lb_listener_id": listener_id,
+        "sous_reseau_id": sous_reseau_id,
+    }
+    await depot_plateforme.definir_secrets(ctx, espace_id, patch)
+    log.info("zone_vps.lb_provisionne", espace_id=espace_id, **patch)
+    return patch
+
+
+async def semer_zone_vps_hebergement(session: AsyncSession) -> dict[str, str]:
+    """Seed opérateur : espace plateforme `vps-zone`, projet/réseau OpenStack, LB partagé, clé SSH.
+
+    À lancer après un rebuild lab ou sur un environnement neuf (`synelia seed zone-vps`).
+    Nécessite `SYNELIA_VPS_ZONE_ORG_ID` (org porteuse le temps du provisioning) et, en OpenStack,
+    des credentials plateforme valides."""
+    await semer_zone_vps(session)
+    r = reglages()
+    espace_id = r.vps_zone_espace_id or ESPACE_ZONE_VPS_ID
+    lb = await provisionner_lb_zone_vps(session, espace_id)
+    ctx = _ctx_amorcage_plateforme(session)
+    from synelia.modules.web_hebergement.service import assurer_cle_ssh_zone
+
+    await assurer_cle_ssh_zone(ctx)
+    info: dict[str, str] = {"espace_id": espace_id}
+    if lb:
+        info.update({k: v for k, v in lb.items() if v})
+    log.info("zone_vps.seed_termine", **info)
+    return info
 
 
 async def semer_zone_vps(session: AsyncSession) -> None:
