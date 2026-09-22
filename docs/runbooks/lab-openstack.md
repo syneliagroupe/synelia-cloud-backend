@@ -181,13 +181,26 @@ c'est ce qui a été fait manuellement pour créer `vps-zone` sur ce lab. Depuis
 peut aussi poser `lb_id` / `lb_listener_id` via `SYNELIA_VPS_ZONE_LB_ID` et
 `SYNELIA_VPS_ZONE_LB_LISTENER_ID` (cf. `.env.example`).
 
+**Seed opérateur (environnement neuf ou lab reconstruit)** — une commande pour créer le pool
+Web Cloud partagé (ligne `vps-zone`, projet/réseau, LB Octavia, clé SSH), idempotent :
+
+```bash
+cd synelia-cloud-backend
+# .env : SYNELIA_FOURNISSEUR=openstack, SYNELIA_VPS_ZONE_ORG_ID=<org admin>, credentials plateforme
+uv run synelia seed zone-vps
+```
+
+La commande affiche les `SYNELIA_VPS_ZONE_*` à recopier dans `.env`. Sur Octavia capricieux,
+arrêter `octavia_worker` / `octavia_housekeeping` sur ctrl1 (`192.168.26.235`) le temps de la
+création du LB, puis reprendre les workers (cf. § Octavia ci-dessous).
+
 ### Octavia `vps-zone-lb` bloqué en `PENDING_UPDATE` / pools 409 immutable
 
 Symptôme : `hebergement.creer` échoue à l'étape pool L7 avec « Load Balancer … is immutable ».
 Cause fréquente : pools `ERROR` / `PENDING_CREATE` laissés par des pytest infra + worker Octavia qui
 repasse le LB en `PENDING_UPDATE`.
 
-Sur **ctrl1** (SSH mgmt `192.168.121.186` depuis dev01), après sauvegarde si besoin :
+Sur **ctrl1** (`ssh root@192.168.26.235` depuis dev01/vm-admin — réseau `192.168.26.0/24`, pas le mgmt `192.168.121.0/24`), après sauvegarde si besoin :
 
 ```bash
 docker stop octavia_worker octavia_housekeeping
@@ -204,6 +217,36 @@ docker restart octavia_api
 # Vérifier : curl Octavia API → provisioning_status ACTIVE, POST pool → 201
 # Pour une batterie pytest Web Cloud : laisser worker/housekeeping arrêtés le temps des tests, puis docker start octavia_worker octavia_housekeeping
 ```
+
+**Vérifier qu'un site répond (curl Octavia)** — hostname provisionné
+`h-<8 premiers caractères de l'id hébergement>.cloud.dev01.ovh.smile.ci` (pas le domaine
+`.test.ci` tant qu'il n'est pas routé). Depuis vm-admin :
+
+```bash
+cd synelia-cloud-backend
+# mot de passe ctrl1 : runbook § accès SSH (hors dépôt)
+./scripts/lab/verify-web-octavia.sh h-01a0ca40.cloud.dev01.ovh.smile.ci
+```
+
+**Membre de pool injoignable (503 / ERROR / timeout vers la VM)** : le groupe de sécurité du
+serveur d'hébergement n'autorise souvent que le SSH (22). Ouvrir le **80/TCP** sur la VM :
+`NetworkOpenStack.assurer_regle_port(serveur_id, 80)` (désormais fait à l'étape Nova de
+`hebergement.creer`). Test direct depuis le namespace DHCP du réseau `vps-zone` :
+
+```bash
+ip netns exec qdhcp-3f2feb5e-43ff-4b1f-9147-8fda08afbc0e \
+  curl -H 'Host: h-XXXXXXXX.cloud.dev01.ovh.smile.ci' http://10.90.x.x/
+```
+
+**Création LB Octavia `No valid host was found`** (amphore) : vérifier l'espace disque des
+hyperviseurs (`openstack hypervisor stats show`) — sur ce lab un `free_disk_gb: 0` sur comp1
+bloque toute nouvelle amphore. Libérer des volumes/instances, puis recréer le LB
+(`scripts/lab/repair-vps-zone-octavia.py`).
+
+Contrôles OpenStack si curl échoue : FIP `192.168.20.231` **associé** au `vip_port_id` du LB
+`6bcc4ab4-…` ; pool `pool-<8chars>` avec membre **ACTIVE** (pas `ERROR` / `NO_MONITOR`) ;
+connectivité tenant depuis `ip netns exec qdhcp-<vps-zone-net-id> …` (réseau
+`3f2feb5e-43ff-4b1f-9147-8fda08afbc0e` sur ce lab).
 
 Routeurs `vps-zone-net-rtr` orphelins (pool IP externe épuisé) : script `/tmp/clean-vps-routers.sh` sur
 ctrl1 (enlever ports d'interface, unset gateway, delete) — voir aussi nettoyage historique dans `DEMO-TODO.md`.

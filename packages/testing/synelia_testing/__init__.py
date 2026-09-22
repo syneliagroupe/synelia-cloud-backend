@@ -199,6 +199,10 @@ def configurer_env() -> str:
     # (statut `queued`) et le worker lit Postgres, pas le SQLite éphémère du test → faux échecs.
     os.environ.pop("SYNELIA_TEMPORAL_ADRESSE", None)
     os.environ.pop("SYNELIA_TRAVAUX_WORKER", None)
+    # Lab `.env` peut définir `relais-smtp` (nom Docker) : depuis l'hôte pytest ce host est
+    # injoignable → `POST /web/smtp/test` remonte en 424. Les tests API restent simulés ici.
+    os.environ.pop("SYNELIA_RELAIS_SMTP_HOTE", None)
+    os.environ.pop("SYNELIA_RELAIS_SMTP_PORT", None)
     os.environ.setdefault("SYNELIA_SEED_DEMO", "true")
     return d
 

@@ -1812,6 +1812,9 @@ class ExecuteurHebergementCreer(Executeur):
                 amont_identite().associer_ip_flottante, fip.get("id"), srv["id"]
             )
             await asyncio.to_thread(amont_network().assurer_regle_ssh, srv["id"])
+            # Sans TCP/80 sur le SG du membre, l'amphore Octavia (ou un curl depuis le tenant)
+            # ne joint jamais Traefik — cf. `NetworkOpenStack._assurer_regle_ingress_tcp`.
+            await asyncio.to_thread(amont_network().assurer_regle_port, srv["id"], 80)
             c["ssh_fip_id"] = fip.get("id")
             c["ssh_ip"] = ip_gestion or fip.get("adresse")
             travail.contexte = c

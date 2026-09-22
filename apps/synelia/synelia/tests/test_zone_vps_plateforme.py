@@ -30,6 +30,13 @@ async def client_zone_vps() -> AsyncIterator[httpx.AsyncClient]:
     from synelia_testing import ClientApi, configurer_env
 
     d = configurer_env()
+    os.environ["SYNELIA_FOURNISSEUR"] = "simule"
+    for cle in list(os.environ):
+        if cle.startswith("SYNELIA_OS_") or cle in (
+            "SYNELIA_VPS_ZONE_LB_ID",
+            "SYNELIA_VPS_ZONE_LB_LISTENER_ID",
+        ):
+            os.environ.pop(cle, None)
     os.environ["SYNELIA_VPS_ZONE_ESPACE_ID"] = ESPACE_ID_TEST
     os.environ["SYNELIA_VPS_ZONE_ORG_ID"] = ORG_ID_TEST
     config.reglages.cache_clear()

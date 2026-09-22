@@ -94,7 +94,10 @@ async def amorcer() -> None:
             semer_zone_vps,
         )
 
-        await semer_zone_vps(s)
+        try:
+            await semer_zone_vps(s)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("amorcage.zone_vps_openstack_echoue", erreur=str(exc))
         await s.flush()
         # Espace seed démo : s'il existe déjà (admin déjà amorcé) avec secrets vides sous
         # fournisseur openstack, le brancher maintenant — peupler() ne rejoue pas.

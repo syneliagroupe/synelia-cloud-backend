@@ -16,9 +16,15 @@ async def _creer_hebergement(client_org, nom: str) -> None:
     assert r.status_code == 202, r.text
     data = r.json()
     # Lab injoignable depuis ce host (No route to host 192.168.26.234) → skip honnête
-    if data["statut"] == "rolled_back" and "reseau_id" in data.get("erreur", {}).get("message", "").lower():
+    if (
+        data["statut"] == "rolled_back"
+        and "reseau_id" in data.get("erreur", {}).get("message", "").lower()
+    ):
         pytest.skip(f"lab VPS injoignable (reseau_id absent): {data['erreur']['message']}")
-    if data["statut"] == "rolled_back" and "no route to host" in data.get("erreur", {}).get("message", "").lower():
+    if (
+        data["statut"] == "rolled_back"
+        and "no route to host" in data.get("erreur", {}).get("message", "").lower()
+    ):
         pytest.skip(f"lab OpenStack injoignable: {data['erreur']['message']}")
     assert data["statut"] == "done", data
 
