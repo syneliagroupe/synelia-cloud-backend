@@ -166,16 +166,14 @@ correspondantes situées après la ligne 894 de ce fichier, non re-répétées i
       nouvelle preuve réseau obtenue (contention de session agent-browser partagée
       cette nuit) mais aucune régression trouvée en lecture — rien à corriger.
 
-- [ ] **Paramètres — Notifications : « Enregistrer les canaux » et chaque bascule de
-      catégorie sont sans effet, faute d'endpoint backend.** Aucun module backend ne
-      porte de préférences de notification au niveau organisation (recherché :
-      `notification`, `canaux`, `webhook` dans tous les `router.py` — seuls
-      `facturation`, `admin`, `observabilite` et `web_smtp` utilisent ces mots, sans
-      rapport). Vérifié en direct : cliquer « Enregistrer les canaux » ne déclenche
-      aucune requête réseau (juste un toast). Pas un bug de câblage frontend — il
-      n'y a rien à appeler côté backend. Gap réel, à trancher : construire le module
-      (portée Phase-7, hors de ce tour) ou retirer/dégrader l'écran pour ne pas
-      laisser croire qu'un réglage écrit quelque part.
+- [x] **Paramètres — Notifications : « Enregistrer les canaux » — tranché côté
+      « dégrader l'écran », pas « construire le module » (vérifié 2026-09-23).**
+      Toujours pas d'endpoint backend (le gap technique décrit ci-dessous reste
+      exact), mais le bouton ne ment plus : `parametres/page.tsx` porte
+      désormais un `sansApi` honnête au lieu du faux toast de succès — même
+      patron que le reste du sweep « boutons qui mentent » (portail PR #14,
+      2026-09-19 ; voir `PLAN-UI.md` §2). Gap produit ci-dessous toujours
+      valable si le module doit un jour être construit pour de vrai.
 
 - [x] **Paramètres — Réversibilité : « Demander un export complet » ne produisait ni
       appel backend ni job visible (2026-09-15, corrigé).** Le patron `job` sans
@@ -922,24 +920,21 @@ correspondantes situées après la ligne 894 de ce fichier, non re-répétées i
       d'auto-service pour qu'un org_admin modifie son organisation) reste un
       chantier backend : ou bien créer une route dédiée, ou bien élargir
       `org.manage` aux org_admin — pas un bug de câblage frontend à corriger.
-- [ ] **`parametres`, onglet Notifications : aucune contrepartie backend pour
-      les huit catégories affichées.** `Preferences.notifications` (contrat)
-      n'a que trois champs (`email`/`sms`/`whatsapp`, des canaux), alors que
-      l'écran présente des *catégories* d'évènements (incidents, sauvegarde en
-      échec, facture disponible…) qui n'existent nulle part côté contrat. Pas
-      un mapping direct possible sans changer le contrat — laissé en l'état,
-      pas de correctif de câblage à faire ici sans construire la
-      fonctionnalité côté backend.
-- [ ] **`parametres`, onglet Réversibilité : « Demander un export complet » et
-      « Demander la clôture de l'organisation » n'ont aucune route backend
-      équivalente.** Recherche complète dans les routers backend
-      (`export.*complet`, `export_complet`, `cloture`, `donnees.*organisation`) :
-      rien. `/organisations/{id}/suspension` existe (`org.manage`, réservé
-      super admin) mais c'est une action de l'exploitant, pas une demande de
-      clôture initiée par le client. Les deux boutons du client restent donc de
-      la démonstration pure même en mode API — un vrai export complet
-      multi-ressources et un vrai flux de clôture avec délais (J+30/J+60) sont
-      des chantiers neufs, pas des correctifs.
+- [x] **`parametres`, onglet Notifications (8 catégories) : contrepartie backend
+      toujours absente (gap réel, inchangé) — mais le bouton ne ment plus,
+      corrigé 2026-09-23** : `sansApi` honnête ajouté sur « Enregistrer les
+      canaux », cf. entrée ci-dessus.
+- [x] **`parametres`, onglet Réversibilité : « Demander un export complet » et
+      « Demander la clôture » mentaient encore en mode API — trouvé et corrigé
+      2026-09-23, raté par le sweep « boutons qui mentent » du 2026-09-19
+      (`PLAN-UI.md` §2 les listait déjà tous les deux vérifiés à tort).**
+      Aucune route backend équivalente (gap réel, confirmé inchangé), mais les
+      deux boutons affichaient un succès local (`operation` sans `appel` ni
+      `sansApi` pour l'export ; un simple toast sur `onConfirm` pour la
+      clôture) même en mode API réel. Corrigés avec `sansApi` honnête, même
+      patron que le reste de l'écran. `PLAN-UI.md` §2 et ce fichier corrigés
+      en conséquence — cette entrée était la preuve que « vérifié corrigé » ne
+      suffit pas sans re-vérifier chaque site d'appel individuellement.
 
 - [x] **Audit du module `audit` (backend) et de `/app/securite` (frontend) : le reste du
       module est réel — journal, filtre, export CSV/JSON réellement déposé dans MinIO,
