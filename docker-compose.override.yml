@@ -1,7 +1,23 @@
 # Local lab overlay: inject .env into api+worker; keep Real OpenStack + connectors.
 # Preserves Cloud Platform openstack wiring; adds MinIO/Zimbra/relais SMTP.
+#
+# `restart: unless-stopped` on every service below: vm-admin has rebooted twice
+# in one night unprompted (not an OOM, not a deliberate stop — see TODO.md
+# 2026-09-22 nuit) and none of these had a restart policy, so every reboot
+# meant a manual `docker compose up -d` before the stack answered again.
 services:
+  postgres:
+    restart: unless-stopped
+  valkey:
+    restart: unless-stopped
+  temporal:
+    restart: unless-stopped
+  temporal-ui:
+    restart: unless-stopped
+  mailpit:
+    restart: unless-stopped
   api:
+    restart: unless-stopped
     env_file: .env
     environment:
       SYNELIA_FOURNISSEUR: openstack
@@ -12,6 +28,7 @@ services:
       SYNELIA_RELAIS_SMTP_HOTE: relais-smtp
       SYNELIA_RELAIS_SMTP_PORT: "587"
   worker:
+    restart: unless-stopped
     env_file: .env
     environment:
       SYNELIA_FOURNISSEUR: openstack
