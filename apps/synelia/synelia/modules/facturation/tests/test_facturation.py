@@ -225,8 +225,10 @@ async def test_ventilation_par_espace_affiche_le_code_pas_luuid(client):
             "espaceId": espace_id,
             "nom": "vm-vent",
             "imageId": image_id,
-            "vcpu": 1,
-            "ramGo": 2,
+            # Catalogue réel du lab (`GET /v1/catalogue/gabarits`) : seuls
+            # k8s.worker (2/4/20) et k8s.master (4/8/20) existent aujourd'hui.
+            "vcpu": 2,
+            "ramGo": 4,
             "diskGo": 20,
         },
     )
