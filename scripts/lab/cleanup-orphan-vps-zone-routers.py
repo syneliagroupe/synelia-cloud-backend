@@ -43,13 +43,13 @@ def main() -> int:
             for p in conn.network.ports(device_id=r.id):
                 try:
                     conn.network.remove_interface_from_router(r.id, port_id=p.id)
-                except Exception:
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    print(f"  skip detach {p.id[:8]} on {r.id[:8]}: {exc}", flush=True)
             if r.external_gateway_info:
                 try:
                     conn.network.update_router(r.id, external_gateway_info=None)
-                except Exception:
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    print(f"  skip clear gw {r.id[:8]}: {exc}", flush=True)
             conn.network.delete_router(r.id, ignore_missing=True)
             deleted += 1
         except Exception as exc:
