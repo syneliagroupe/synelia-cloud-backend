@@ -219,15 +219,24 @@ async def test_ventilation_par_espace_affiche_le_code_pas_luuid(client):
     # actuellement publié sur dev01 est `ubuntu-24.04-v1.33.12` — voir `catalogue/router.py`.
     images = (await client.get("/v1/catalogue/images")).json()
     image_id = images[0]["id"]
+    # Ne pas figer vcpu/ramGo/diskGo en dur : le catalogue simulé (CI,
+    # s1.small/g1.medium/...) et le catalogue réel du lab (k8s.worker/
+    # k8s.master seulement) divergent et aucune combinaison fixe ne
+    # correspond aux deux — déjà vu deux fois de suite en écrivant ce
+    # correctif. Reprendre le premier gabarit réellement au catalogue,
+    # quel que soit l'environnement.
+    gabarits = (await client.get("/v1/catalogue/gabarits")).json()
+    assert gabarits, "Aucun gabarit au catalogue"
+    g = gabarits[0]
     r = await client.post(
         "/v1/vms",
         json={
             "espaceId": espace_id,
             "nom": "vm-vent",
             "imageId": image_id,
-            "vcpu": 1,
-            "ramGo": 2,
-            "diskGo": 20,
+            "vcpu": g["vcpu"],
+            "ramGo": g["ramGo"],
+            "diskGo": g["diskGo"],
         },
     )
     assert r.status_code == 202, r.text

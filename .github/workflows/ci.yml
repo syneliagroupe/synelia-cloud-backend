@@ -82,8 +82,29 @@ jobs:
         with: { enable-cache: true }
       - run: uv sync --frozen
       # extra `temporal` : couvre les définitions enregistrées par `synelia worker`
-      - run: uv run --frozen --extra temporal pytest -q ${{ matrix.chemins }}
+      - run: >
+          uv run --frozen --extra temporal coverage run -p -m pytest -q ${{ matrix.chemins }}
       - name: Couverture du contrat
         run: uv run python tools/contrat_diff.py --strict
       - name: Image Docker
         run: docker build -t synelia-cloud-backend:ci .
+      - name: Upload coverage data (${{ matrix.groupe }})
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-data-${{ matrix.groupe }}
+          path: .coverage.*
+          include-hidden-files: true
+
+  couverture:
+    needs: tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with: { enable-cache: true }
+      - run: uv sync --frozen
+      - uses: actions/download-artifact@v4
+        with: { pattern: coverage-data-*, merge-multiple: true }
+      - run: uv run coverage combine
+      - run: uv run coverage report --format=markdown >> "$GITHUB_STEP_SUMMARY"
+      - run: uv run coverage report

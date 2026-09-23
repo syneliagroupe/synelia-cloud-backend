@@ -27,6 +27,7 @@ dev = [
   "pyright>=1.1.400",
   "pytest>=8.3",
   "pytest-asyncio>=0.25",
+  "pytest-cov>=6.0",
   "httpx>=0.28",
   "datamodel-code-generator>=0.30",
   "schemathesis>=4.0",
@@ -72,3 +73,12 @@ reportMissingImports = true
 asyncio_mode = "auto"
 testpaths = ["apps", "packages"]
 filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.coverage.run]
+source = ["apps/synelia/synelia", "packages"]
+omit = ["*/tests/*", "*/__pycache__/*"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = ["pragma: no cover", "if TYPE_CHECKING:", "raise NotImplementedError"]
+skip_empty = true
