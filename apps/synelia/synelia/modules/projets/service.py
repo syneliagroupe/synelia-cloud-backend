@@ -298,6 +298,32 @@ async def _assurer_vm_projet(ctx: Contexte, projet: m.Projet) -> dict[str, Any]:
     return {**secrets, **secrets_maj}
 
 
+def _attendre_docker_pret(
+    ssh: SshSimule, ip: str, cle_privee: str, tentatives: int = 40, intervalle_s: float = 6.0
+) -> None:
+    """Cloud-init installe Docker au premier boot ; sshd peut répondre avant la fin de
+    `runcmd`. Sans cette attente, `docker compose up` échoue avec « command not found »."""
+    if not isinstance(ssh, SshReel) or not ip or not cle_privee:
+        return
+    derniere: Exception | None = None
+    for _ in range(tentatives):
+        try:
+            ssh.executer(
+                ip,
+                cle_privee,
+                "cloud-init status --wait 2>/dev/null || true; "
+                "command -v docker >/dev/null && systemctl is-active --quiet docker",
+            )
+            return
+        except Exception as exc:  # noqa: BLE001
+            derniere = exc
+            time.sleep(intervalle_s)
+    raise erreurs.amont_indisponible(
+        "projet (Docker)",
+        f"Docker indisponible sur la VM après {tentatives * intervalle_s:.0f}s : {derniere}",
+    )
+
+
 def _attendre_ssh_pret(
     ssh: SshSimule, ip: str, cle_privee: str, tentatives: int = 30, intervalle_s: float = 6.0
 ) -> None:
@@ -362,6 +388,7 @@ async def _installer_service_vm(
             f"{RACINE_DOCKER_VM_PROJET}/traefik-dynamic/service-{service.id}.yml",
             routage,
         )
+    await asyncio.to_thread(_attendre_docker_pret, ssh, ip, cle_privee)
     await asyncio.to_thread(ssh.executer, ip, cle_privee, f"cd {racine} && docker compose up -d")
     if expose:
         # Idempotent : `projet_service.create` sert aussi démarrage/redémarrage (cf. router),
