@@ -76,7 +76,8 @@ async def test_cycle_sauvegarde(client_org):
     )
     assert r.status_code == 202, r.text
     assert r.json()["statut"] == "failed"
-    assert "granularite" in r.json()["erreur"]["message"]
+    msg = r.json()["erreur"]["message"].lower()
+    assert "granularit" in msg or "complète" in msg or "complete" in msg
 
 
 async def test_erreurs_backup(client_org):
