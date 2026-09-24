@@ -247,6 +247,12 @@ async def _assurer_vm_projet(ctx: Contexte, projet: m.Projet) -> dict[str, Any]:
         cle_ssh=cle.get("ssh_cle_nom"),
         cloud_init=construire_cloud_init_vm_projet(cle.get("ssh_publique")),
     )
+    # Enregistré tout de suite, avant la FIP/règle SSH/pool LB qui suivent : si l'une d'elles
+    # lève (le pool du load balancer partagé, notamment, peut être indisponible), la VM créée
+    # ci-dessus doit rester repérable par `_supprimer_vm_projet` plutôt que de fuiter comme
+    # orpheline Nova invisible du projet (constaté en direct : Octavia immutable a fait
+    # échouer `creer_pool` après une VM déjà créée, secrets jamais posés, VM jamais nettoyée).
+    await depot_projet.definir_secrets(ctx, projet.id, {"vm_serveur_id": srv["id"]})
     ip_privee = (
         srv.get("ip_privee") or f"10.{hash(projet.id) % 250}.0.{hash('vm-projet') % 250 + 2}"
     )
