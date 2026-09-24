@@ -127,7 +127,9 @@ class ExecuteurSauvegardeRestore(Executeur):
                 raise erreurs.validation(
                     "Seule la restauration complète (VM entière) est prise en charge : "
                     "la sauvegarde ne capture pas de granularité fine.",
-                    champs={"granularite": f"'{granularite}' non pris en charge, utilisez 'complete'."},
+                    champs={
+                        "granularite": f"'{granularite}' non pris en charge, utilisez 'complete'."
+                    },
                 )
             from synelia.modules.web_hebergement.service import amont, serveur_id
 

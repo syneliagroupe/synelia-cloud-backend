@@ -148,9 +148,7 @@ class RegistrarOvh(RegistrarSimule):
         return {"id": str(commande.get("orderId", item.get("itemId", ""))), "code_auth": None}
 
     def renouveler(self, nom: str, duree_annees: int) -> None:
-        self._requete(
-            "POST", f"/domain/{nom}/serviceInfos/renew", {"period": duree_annees * 12}
-        )
+        self._requete("POST", f"/domain/{nom}/serviceInfos/renew", {"period": duree_annees * 12})
 
     def code_auth(self, nom: str) -> dict[str, Any]:
         self._requete("POST", f"/domain/{nom}/authInfo")
