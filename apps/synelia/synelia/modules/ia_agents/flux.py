@@ -533,6 +533,15 @@ def _preparer_variables(
 async def demarrer_execution(
     ctx: Contexte, flux: m.FluxOrchestration, entree: str, overrides: dict[str, Any] | None
 ) -> dict[str, Any]:
+    if not flux.etapes:
+        # `demarrer_travail` retombe sur le workflow générique dès que `etapes` est vide
+        # ([] est falsy) — `ExecuteurFluxExecuter.etape()` indexe ensuite dans
+        # `flux.etapes[index]` en supposant qu'il correspond au workflow réellement démarré,
+        # d'où un `IndexError` non attrapé sur la 1ère tâche. Un flux sans étape n'a de toute
+        # façon rien à exécuter : rejet propre plutôt qu'un crash.
+        raise erreurs.validation(
+            f"Le flux « {flux.nom} » n'a aucune étape à exécuter.", champs={"etapes": "requis"}
+        )
     taches = [{"nom": e.nom, "dureeS": 0} for e in flux.etapes]
     return await demarrer_travail(
         ctx,
