@@ -160,3 +160,24 @@ async def test_invoquer_agent_contenu_null_raisonnement(client):
     )
     assert r.status_code == 424
     assert r.json()["erreur"]["code"] == "amont_indisponible"
+
+
+async def test_executer_flux_sans_etape_rejet_propre(client):
+    """Reproduction en direct (2026-09-24) : exécuter un flux créé sans étape (état légitime
+    et courant, cf. l'app mobile qui crée systématiquement les flux ainsi) plantait avec un
+    `IndexError` non attrapé (`etapes: []` est falsy, `demarrer_travail` retombe sur le
+    workflow générique 3 tâches, puis `ExecuteurFluxExecuter.etape()` indexe dans
+    `flux.etapes[0]` qui n'existe pas). Doit rester un 422 franc, pas un crash serveur."""
+    r = await client.post(
+        "/v1/ia/flux",
+        json={
+            "nom": "Flux sans étape",
+            "declencheur": {"type": "message", "libelle": "Message entrant", "detail": "test"},
+        },
+    )
+    assert r.status_code == 201, r.text
+    flux_id = r.json()["id"]
+
+    r = await client.post(f"/v1/ia/flux/{flux_id}/executer", json={"entree": "test"})
+    assert r.status_code == 422, r.text
+    assert r.json()["erreur"]["code"] == "validation"
