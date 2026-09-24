@@ -110,17 +110,27 @@ class ExecuteurSauvegardeRestore(Executeur):
 
     async def etape(self, ctx: Contexte, travail: Travail, index: int, nom: str) -> str | None:
         if index == 1:  # « Restaurer les fichiers » (catalogue `web.backup.restore`)
+            from synelia_kernel import erreurs
+
             entre = travail.entree or {}
             s = await depot.obtenir(ctx, travail.cible_id or "")
             execution = next((e for e in s.executions if e.id == entre.get("executionId")), None)
-            # Une restauration ne vaut que ce que vaut l'image qu'elle restaurerait — même
-            # garde-fou que `ExecuteurSauvegardeTestRestauration` : point inconnu (ex. demo),
-            # granularité que la sauvegarde ne capture pas (elle ne fait qu'un instantané
-            # Nova/Glance de la VM entière, pas d'export séparé par fichier/base/messagerie/
-            # configuration) ou absence d'image réelle associée → rien à restaurer pour de
-            # vrai, pas d'échec inventé.
-            if execution is None or entre.get("granularite") != "complete":
-                return None
+            if execution is None:
+                raise erreurs.introuvable("Point de restauration", entre.get("executionId") or "")
+            # La sauvegarde ne capture qu'un instantané Nova/Glance de la VM entière : aucune
+            # granularité fine (fichiers/base/boîte mail/configuration seuls) n'est réellement
+            # implémentée. Avant ce correctif, une demande sur ces granularités rendait un job
+            # `done` sans avoir rien restauré — faux succès silencieux. On échoue franchement
+            # plutôt que d'inventer un résultat.
+            granularite = entre.get("granularite")
+            if granularite != "complete":
+                raise erreurs.validation(
+                    "Seule la restauration complète (VM entière) est prise en charge : "
+                    "la sauvegarde ne capture pas de granularité fine.",
+                    champs={
+                        "granularite": f"'{granularite}' non pris en charge, utilisez 'complete'."
+                    },
+                )
             from synelia.modules.web_hebergement.service import amont, serveur_id
 
             try:
@@ -129,7 +139,11 @@ class ExecuteurSauvegardeRestore(Executeur):
                 secrets = {}
             image_id = secrets.get(f"image_{execution.id}")
             if not image_id:
-                return None
+                raise erreurs.conflit(
+                    "Aucune image amont associée à ce point de restauration (sauvegarde de "
+                    "démo ou antérieure au câblage réel) : restauration impossible.",
+                    code="image_restauration_absente",
+                )
             sid = await serveur_id(ctx, s.hebergementId)
             await asyncio.to_thread(amont().restaurer, sid, image_id)
             return f"Serveur restauré depuis l'image {image_id}"

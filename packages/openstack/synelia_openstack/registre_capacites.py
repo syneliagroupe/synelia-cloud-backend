@@ -23,10 +23,10 @@ class Capacite:
     description: str
     module: str  # fichier sans .py: "registrar"
     classe_simule: str  # "RegistrarSimule"
-    classe_reel: str | None  # "RegistrarOpenStack" | None si pas de Reel
+    classe_reel: str | None  # "RegistrarOvh" | None si pas de Reel
     env_gate: str | None  # "SYNELIA_REGISTRAR_URL" | None
     etat: Etat
-    detail: str | None = None  # ex. "RegistrarOpenStack hérite vide"
+    detail: str | None = None  # ex. "RegistrarOvh hérite vide"
 
 
 REGISTRE: list[Capacite] = [
@@ -36,10 +36,10 @@ REGISTRE: list[Capacite] = [
         "Disponibilité/commande/transfert de domaine",
         "registrar",
         "RegistrarSimule",
-        "RegistrarOpenStack",
+        "RegistrarOvh",
         "SYNELIA_REGISTRAR_URL",
         "simule",
-        "Héritage vide — aucun partenaire câblé",
+        "RegistrarOvh quand SYNELIA_REGISTRAR_URL + clés OVH sont posées",
     ),
     Capacite(
         "acme.certificat",

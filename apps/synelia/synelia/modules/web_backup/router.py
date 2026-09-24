@@ -121,7 +121,7 @@ async def restaurer_sauvegarde_web(
         s.nomServi,
         cible_type="web_sauvegarde",
         cible_id=s.id,
-        entree={"executionId": corps.executionId},
+        entree=corps.model_dump(mode="json"),
     )
 
 

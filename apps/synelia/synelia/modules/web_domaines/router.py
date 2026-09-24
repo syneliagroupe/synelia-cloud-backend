@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from fastapi import APIRouter, Depends, status
@@ -31,10 +32,11 @@ async def verifier_disponibilite_domaine(
     candidats = [f"{base}{e}" for e in liste]
     dispo = []
     for c in candidats:
-        pris = (
-            c.lower() in {"google.com", "synelia.ci"}
-            or await Depot("web_domaine", m.Domaine).par_nom(ctx, c) is not None
-        )
+        deja_a_nous = await Depot("web_domaine", m.Domaine).par_nom(ctx, c) is not None
+        # `verifier()` interroge le vrai registrar (OVH) une fois `RegistrarOvh` branché — sans
+        # cet appel, "disponible" ne voulait dire que « pas déjà chez nous en base », jamais
+        # « achetable » : un domaine réellement pris ailleurs s'affichait comme libre.
+        pris = deja_a_nous or not await asyncio.to_thread(service.amont().verifier, c)
         dispo.append(
             {
                 "nom": c,
