@@ -60,11 +60,23 @@ async def test_cycle_sauvegarde(client_org):
     sauvegarde = (await client_org.get(f"/v1/web/backup/{sid}")).json()
     assert sauvegarde["dernierTestRestauration"]["resultat"] == "ok"
 
+    execution_id = sauvegarde["executions"][-1]["id"]
     r = await client_org.post(
-        f"/v1/web/backup/{sid}/restauration", json={"executionId": "x", "granularite": "complete"}
+        f"/v1/web/backup/{sid}/restauration",
+        json={"executionId": execution_id, "granularite": "complete"},
     )
     assert r.status_code == 202, r.text
     assert r.json()["type"] == "web.backup.restore" and r.json()["statut"] == "done"
+
+    # Granularité non prise en charge (seule "complete" restaure réellement) : échec franc,
+    # pas un faux succès silencieux.
+    r = await client_org.post(
+        f"/v1/web/backup/{sid}/restauration",
+        json={"executionId": execution_id, "granularite": "fichiers"},
+    )
+    assert r.status_code == 202, r.text
+    assert r.json()["statut"] == "failed"
+    assert "granularite" in r.json()["erreur"]["message"]
 
 
 async def test_erreurs_backup(client_org):
