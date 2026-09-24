@@ -27,6 +27,10 @@ services:
       SYNELIA_ZIMBRA_URL: https://zimbra:7071
       SYNELIA_RELAIS_SMTP_HOTE: relais-smtp
       SYNELIA_RELAIS_SMTP_PORT: "587"
+      SYNELIA_LITELLM_URL: http://litellm:4000
+    depends_on:
+      litellm:
+        condition: service_started
   worker:
     restart: unless-stopped
     env_file: .env
@@ -38,6 +42,18 @@ services:
       SYNELIA_ZIMBRA_URL: https://zimbra:7071
       SYNELIA_RELAIS_SMTP_HOTE: relais-smtp
       SYNELIA_RELAIS_SMTP_PORT: "587"
+      SYNELIA_LITELLM_URL: http://litellm:4000
+    depends_on:
+      litellm:
+        condition: service_started
+  litellm:
+    image: ghcr.io/berriai/litellm:main-stable
+    environment:
+      SYNELIA_OPENROUTER_KEY: ${SYNELIA_OPENROUTER_KEY:?}
+      SYNELIA_LITELLM_MASTER_KEY: ${SYNELIA_LITELLM_MASTER_KEY:?}
+    volumes: ["./litellm/config.yaml:/app/config.yaml:ro"]
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    restart: unless-stopped
   relais-smtp:
     env_file: .env
     environment:
