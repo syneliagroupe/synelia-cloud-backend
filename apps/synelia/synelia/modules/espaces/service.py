@@ -515,15 +515,23 @@ async def semer_zone_vps(session: AsyncSession) -> None:
 
 
 async def _provisionner_zone_vps(session: AsyncSession, espace_id: str, org_id: str) -> None:
-    """Reprise après sinistre / nouvel environnement seulement — sur ce lab la ligne existe
-    déjà, cette branche ne s'exécute jamais. Crée l'Espace normalement, scellé par `org_id`
-    comme n'importe quelle création cliente (`espaces.router.creer_espace`), pour que les
-    étapes internes de `ExecuteurEspaceCreate` (lues via le dépôt client scellé par
-    organisation) le retrouvent ; exécute le job réel `espace.create` **en ligne** — jamais
-    détaché, la bascule vers `org_id NULL` juste après ne doit jamais arriver avant que la
-    dernière étape n'ait fini de relire la ligne par organisation — puis bascule enfin la
-    ligne sur la convention plateforme, comme `semer_zone_vps` le fait pour une ligne
-    préexistante."""
+    """Reprise après sinistre / nouvel environnement seulement sur la base **persistante** du
+    lab — la ligne y existe déjà, cette branche ne s'y exécute jamais. Elle s'exécute en
+    revanche à *chaque* run pytest qui boote l'application (`synelia_testing.configurer_env`
+    donne une base SQLite neuve à chaque fois, donc la ligne y est toujours absente) alors que
+    `SYNELIA_VPS_ZONE_ORG_ID`/`SYNELIA_FOURNISSEUR` restent ceux du `.env` réel du lab — sans
+    quoi cette fonction ne ferait jamais rien en test. C'est pour ça que `IdentiteOpenStack.
+    creer_reseau` (cf. `synelia_openstack.identite`) doit être idempotent par nom : c'est le
+    seul garde-fou qui évite de recréer un projet/réseau/routeur réel à chaque exécution de la
+    suite (voir mémoire de session « orphan vps-zone-net cleanup »).
+
+    Crée l'Espace normalement, scellé par `org_id` comme n'importe quelle création cliente
+    (`espaces.router.creer_espace`), pour que les étapes internes de `ExecuteurEspaceCreate`
+    (lues via le dépôt client scellé par organisation) le retrouvent ; exécute le job réel
+    `espace.create` **en ligne** — jamais détaché, la bascule vers `org_id NULL` juste après ne
+    doit jamais arriver avant que la dernière étape n'ait fini de relire la ligne par
+    organisation — puis bascule enfin la ligne sur la convention plateforme, comme
+    `semer_zone_vps` le fait pour une ligne préexistante."""
     import os
     from types import SimpleNamespace
 
