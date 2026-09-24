@@ -97,18 +97,32 @@ class IdentiteOpenStack(IdentiteSimule):
         return next((n for n in c.network.networks(is_router_external=True)), None)
 
     def creer_reseau(self, projet_id: str, nom: str, cidr: str) -> dict[str, Any]:
+        """Idempotent par nom, comme `creer_domaine`/`creer_projet` ci-dessus : un rejeu de
+        l'amorçage (ex. `espaces.service._provisionner_zone_vps`, base de test éphémère où le
+        projet Keystone est retrouvé mais la ligne locale qui suivait son réseau a disparu) doit
+        retrouver le même réseau/routeur plutôt que d'en créer un homonyme de plus — c'est
+        exactement ce qui épuisait le pool de passerelles d'`external-net` (une par routeur créé)
+        à chaque exécution de la suite pytest contre le lab réel."""
         c = self._conn()
-        net = c.network.create_network(name=nom, project_id=projet_id)
-        sub = c.network.create_subnet(
+        net = next(
+            (n for n in c.network.networks(project_id=projet_id) if n.name == nom), None
+        ) or c.network.create_network(name=nom, project_id=projet_id)
+        sub = next(
+            (s for s in c.network.subnets(network_id=net.id) if s.name == f"{nom}-sub"), None
+        ) or c.network.create_subnet(
             name=f"{nom}-sub", network_id=net.id, ip_version=4, cidr=cidr, project_id=projet_id
         )
-        ext = self._reseau_externe(c)
-        rtr = c.network.create_router(
-            name=f"{nom}-rtr",
-            project_id=projet_id,
-            external_gateway_info={"network_id": ext.id} if ext else None,
+        rtr = next(
+            (r for r in c.network.routers(project_id=projet_id) if r.name == f"{nom}-rtr"), None
         )
-        c.network.add_interface_to_router(rtr, subnet_id=sub.id)
+        if rtr is None:
+            ext = self._reseau_externe(c)
+            rtr = c.network.create_router(
+                name=f"{nom}-rtr",
+                project_id=projet_id,
+                external_gateway_info={"network_id": ext.id} if ext else None,
+            )
+            c.network.add_interface_to_router(rtr, subnet_id=sub.id)
         return {"reseau_id": net.id, "sous_reseau_id": sub.id, "routeur_id": rtr.id}
 
     def supprimer_reseau(self, reseau_id: str, routeur_id: str) -> None:
