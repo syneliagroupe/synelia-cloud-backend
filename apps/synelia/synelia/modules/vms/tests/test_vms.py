@@ -212,6 +212,20 @@ async def test_arret_demarrage_redemarrage(client):
     assert r.status_code == 202 and r.json()["statut"] == "done"
 
 
+async def test_arret_demarrage_redemarrage_sans_corps(client):
+    """Le contrat déclare le corps optionnel (requestBody.required=false) : un appel
+    sans JSON du tout doit fonctionner, pas renvoyer 400 « Corps JSON illisible ou
+    absent »."""
+    espace_id = await _espace_demo(client)
+    vid = await _creer_vm(client, espace_id, "power-sans-corps")
+    r = await client.post(f"/v1/vms/{vid}/arret")
+    assert r.status_code == 202 and r.json()["statut"] == "done"
+    r = await client.post(f"/v1/vms/{vid}/demarrage")
+    assert r.status_code == 202
+    r = await client.post(f"/v1/vms/{vid}/redemarrage")
+    assert r.status_code == 202 and r.json()["statut"] == "done"
+
+
 async def test_console_vm(client):
     espace_id = await _espace_demo(client)
     vid = await _creer_vm(client, espace_id, "console")

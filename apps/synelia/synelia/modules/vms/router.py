@@ -214,7 +214,9 @@ async def _controle_etat(ctx: Contexte, vm_id: str, sens: str) -> m.Vm:
     response_model_exclude_none=True,
 )
 async def arreter_vm(
-    vmId: str, corps: m.VmsVmIdArretPostRequest, ctx: Contexte = Depends(exige("vm.power"))
+    vmId: str,
+    corps: m.VmsVmIdArretPostRequest | None = None,
+    ctx: Contexte = Depends(exige("vm.power")),
 ) -> Any:  # noqa: N803
     vm = await _controle_etat(ctx, vmId, "arret")
     await journaliser(ctx, action="vm.arret", cible_type="vm", cible_id=vmId, cible=vm.nom)
@@ -224,7 +226,7 @@ async def arreter_vm(
         vm.nom,
         cible_type="vm",
         cible_id=vmId,
-        entree=corps.model_dump(mode="json"),
+        entree=(corps or m.VmsVmIdArretPostRequest()).model_dump(mode="json"),
     )
 
 
@@ -235,7 +237,9 @@ async def arreter_vm(
     response_model_exclude_none=True,
 )
 async def demarrer_vm(
-    vmId: str, corps: m.VmsVmIdDemarragePostRequest, ctx: Contexte = Depends(exige("vm.power"))
+    vmId: str,
+    corps: m.VmsVmIdDemarragePostRequest | None = None,
+    ctx: Contexte = Depends(exige("vm.power")),
 ) -> Any:  # noqa: N803
     vm = await _controle_etat(ctx, vmId, "demarrage")
     await journaliser(ctx, action="vm.demarrage", cible_type="vm", cible_id=vmId, cible=vm.nom)
@@ -245,7 +249,7 @@ async def demarrer_vm(
         vm.nom,
         cible_type="vm",
         cible_id=vmId,
-        entree=corps.model_dump(mode="json"),
+        entree=(corps or m.VmsVmIdDemarragePostRequest()).model_dump(mode="json"),
     )
 
 
@@ -256,7 +260,9 @@ async def demarrer_vm(
     response_model_exclude_none=True,
 )
 async def redemarrer_vm(
-    vmId: str, corps: m.VmsVmIdRedemarragePostRequest, ctx: Contexte = Depends(exige("vm.power"))
+    vmId: str,
+    corps: m.VmsVmIdRedemarragePostRequest | None = None,
+    ctx: Contexte = Depends(exige("vm.power")),
 ) -> Any:  # noqa: N803
     vm = await _controle_etat(ctx, vmId, "redemarrage")
     await journaliser(ctx, action="vm.redemarrage", cible_type="vm", cible_id=vmId, cible=vm.nom)
@@ -266,7 +272,7 @@ async def redemarrer_vm(
         vm.nom,
         cible_type="vm",
         cible_id=vmId,
-        entree=corps.model_dump(mode="json"),
+        entree=(corps or m.VmsVmIdRedemarragePostRequest()).model_dump(mode="json"),
     )
 
 
