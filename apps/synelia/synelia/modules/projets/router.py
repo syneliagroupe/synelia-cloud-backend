@@ -140,6 +140,10 @@ async def modifier_projet(
         changements["espaceId"] = corps.espaceId
     if corps.environnements is not None:
         changements["environnements"] = corps.environnements
+    if corps.etiquettes is not None:
+        changements["etiquettes"] = corps.etiquettes
+    if corps.clusterId is not None:
+        changements["clusterId"] = corps.clusterId
     await s.depot_projet.modifier(ctx, projetId, changements)
     await journaliser(
         ctx, action="projet.modification", cible_type="projet", cible_id=projetId, cible=p.nom
