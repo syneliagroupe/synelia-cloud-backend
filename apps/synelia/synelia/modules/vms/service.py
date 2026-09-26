@@ -497,6 +497,24 @@ class ExecuteurVmResize(Executeur):
 
 @executeur("vm.migrate")
 class ExecuteurVmMigrate(Executeur):
+    """Jusqu'ici `terminer()` ne posait que le statut `running` : aucun override d'`etape()`,
+    donc simulation par défaut de `Executeur` (docs/GUIDE-MODULE.md — « sans exécuteur [réel],
+    le travail réussit en simulation ») — un `POST .../migration` rendait déjà les 4 étapes du
+    catalogue (`Choisir un hôte compatible`, `Transférer la mémoire vive`, `Basculer
+    l'exécution`, `Libérer l'hôte source`) « ok » en quelques secondes sans qu'aucun code ne
+    touche Nova ni ne vérifie qu'un second hôte compute existe (cf. mémoire
+    `vm-migrate-fake-success-bug`, même motif que `vm-snapshot-restore-fake-success-bug`).
+    Migre maintenant réellement via `Compute.migrer()` (`live_migrate_server`), qui échoue
+    franchement si le lab n'a qu'un seul hyperviseur plutôt que de fabriquer un succès."""
+
+    async def etape(self, ctx: Contexte, travail: Travail, index: int, nom: str) -> str | None:
+        if index == 1:  # « Transférer la mémoire vive »
+            vm = await depot.obtenir(ctx, travail.cible_id or "")
+            sid = await serveur_id(ctx, vm.id, travail)
+            hote = await asyncio.to_thread(amont().migrer, sid)
+            return f"Migré vers l'hôte {hote}"
+        return None
+
     async def terminer(self, ctx: Contexte, travail: Travail) -> None:
         await depot.definir_statut(ctx, travail.cible_id or "", "running")
 

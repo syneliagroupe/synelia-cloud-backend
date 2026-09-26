@@ -255,13 +255,57 @@ async def test_metriques_vm(client):
     assert any(s["metrique"] == "cpu" for s in corps["series"])
 
 
-async def test_migration_vm(client):
+async def test_migration_vm(client, monkeypatch):
+    # `vm.migrate` rendait `done` en quelques secondes sans jamais appeler l'amont (cf.
+    # memoire `vm-migrate-fake-success-bug`) : on verifie ici que `Compute.migrer()` est
+    # bien invoque avec le bon serveur, pas seulement que le job se termine.
+    from synelia.modules.vms import service as vms_service
+
     espace_id = await _espace_demo(client)
     vid = await _creer_vm(client, espace_id, "migrate")
+    appels = []
+    corriger_amont(
+        monkeypatch,
+        vms_service,
+        "ComputeSimule",
+        "ComputeOpenStack",
+        "migrer",
+        lambda self, serveur_id: appels.append(serveur_id) or "hote-b",
+    )
     r = await client.post(f"/v1/vms/{vid}/migration", json={"site": "ABJ"})
     assert r.status_code == 202 and r.json()["statut"] == "done"
+    assert len(appels) == 1  # l'amont a bien ete appele, pas seulement la fiche DB
     r = await client.post(f"/v1/vms/{vid}/migration", json={"site": "GBM"})
     assert r.status_code == 422 and r.json()["erreur"]["code"] == "non_porte"
+
+
+def test_migrer_sans_second_hote_echoue_franchement():
+    """`ComputeOpenStack.migrer` doit echouer franchement (`amont_indisponible`, pas un faux
+    succes) quand Nova ne connait aucun hyperviseur autre que celui qui heberge deja le
+    serveur -- la vraie limite d'un lab a un seul hote compute que `vm.migrate` doit
+    honnetement heurter plutot que de la masquer (cf. memoire `vm-migrate-fake-success-bug`)."""
+    from types import SimpleNamespace
+
+    from synelia_kernel import erreurs
+    from synelia_openstack.compute import ComputeOpenStack
+
+    class _ConnexionUnSeulHote:
+        class compute:
+            @staticmethod
+            def get_server(serveur_id):
+                return SimpleNamespace(compute_host="seul-hote", hypervisor_hostname=None)
+
+            @staticmethod
+            def hypervisors():
+                return [SimpleNamespace(name="seul-hote")]
+
+    c = ComputeOpenStack()
+    c._c = lambda: _ConnexionUnSeulHote
+    try:
+        c.migrer("srv-1")
+        raise AssertionError("devait lever amont_indisponible")
+    except erreurs.AppError as exc:
+        assert exc.code == "amont_indisponible"
 
 
 async def test_redimensionner_vm(client):
