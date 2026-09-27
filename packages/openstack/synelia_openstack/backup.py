@@ -42,6 +42,14 @@ class BackupOpenStack(BackupSimule):
 
     def executer_plan(self, plan: str, ressources: int) -> dict[str, Any]:
         c = self._c()
-        if hasattr(c, "backup"):
+        # `hasattr(c, "backup")` était TOUJOURS vrai : `ServiceDescription.__get__`
+        # d'openstacksdk ne lève jamais `AttributeError` pour un service absent du
+        # catalogue Keystone, il renvoie un shim désactivé (`_ServiceDisabledProxyShim`)
+        # — l'appel suivant plantait alors sur ce shim, systématiquement, dès qu'aucune
+        # Cinder volume n'était rattachée à la ressource visée (cf. mémoire
+        # `backup-service-hasattr-always-true`). `has_service()` interroge le vrai
+        # catalogue Keystone et renvoie honnêtement `False` si le service (Karbor/Freezer)
+        # n'y figure pas, au lieu de planter.
+        if c.has_service("backup"):
             c.backup.create_plan_run(plan_id=plan)
         return super().executer_plan(plan, ressources)
