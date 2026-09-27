@@ -370,7 +370,7 @@ async def creer_environnement(
         protection=corps.protection,
         sante=SANTE_NULLE,
         strategie=corps.strategie,
-        canari=corps.canari,
+        canari=m.Canari(**corps.canari.model_dump()) if corps.canari else None,
     )
     await depot_env.creer(ctx, env, parent_id=parent_id)
     if app_id:
