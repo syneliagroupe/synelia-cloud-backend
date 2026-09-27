@@ -66,8 +66,18 @@ async def test_cycle_base(client_org):
     rotation = r.json()
     assert rotation["motDePasse"]
 
-    r = await client_org.get(f"/v1/bases/{bid}/metriques")
-    assert r.status_code == 200 and r.json()["series"] == []
+    r = await client_org.get(f"/v1/bases/{bid}/metriques", params={"fenetre": "7j"})
+    assert r.status_code == 200
+    series = r.json()["series"]
+    # Pas de supervision temps réel branchée pour les bases managées : les séries sont
+    # déclarées (métrique/unité/fenêtre honorée) mais sans points historiques pour l'instant.
+    assert {s["metrique"] for s in series} == {"cpu", "ram", "disque", "connexions"}
+    assert all(s["fenetre"] == "7j" and s["points"] == [] for s in series)
+
+    # Une fenêtre inconnue retombe sur la valeur par défaut plutôt que de planter.
+    r = await client_org.get(f"/v1/bases/{bid}/metriques", params={"fenetre": "n_importe_quoi"})
+    assert r.status_code == 200
+    assert all(s["fenetre"] == "24h" for s in r.json()["series"])
 
     r = await client_org.post(f"/v1/bases/{bid}/replicas", json={"site": "ABJ"})
     assert r.status_code == 202 and r.json()["statut"] == "done"

@@ -211,6 +211,14 @@ async def rotationner_identifiants_base(
     )
 
 
+_SERIES_BASE: tuple[tuple[str, str], ...] = (
+    ("cpu", "%"),
+    ("ram", "Go"),
+    ("disque", "Go"),
+    ("connexions", "conn"),
+)
+
+
 @router.get(
     "/{baseId}/metriques",
     response_model=m.BasesBaseIdMetriquesGetResponse,
@@ -220,7 +228,16 @@ async def obtenir_metriques_base(
     baseId: str, fenetre: str | None = None, ctx: Contexte = Depends(exige(None))
 ) -> Any:  # noqa: N803
     await depot.obtenir(ctx, baseId)
-    return m.BasesBaseIdMetriquesGetResponse(series=[])
+    fen = fenetre if fenetre in ("24h", "7j", "30j") else "24h"
+    # Pas d'intégration de supervision temps réel pour les bases managées aujourd'hui (même
+    # limite que services_manages) : on déclare les séries attendues, avec `fenetre` honorée,
+    # plutôt qu'un stub vide qui ignore le paramètre. Aucun point historique n'est encore
+    # disponible tant qu'aucun amont de métriques n'est branché.
+    series = [
+        m.Serie(metrique=metrique, unite=unite, fenetre=fen, points=[])
+        for metrique, unite in _SERIES_BASE
+    ]
+    return m.BasesBaseIdMetriquesGetResponse(series=series)
 
 
 @router.post(
