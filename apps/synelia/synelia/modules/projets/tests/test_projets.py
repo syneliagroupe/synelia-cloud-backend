@@ -59,6 +59,22 @@ async def test_cycle_projet(client_org):
     r = await client_org.patch(f"/v1/projets/{pid}", json={"nom": "CRM 2", "espaceId": espace_id})
     assert r.status_code == 200 and r.json()["nom"] == "CRM 2"
 
+    # `etiquettes` et `clusterId` sont documentés comme modifiables dans `ProjetCreation`
+    # (seul `cible` est explicitement ignoré en modification) : une régression avait
+    # laissé `modifier_projet` les lire sans jamais les appliquer.
+    r = await client_org.patch(
+        f"/v1/projets/{pid}",
+        json={
+            "nom": "CRM 2",
+            "espaceId": espace_id,
+            "etiquettes": ["qa", "test"],
+            "clusterId": "cluster-abc",
+        },
+    )
+    assert r.status_code == 200
+    assert r.json()["etiquettes"] == ["qa", "test"]
+    assert r.json()["clusterId"] == "cluster-abc"
+
     r = await client_org.delete(f"/v1/projets/{pid}", params={"confirmation": "mauvais"})
     assert r.status_code == 422
 
