@@ -136,6 +136,45 @@ async def test_cycle_volume(client_org):
     _affirmer_volume_cinder_absent("data-01", avant)
 
 
+async def test_volume_create_echoue_ne_laisse_pas_de_fantome(client_org, monkeypatch):
+    """Un `volume.create` qui échoue côté Cinder ne doit pas laisser un volume qui a
+    l'air sain dans l'API : `statut` doit refléter l'échec (`erreur`) et le volume ne
+    doit plus compter dans le quota/usage de l'Espace."""
+    from synelia.modules.stockage import service as stockage_service
+
+    class _CinderEnPanne:
+        def creer_volume(self, **kw):
+            raise RuntimeError("Cinder injoignable (simulé pour ce test)")
+
+    espace_id = await _espace(client_org)
+    stockage_avant = (await client_org.get(f"/v1/espaces/{espace_id}")).json()["usage"][
+        "stockageTo"
+    ]
+
+    monkeypatch.setattr(stockage_service, "amont_cinder", lambda: _CinderEnPanne())
+
+    corps = {
+        "espaceId": espace_id,
+        "nom": "volume-fantome",
+        "tailleGo": 500,
+        "classe": "ssd",
+        "chiffre": False,
+    }
+    r = await client_org.post("/v1/volumes", json=corps)
+    assert r.status_code == 202, r.text
+    assert r.json()["statut"] == "rolled_back"
+
+    vols = (await client_org.get("/v1/volumes")).json()["donnees"]
+    vol = next(v for v in vols if v["nom"] == "volume-fantome")
+    assert vol["statut"] == "erreur"
+
+    # Le volume en erreur (500 Go) ne doit pas gonfler l'usage de stockage de l'Espace.
+    stockage_apres = (await client_org.get(f"/v1/espaces/{espace_id}")).json()["usage"][
+        "stockageTo"
+    ]
+    assert stockage_apres == stockage_avant
+
+
 async def test_volume_quota_depasse(client_org):
     espace_id = await _espace(client_org)
     corps = {

@@ -4100,6 +4100,7 @@ class Volume(BaseModel):
     ephemere: bool
     iops: int
     montage: str | None = None
+    statut: Literal["creation", "disponible", "erreur"] = "disponible"
 
 
 class VolumeCreation(BaseModel):

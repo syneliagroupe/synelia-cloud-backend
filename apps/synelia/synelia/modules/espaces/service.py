@@ -177,7 +177,11 @@ async def usage(ctx: Contexte, espace_id: str) -> dict[str, float]:
         ctx, filtre=lambda v: v.espaceId == espace_id and v.statut != "error"
     )
     volumes = await Depot("volume", m.Volume).tous(
-        ctx, filtre=lambda v: getattr(v, "espaceId", None) == espace_id
+        ctx,
+        filtre=lambda v: (
+            getattr(v, "espaceId", None) == espace_id
+            and getattr(v, "statut", "disponible") != "erreur"
+        ),
     )
     return {
         "vcpu": sum(v.vcpu for v in vms),
