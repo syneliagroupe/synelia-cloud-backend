@@ -54073,6 +54073,16 @@
           },
           "montage": {
             "type": "string"
+          },
+          "statut": {
+            "type": "string",
+            "enum": [
+              "creation",
+              "disponible",
+              "erreur"
+            ],
+            "default": "disponible",
+            "description": "État réel du provisionnement Cinder ; 'erreur' si le job de création a échoué (voir la ressource, sans backing réel dans ce cas)."
           }
         },
         "required": [
