@@ -190,3 +190,30 @@ async def test_replica_provisionne_un_serveur_reel(client_org, monkeypatch):
     r = await client_org.delete(f"/v1/bases/{bid}", params={"confirmation": "app-replica-test"})
     assert r.status_code == 202 and r.json()["statut"] == "done"
     assert "srv-repl-1" in supprimes, "le serveur du réplica doit être nettoyé à la suppression"
+
+
+async def test_restauration_refuse_si_pitr_desactive(client_org):
+    """`POST /bases/{id}/restauration` ne doit pas laisser croire qu'un instantané existe
+    et qu'une restauration est possible si le PITR n'a jamais été activé sur la base — il
+    n'y a alors rien de réel à restaurer."""
+    espace_id = await _espace(client_org)
+    r = await client_org.post(
+        "/v1/bases",
+        json={
+            "espaceId": espace_id,
+            "nom": "sans-pitr",
+            "moteur": "postgresql",
+            "version": "16",
+            "palier": "s1",
+            "pitr": False,
+        },
+    )
+    assert r.status_code == 202, r.text
+    bid = (await client_org.get("/v1/bases")).json()["donnees"][0]["id"]
+
+    r = await client_org.post(
+        f"/v1/bases/{bid}/restauration",
+        json={"instant": "2026-09-01T10:00:00Z", "nomCible": "sans-pitr-restore"},
+    )
+    assert r.status_code == 409, r.text
+    assert r.json()["erreur"]["code"] == "pitr_desactive"
