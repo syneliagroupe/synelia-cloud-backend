@@ -211,6 +211,26 @@ async def test_rollback_passe_par_le_travail_app_rollback(client_org):
     assert r.status_code == 202
 
 
+async def test_creer_environnement_avec_canari(client_org):
+    r = await client_org.post(
+        "/v1/environnements",
+        json={
+            "nom": "canari-prod",
+            "strategie": "canari",
+            "canari": {"pct": 10, "seuil5xx": 5, "fenetreS": 60},
+        },
+    )
+    assert r.status_code == 201, r.text
+    env = r.json()
+    assert env["strategie"] == "canari"
+    assert env["canari"] == {"pct": 10.0, "seuil5xx": 5.0, "fenetreS": 60}
+
+    r = await client_org.delete(
+        f"/v1/environnements/{env['id']}", params={"confirmation": "canari-prod"}
+    )
+    assert r.status_code == 202
+
+
 async def test_rollback_sans_rien(client_org):
     env = await _environnement(client_org)
     r = await client_org.post(
