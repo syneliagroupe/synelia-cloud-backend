@@ -1,6 +1,6 @@
 """Bases managées : cycle de vie, identifiants, réplicas, restauration."""
 
-from synelia_testing import connexion_lab, sur_lab_reel
+from synelia_testing import connexion_lab, corriger_amont, sur_lab_reel
 
 
 async def _espace(client_org) -> str:
@@ -130,3 +130,63 @@ async def test_rotation_identifiants_refuse_franchement_en_amont_reel(client_org
 
     secrets_apres = (await client_org.get(f"/v1/bases/{bid}/identifiants")).json()
     assert secrets_apres["utilisateur"] == secrets_avant["utilisateur"]
+
+
+async def test_replica_provisionne_un_serveur_reel(client_org, monkeypatch):
+    """Ajouter un réplica doit vraiment provisionner un second serveur amont — pas seulement
+    incrémenter `replicas` sans aucune ressource derrière (bug de l'audit exhaustif du
+    2026-09-26 : `ExecuteurBaseReplica.terminer` ne faisait que `base.replicas + 1`, aucun
+    Nova/serveur créé, VM count identique avant/après). On vérifie l'appel réel à
+    `creer_serveur` (nom distinct de l'instance primaire) et son nettoyage à la suppression
+    (sinon fuite de VM orpheline — cf. `ExecuteurBaseDelete`)."""
+    from synelia.modules.bases import service as bases_service
+
+    espace_id = await _espace(client_org)
+    corps = {
+        "espaceId": espace_id,
+        "nom": "app-replica-test",
+        "moteur": "postgresql",
+        "version": "16",
+        "palier": "s1",
+        "ha": False,
+        "tailleGo": 20,
+        "pitr": False,
+        "replicas": 0,
+    }
+    r = await client_org.post("/v1/bases", json=corps)
+    assert r.status_code == 202, r.text
+    bid = (await client_org.get("/v1/bases")).json()["donnees"][0]["id"]
+
+    appels: list[dict] = []
+    supprimes: list[str] = []
+    corriger_amont(
+        monkeypatch,
+        bases_service,
+        "ComputeSimule",
+        "ComputeOpenStack",
+        "creer_serveur",
+        lambda self, **kw: (
+            appels.append(kw)
+            or {"id": f"srv-repl-{len(appels)}", "statut": "ACTIVE", "ip_privee": "10.0.0.9"}
+        ),
+    )
+    corriger_amont(
+        monkeypatch,
+        bases_service,
+        "ComputeSimule",
+        "ComputeOpenStack",
+        "supprimer_serveur",
+        lambda self, serveur_id: supprimes.append(serveur_id),
+    )
+
+    r = await client_org.post(f"/v1/bases/{bid}/replicas", json={"site": "ABJ"})
+    assert r.status_code == 202 and r.json()["statut"] == "done"
+    assert len(appels) == 1, "aucun serveur amont réel provisionné pour le réplica"
+    assert appels[0]["nom"].startswith(f"db-{bid[:8]}-rl-")
+
+    r = await client_org.get(f"/v1/bases/{bid}")
+    assert r.status_code == 200 and r.json()["replicas"] == 1
+
+    r = await client_org.delete(f"/v1/bases/{bid}", params={"confirmation": "app-replica-test"})
+    assert r.status_code == 202 and r.json()["statut"] == "done"
+    assert "srv-repl-1" in supprimes, "le serveur du réplica doit être nettoyé à la suppression"
