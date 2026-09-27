@@ -578,9 +578,17 @@ async def obtenir_identifiants_service_projet(
 async def obtenir_journaux_service_projet(
     projetId: str, serviceId: str, niveau: str | None = None, ctx: Contexte = Depends(exige(None))
 ) -> Any:  # noqa: N803
-    await _projet(ctx, projetId)
-    await s.depot_service.obtenir(ctx, serviceId)
-    return m.ExtraitLogs(lignes=[], tronque=False)
+    projet = await _projet(ctx, projetId)
+    svc = await s.depot_service.obtenir(ctx, serviceId)
+    if projet.cible != "vm":
+        # Cible `k8s` : aucune source de journaux réelle câblée à ce jour (pas d'appel
+        # `read_namespaced_pod_log` sur `k8s_workload`) — honnête plutôt qu'inventé.
+        return m.ExtraitLogs(lignes=[], tronque=False)
+    brutes = await s.journaux_service_vm(ctx, svc, projet)
+    extrait = [
+        m.LigneLog(ts=maintenant(), niveau="INFO", source=svc.nom, message=ln) for ln in brutes
+    ]
+    return m.ExtraitLogs(lignes=extrait, tronque=len(extrait) >= 20)
 
 
 @router_projets.get(
@@ -591,6 +599,10 @@ async def obtenir_journaux_service_projet(
 async def obtenir_metriques_service_projet(
     projetId: str, serviceId: str, fenetre: str | None = None, ctx: Contexte = Depends(exige(None))
 ) -> Any:  # noqa: N803
+    # Volontairement pas câblé à une source réelle, cible `vm` incluse : aucune collecte de
+    # métriques (CPU/RAM/réseau par conteneur, ou diagnostics Nova/libvirt) n'existe nulle
+    # part dans cette base — `vms.obtenir_metriques_vm` et `web_hebergement.metriques` sont
+    # eux-mêmes des séries à points vides, pas une intégration réelle à reproduire ici.
     await _projet(ctx, projetId)
     await s.depot_service.obtenir(ctx, serviceId)
     return m.ProjetsProjetIdServicesServiceIdMetriquesGetResponse(series=[])
