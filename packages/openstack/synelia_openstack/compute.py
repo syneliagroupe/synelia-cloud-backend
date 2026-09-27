@@ -168,6 +168,9 @@ class ComputeSimule:
     def redimensionner(self, serveur_id: str, gabarit_id: str) -> None:
         return None
 
+    def migrer(self, serveur_id: str) -> str:
+        return "hote-simule-2"
+
     def instantane(self, serveur_id: str, nom: str) -> str:
         return f"img-{nouvel_id()[:8]}"
 
@@ -447,6 +450,44 @@ class ComputeOpenStack(ComputeSimule):
             c.compute.get_server(serveur_id), status="VERIFY_RESIZE", wait=600
         )
         c.compute.confirm_server_resize(serveur_id)
+
+    def migrer(self, serveur_id: str) -> str:
+        """Migration à chaud réelle (Nova `live_migrate_server`) : sans ceci, `vm.migrate`
+        ne vérifiait jamais qu'un second hôte compute existait et n'appelait jamais Nova —
+        les 4 étapes du catalogue (`Choisir un hôte compatible`, `Transférer la mémoire
+        vive`, `Basculer l'exécution`, `Libérer l'hôte source`) passaient `ok` en quelques
+        secondes sans le moindre impact amont (cf. mémoire `vm-migrate-fake-success-bug`,
+        même motif que `vm-snapshot-restore-fake-success-bug`). Ce lab n'a qu'un seul
+        hyperviseur compute : `candidats` est alors vide et on échoue franchement (424)
+        plutôt que de simuler un déplacement qui n'a jamais eu lieu — c'est la vraie limite
+        de la plateforme que cette migration est censée buter dessus, pas un succès fabriqué."""
+        from synelia_kernel import erreurs
+
+        c = self._c()
+        srv = c.compute.get_server(serveur_id)
+        hote_actuel = getattr(srv, "compute_host", None) or getattr(
+            srv, "hypervisor_hostname", None
+        )
+        candidats = [h.name for h in c.compute.hypervisors() if h.name != hote_actuel]
+        if not candidats:
+            raise erreurs.amont_indisponible(
+                "nova",
+                "Aucun second hôte compute compatible n'est disponible pour une migration "
+                "à chaud (le lab ne compte qu'un seul hyperviseur).",
+            )
+        cible = candidats[0]
+        from synelia_openstack.erreurs import traduire
+
+        try:
+            c.compute.live_migrate_server(serveur_id, host=cible, block_migration="auto")
+            c.compute.wait_for_server(c.compute.get_server(serveur_id), status="ACTIVE", wait=600)
+        except Exception as exc:
+            from synelia_kernel import erreurs as _e
+
+            if isinstance(exc, _e.AppError):
+                raise
+            raise traduire(exc, "Machine virtuelle") from None
+        return cible
 
     def instantane(self, serveur_id: str, nom: str) -> str:
         return self._c().compute.create_server_image(serveur_id, nom, wait=True).id
