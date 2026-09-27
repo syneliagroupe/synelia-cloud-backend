@@ -299,6 +299,11 @@ async def restaurer_base_dans_le_temps(
     ctx: Contexte = Depends(exige("backup.restore")),
 ) -> Any:  # noqa: N803
     base = await depot.obtenir(ctx, baseId)
+    if not base.pitr:
+        raise erreurs.conflit(
+            "Le PITR n'est pas activé sur cette base : aucune restauration possible.",
+            code="pitr_desactive",
+        )
     await journaliser(
         ctx,
         action="base.restauration",
