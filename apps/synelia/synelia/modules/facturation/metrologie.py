@@ -45,7 +45,8 @@ async def consommation(ctx: Contexte, periode: str, espace_id: str | None = None
         espace = await Depot("espace", m.EspaceCloud).obtenir(ctx, espace_id)
         espace_cree_le = espace.createdAt.date()
     vms = await Depot("vm", m.Vm).tous(
-        ctx, filtre=lambda v: espace_id is None or v.espaceId == espace_id
+        ctx,
+        filtre=lambda v: (espace_id is None or v.espaceId == espace_id) and v.statut != "error",
     )
     vcpu = sum(v.vcpu for v in vms)
     ram = sum(v.ramGo for v in vms)

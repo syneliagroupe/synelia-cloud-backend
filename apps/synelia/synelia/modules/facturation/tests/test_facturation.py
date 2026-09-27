@@ -144,6 +144,58 @@ async def test_consommation_avant_creation_espace(client):
     assert r.json()["total"] == 0
 
 
+async def test_consommation_exclut_vm_en_erreur(client):
+    """Une VM au statut 'error' (provisionnement échoué) ne doit pas être facturée."""
+    from synelia_contract import modeles as m
+    from synelia_db.modeles import Ressource
+    from synelia_db.session import session as db_session
+    from synelia_kernel.ids import nouvel_id
+
+    hardware = m.MateielVirtuel(scsiControllers=1, nics=1, usb=False, secureBoot=False)
+
+    def _vm(nom: str, statut: str) -> m.Vm:
+        return m.Vm(
+            id=nouvel_id(),
+            espaceId="espace-test",
+            nom=nom,
+            os="ubuntu-24.04",
+            vcpu=4,
+            ramGo=8,
+            diskGo=100,
+            ips=[],
+            statut=statut,
+            hardware=hardware,
+            site="ABJ",
+        )
+
+    en_cours = _vm("vm-running", "running")
+    en_erreur = _vm("vm-erreur", "error")
+
+    periode = date.today().strftime("%Y-%m")
+    avant = (await client.get(f"/v1/facturation/consommation?periode={periode}")).json()["jours"][0]
+
+    async with db_session() as s:
+        for vm in (en_cours, en_erreur):
+            s.add(
+                Ressource(
+                    id=vm.id,
+                    org_id=client.org_id,
+                    type="vm",
+                    nom=vm.nom,
+                    statut=vm.statut,
+                    donnees=vm.model_dump(mode="json"),
+                )
+            )
+        await s.commit()
+
+    r = await client.get(f"/v1/facturation/consommation?periode={periode}")
+    assert r.status_code == 200, r.text
+    apres = r.json()["jours"][0]
+    # Seule la VM "running" doit alourdir la consommation ; la VM "error" est ignorée.
+    assert apres["vcpuHeures"] - avant["vcpuHeures"] == en_cours.vcpu * 24
+    assert apres["ramGoHeures"] - avant["ramGoHeures"] == en_cours.ramGo * 24
+
+
 async def test_consommation_export(client):
     r = await client.post(
         "/v1/facturation/consommation/export", json={"periode": "2026-08", "format": "csv"}
