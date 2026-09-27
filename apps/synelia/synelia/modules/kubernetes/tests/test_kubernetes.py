@@ -186,6 +186,11 @@ async def test_reconciliation_statut_cluster(client, monkeypatch):
         "cluster_statut",
         lambda self, cluster_id: "CREATE_IN_PROGRESS",
     )
+    # Bornes du sondage de la dernière étape (`ExecuteurK8sCreate.etape`, index final) réduites
+    # à quelques dizaines de ms : sans cela, `cluster_statut` restant `CREATE_IN_PROGRESS` en
+    # permanence ici ferait attendre le test toute la fenêtre réelle (`_DELAI_CREATION_MAX_S`).
+    monkeypatch.setattr(k8s_service, "_DELAI_CREATION_MAX_S", 0.05)
+    monkeypatch.setattr(k8s_service, "_DELAI_CREATION_SONDE_S", 0.01)
 
     espace_id = await _espace_demo(client)
     r = await client.post("/v1/kubernetes", json=_corps_cluster(espace_id, "k8s-reconcile"))
@@ -263,6 +268,10 @@ async def test_reconciliation_cluster_jamais_abouti_cote_amont(client, monkeypat
         "cluster_statut",
         lambda self, cluster_id: "CREATE_IN_PROGRESS",
     )
+    # Même motif que `test_reconciliation_statut_cluster` : borner le sondage de la dernière
+    # étape à quelques dizaines de ms plutôt que la fenêtre réelle (`_DELAI_CREATION_MAX_S`).
+    monkeypatch.setattr(k8s_service, "_DELAI_CREATION_MAX_S", 0.05)
+    monkeypatch.setattr(k8s_service, "_DELAI_CREATION_SONDE_S", 0.01)
     espace_id = await _espace_demo(client)
     r = await client.post("/v1/kubernetes", json=_corps_cluster(espace_id, "k8s-jamais-abouti"))
     assert r.status_code == 202, r.text
@@ -287,6 +296,103 @@ async def test_reconciliation_cluster_jamais_abouti_cote_amont(client, monkeypat
     # Persisté, pas seulement renvoyé une fois.
     r = await client.get("/v1/kubernetes", params={"statut": "degraded"})
     assert any(c["id"] == cid for c in r.json()["donnees"])
+
+
+async def test_creation_travail_echoue_si_magnum_echoue_dans_la_fenetre(client, monkeypatch):
+    # Bug réel (audit infra réelle du 2026-09-26) : `POST /kubernetes` marquait ses 5 tâches
+    # `ok` et le travail `done` en ~1 s sans jamais reconsulter Magnum, y compris quand la
+    # création amont échoue vite (ex. le 403 Keystone d'imbrication d'Application Credential,
+    # limitation de plateforme déjà connue) — un appelant qui ne lisait que le travail concluait
+    # à tort au succès ; seule une lecture ultérieure du cluster (`reconcilier_statut`)
+    # révélait `degraded`. La dernière étape sonde désormais Magnum (bornée à
+    # `_DELAI_CREATION_MAX_S`) avant de conclure : un échec observé pendant cette fenêtre doit
+    # se refléter *directement* dans le travail (`rolled_back`), pas seulement dans le cluster.
+    from synelia.modules.kubernetes import service as k8s_service
+
+    original_creer = k8s_service.MagnumSimule.creer_cluster
+
+    def _creer_cluster_en_cours(self, **kw):
+        r = original_creer(self, **kw)
+        r["statut"] = "CREATE_IN_PROGRESS"
+        return r
+
+    corriger_amont(
+        monkeypatch,
+        k8s_service,
+        "MagnumSimule",
+        "MagnumOpenStack",
+        "creer_cluster",
+        _creer_cluster_en_cours,
+    )
+    # Le tout premier sondage (dans la fenêtre) constate déjà l'échec : pas besoin d'attendre
+    # la borne, ni de la réduire, pour que ce test reste rapide.
+    corriger_amont(
+        monkeypatch,
+        k8s_service,
+        "MagnumSimule",
+        "MagnumOpenStack",
+        "cluster_statut",
+        lambda self, cluster_id: "CREATE_FAILED",
+    )
+
+    espace_id = await _espace_demo(client)
+    r = await client.post("/v1/kubernetes", json=_corps_cluster(espace_id, "k8s-echec-rapide"))
+    assert r.status_code == 202, r.text
+    travail = r.json()
+    assert travail["statut"] == "rolled_back", travail
+    assert travail["taches"][-1]["statut"] == "failed"
+
+    r = await client.get("/v1/kubernetes")
+    cluster = next(c for c in r.json()["donnees"] if c["nom"] == "k8s-echec-rapide")
+    assert cluster["statut"] == "degraded"
+
+
+async def test_creation_travail_reste_en_cours_si_magnum_toujours_pending(client, monkeypatch):
+    # Complément du test ci-dessus : si Magnum est encore `CREATE_IN_PROGRESS` à l'expiration de
+    # la fenêtre bornée (provisioning réel plausible — un vrai Heat/CAPI prend plusieurs
+    # minutes), le travail ne doit ni faussement réussir (`done`) ni faussement échouer
+    # (`rolled_back`) : il reste `running`, sa dernière tâche n'est pas `ok`.
+    from synelia.modules.kubernetes import service as k8s_service
+
+    original_creer = k8s_service.MagnumSimule.creer_cluster
+
+    def _creer_cluster_en_cours(self, **kw):
+        r = original_creer(self, **kw)
+        r["statut"] = "CREATE_IN_PROGRESS"
+        return r
+
+    corriger_amont(
+        monkeypatch,
+        k8s_service,
+        "MagnumSimule",
+        "MagnumOpenStack",
+        "creer_cluster",
+        _creer_cluster_en_cours,
+    )
+    corriger_amont(
+        monkeypatch,
+        k8s_service,
+        "MagnumSimule",
+        "MagnumOpenStack",
+        "cluster_statut",
+        lambda self, cluster_id: "CREATE_IN_PROGRESS",
+    )
+    monkeypatch.setattr(k8s_service, "_DELAI_CREATION_MAX_S", 0.05)
+    monkeypatch.setattr(k8s_service, "_DELAI_CREATION_SONDE_S", 0.01)
+
+    espace_id = await _espace_demo(client)
+    r = await client.post("/v1/kubernetes", json=_corps_cluster(espace_id, "k8s-encore-pending"))
+    assert r.status_code == 202, r.text
+    travail = r.json()
+    assert travail["statut"] == "running", travail
+    assert travail["taches"][-1]["statut"] != "ok"
+
+    r = await client.get(f"/v1/travaux/{travail['id']}")
+    assert r.status_code == 200 and r.json()["statut"] == "running"
+
+    r = await client.get("/v1/kubernetes")
+    cluster = next(c for c in r.json()["donnees"] if c["nom"] == "k8s-encore-pending")
+    assert cluster["statut"] == "provisioning"
 
 
 async def test_lister_filtres(client):
