@@ -114,6 +114,37 @@ async def test_canari_promotion(client_org):
     assert r.status_code == 202
 
 
+async def test_rollback_passe_par_le_travail_app_rollback(client_org):
+    env = await _environnement(client_org, nom="prod-travail")
+    r = await client_org.post(
+        "/v1/deploiements", json={"envId": env["id"], "branche": "main", "commit": "aaa000"}
+    )
+    assert r.status_code == 202
+    r = await client_org.post(
+        "/v1/deploiements", json={"envId": env["id"], "branche": "main", "commit": "bbb111"}
+    )
+    assert r.status_code == 202
+    dep2 = r.json()
+
+    r = await client_org.post(
+        f"/v1/deploiements/{dep2['id']}/rollback", json={"versionCible": "aaa000"}
+    )
+    assert r.status_code == 202, r.text
+    assert r.json()["statut"] == "rolled_back"
+
+    # le rollback doit passer par le moteur de travaux (app.rollback), pas par un patch direct
+    r = await client_org.get("/v1/travaux", params={"type": "app.rollback"})
+    assert r.status_code == 200, r.text
+    travaux = r.json()["donnees"]
+    assert len(travaux) == 1
+    assert travaux[0]["statut"] == "done"
+
+    r = await client_org.delete(
+        f"/v1/environnements/{env['id']}", params={"confirmation": "prod-travail"}
+    )
+    assert r.status_code == 202
+
+
 async def test_rollback_sans_rien(client_org):
     env = await _environnement(client_org)
     r = await client_org.post(

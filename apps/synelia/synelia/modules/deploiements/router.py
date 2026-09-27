@@ -322,7 +322,14 @@ async def annuler_deploiement(
         cible_id=d.id,
         cible=corps.versionCible or d.version,
     )
-    await depot_deploy.modifier(ctx, d.id, {"statut": "rolled_back"})
+    await demarrer_travail(
+        ctx,
+        "app.rollback",
+        corps.versionCible or d.version,
+        cible_type="deploiement",
+        cible_id=d.id,
+        entree=corps.model_dump(mode="json"),
+    )
     return await _deploiement_depuis_id(ctx, d.id)
 
 
