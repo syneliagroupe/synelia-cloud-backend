@@ -1,5 +1,7 @@
 """Déploiements : cycle de vie, approbation, canari, promotion, rollback, journaux, branches."""
 
+from synelia_testing import inscrire_et_verifier
+
 
 async def _environnement(client_org, *, nom: str = "prod", protection: dict | None = None):
     corps: dict = {"nom": nom}
@@ -8,6 +10,20 @@ async def _environnement(client_org, *, nom: str = "prod", protection: dict | No
     r = await client_org.post("/v1/environnements", json=corps)
     assert r.status_code == 201, r.text
     return r.json()
+
+
+async def _autre_approbateur(client_org, *, email: str = "co-approbateur@test-client.ci") -> str:
+    """Inscrit un second `org_admin` dans l'organisation de `client_org` et renvoie son jeton
+    d'accès — un véritable second principal, distinct de l'auteur des déploiements créés par
+    `client_org`, pour les scénarios d'approbation à quatre yeux."""
+    session = await inscrire_et_verifier(client_org, email, "Co Approbateur", "CoApprob!2026")
+    r = await client_org.post(
+        "/v1/membres",
+        json={"userId": session["utilisateur"]["id"], "role": "org_admin", "scopeType": "org"},
+        headers={"X-Organisation-Id": client_org.org_id},
+    )
+    assert r.status_code == 201, r.text
+    return session["accessToken"]
 
 
 async def test_cycle_deploiement(client_org):
@@ -51,9 +67,13 @@ async def test_cycle_deploiement(client_org):
 
 
 async def test_approbation(client_org):
+    """L'approbation par un principal DIFFÉRENT de l'auteur du déploiement doit réussir —
+    voir `test_approbation_auto_approbation_refusee` pour le refus quand c'est le même."""
     env_protege = await _environnement(
         client_org, nom="prod-protege", protection={"approbationRequise": True}
     )
+    jeton_approbateur = await _autre_approbateur(client_org)
+    entete_approbateur = {"Authorization": f"Bearer {jeton_approbateur}"}
 
     r = await client_org.post(
         "/v1/deploiements", json={"envId": env_protege["id"], "branche": "main", "commit": "aaa111"}
@@ -70,18 +90,64 @@ async def test_approbation(client_org):
     non_attendu = r.json()
 
     r = await client_org.post(
-        f"/v1/deploiements/{non_attendu['id']}/approbation", json={"decision": "approuver"}
+        f"/v1/deploiements/{non_attendu['id']}/approbation",
+        json={"decision": "approuver"},
+        headers=entete_approbateur,
     )
     assert r.status_code == 200, r.text
 
     r = await client_org.post(
-        f"/v1/deploiements/{dep_id}/approbation", json={"decision": "approuver", "motif": "OK go"}
+        f"/v1/deploiements/{dep_id}/approbation",
+        json={"decision": "approuver", "motif": "OK go"},
+        headers=entete_approbateur,
     )
     assert r.status_code == 200, r.text
     assert r.json()["statut"] == "live"
 
     r = await client_org.delete(
         f"/v1/environnements/{env_protege['id']}", params={"confirmation": "prod-protege"}
+    )
+    assert r.status_code == 202
+
+
+async def test_approbation_auto_approbation_refusee(client_org):
+    """Segrégation des tâches (contrat : « L'approbateur ne peut pas être l'auteur du
+    déploiement ») : l'auteur d'un déploiement ne peut pas l'approuver lui-même, même s'il a
+    les droits `app.deploy` — un second principal reste requis."""
+    env_protege = await _environnement(
+        client_org, nom="prod-protege-auto", protection={"approbationRequise": True}
+    )
+
+    r = await client_org.post(
+        "/v1/deploiements", json={"envId": env_protege["id"], "branche": "main", "commit": "ccc333"}
+    )
+    assert r.status_code == 202, r.text
+    dep_id = r.json()["id"]
+
+    # L'auteur (client_org) tente d'approuver son propre déploiement → refusé.
+    r = await client_org.post(
+        f"/v1/deploiements/{dep_id}/approbation", json={"decision": "approuver"}
+    )
+    assert r.status_code == 403, r.text
+    assert r.json()["erreur"]["code"] == "auto_approbation_interdite"
+
+    # Toujours en attente d'approbation : un second principal peut encore la traiter.
+    r = await client_org.get(f"/v1/deploiements/{dep_id}")
+    assert r.status_code == 200 and r.json()["statut"] == "queued"
+
+    jeton_approbateur = await _autre_approbateur(
+        client_org, email="co-approbateur-auto@test-client.ci"
+    )
+    r = await client_org.post(
+        f"/v1/deploiements/{dep_id}/approbation",
+        json={"decision": "approuver"},
+        headers={"Authorization": f"Bearer {jeton_approbateur}"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["statut"] == "live"
+
+    r = await client_org.delete(
+        f"/v1/environnements/{env_protege['id']}", params={"confirmation": "prod-protege-auto"}
     )
     assert r.status_code == 202
 
