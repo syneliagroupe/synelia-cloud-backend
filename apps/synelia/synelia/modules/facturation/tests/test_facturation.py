@@ -1,5 +1,7 @@
 """Facturation : estimation, consommation, factures, paiement, prépayé, SLA, souscriptions, devis."""
 
+from datetime import date, timedelta
+
 
 async def _espace(client) -> str:
     existants = (await client.get("/v1/espaces")).json()["donnees"]
@@ -127,6 +129,19 @@ async def test_consommation(client):
     assert r.status_code == 200, r.text
     body = r.json()
     assert "periode" in body and "jours" in body
+
+
+async def test_consommation_avant_creation_espace(client):
+    # L'espace de démo est créé "maintenant" (au démarrage du test) : une période
+    # antérieure au mois courant est donc entièrement avant sa création et ne doit
+    # fabriquer aucune consommation, même si le snapshot courant des VM est non nul.
+    mois_precedent = (date.today().replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+    r = await client.get(f"/v1/espaces/espace-demo-abj/consommation?periode={mois_precedent}")
+    assert r.status_code == 200, r.text
+    jours = r.json()["jours"]
+    assert jours, "la période devrait contenir des jours"
+    assert all(j["montant"] == 0 and j["vcpuHeures"] == 0 for j in jours)
+    assert r.json()["total"] == 0
 
 
 async def test_consommation_export(client):
