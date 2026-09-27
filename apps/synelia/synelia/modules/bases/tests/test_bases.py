@@ -96,3 +96,37 @@ async def test_cycle_base(client_org):
 
     r = await client_org.get("/v1/bases")
     assert r.json()["pagination"]["total"] == 0
+
+
+async def test_rotation_identifiants_refuse_franchement_en_amont_reel(client_org, monkeypatch):
+    """Fournisseur réel (`ComputeOpenStack`) : aucun canal d'exécution distante (SSH/exec)
+    vers la VM Docker de la base n'existe encore — la rotation ne doit pas renvoyer un 200
+    qui ferait croire que l'ancien mot de passe (potentiellement fuité) vient d'être révoqué
+    auprès du moteur. Elle doit refuser franchement (424), et ne rien changer en base."""
+    from synelia.modules.bases import service as bases_service
+    from synelia_openstack.compute import ComputeOpenStack
+
+    espace_id = await _espace(client_org)
+    r = await client_org.post(
+        "/v1/bases",
+        json={
+            "espaceId": espace_id,
+            "nom": "rotation-honnete",
+            "moteur": "postgresql",
+            "version": "16",
+            "palier": "s1",
+        },
+    )
+    assert r.status_code == 202, r.text
+    bases = (await client_org.get("/v1/bases")).json()["donnees"]
+    bid = next(b["id"] for b in bases if b["nom"] == "rotation-honnete")
+
+    secrets_avant = (await client_org.get(f"/v1/bases/{bid}/identifiants")).json()
+
+    monkeypatch.setattr(bases_service, "amont", lambda: ComputeOpenStack())
+    r = await client_org.post(f"/v1/bases/{bid}/identifiants/rotation", json={})
+    assert r.status_code == 424, r.text
+    assert r.json()["erreur"]["code"] == "amont_indisponible"
+
+    secrets_apres = (await client_org.get(f"/v1/bases/{bid}/identifiants")).json()
+    assert secrets_apres["utilisateur"] == secrets_avant["utilisateur"]

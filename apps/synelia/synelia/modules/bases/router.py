@@ -4,7 +4,9 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, status
 from synelia_contract import modeles as m
+from synelia_kernel import erreurs
 from synelia_kernel.ids import nouvel_id
+from synelia_openstack.compute import ComputeOpenStack
 
 from synelia.audit import journaliser
 from synelia.deps import Contexte, Page, exige, exiger_confirmation
@@ -190,8 +192,18 @@ async def rotationner_identifiants_base(
 ) -> Any:  # noqa: N803
     # Rotation locale du secret : génère et stocke un nouveau mot de passe réel. Le moteur
     # tournant dans le conteneur Docker de la VM garde l'ancien tant qu'il n'est pas mis à jour
-    # via une exécution distante (hors périmètre ici, pas d'accès SSH/exec depuis l'API).
+    # via une exécution distante (hors périmètre ici, pas d'accès SSH/exec depuis l'API) : en
+    # fournisseur réel, on refuse franchement plutôt que de renvoyer un 200 qui ferait croire
+    # que l'ancien mot de passe (potentiellement fuité) vient d'être révoqué — cf. `web_hebergement.
+    # executer_commande_vps`, même discipline (424 franc quand le canal d'exécution n'existe pas).
     base = await depot.obtenir(ctx, baseId)
+    if isinstance(service.amont(), ComputeOpenStack):
+        raise erreurs.amont_indisponible(
+            "base (rotation moteur)",
+            "Le mot de passe n'a pas été appliqué au moteur en cours d'exécution : aucun canal "
+            "d'exécution distante (SSH/exec) vers la VM n'existe encore pour ce module. "
+            "L'ancien mot de passe reste valide auprès du moteur — rotation refusée.",
+        )
     secrets_actuels = await depot.secrets(ctx, baseId)
     utilisateur = secrets_actuels.get("utilisateur") or service.utilisateur_pour_moteur(base.moteur)
     nouveau_mdp = service.nouveau_mot_de_passe()
