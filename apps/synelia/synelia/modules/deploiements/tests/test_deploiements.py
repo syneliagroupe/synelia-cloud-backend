@@ -58,6 +58,14 @@ async def test_cycle_deploiement(client):
     assert r.status_code == 202, r.text
     assert r.json()["statut"] == "rolled_back"
 
+    # le rollback passe bien par le travail "app.rollback" (ExecuteurAppRollback est
+    # réellement invoqué, pas seulement enregistré)
+    r = await client.get("/v1/travaux", params={"type": "app.rollback"})
+    assert r.status_code == 200, r.text
+    travaux = r.json()["donnees"]
+    assert len(travaux) == 1
+    assert travaux[0]["statut"] == "done"
+
     r = await client.delete(f"/v1/environnements/{env['id']}", params={"confirmation": "prod"})
     assert r.status_code == 202
 
