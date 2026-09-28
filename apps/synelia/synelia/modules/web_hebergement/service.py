@@ -2285,7 +2285,9 @@ class ExecuteurTacheExecution(Executeur):
         await depot_taches.remplacer(
             ctx,
             t.id,
-            t.model_copy(update={"derniereExecution": maintenant(), "statut": statut, "dureeS": duree_s}),
+            t.model_copy(
+                update={"derniereExecution": maintenant(), "statut": statut, "dureeS": duree_s}
+            ),
         )
 
 

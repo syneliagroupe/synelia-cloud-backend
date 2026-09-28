@@ -10,6 +10,7 @@ from synelia_kernel.dates import maintenant
 from synelia_kernel.ids import nouvel_id
 
 from synelia.audit import journaliser
+from synelia.depot import Depot
 from synelia.deps import Contexte, Page, exige, exiger_confirmation
 from synelia.modules.reseau.service import (
     ajouter_regle_amont,
@@ -236,6 +237,12 @@ async def attacher_ip(
     if corps.ptr is not None:
         changement["ptr"] = corps.ptr
     await depot_ip.modifier(ctx, ipId, changement)
+    if cible_type == "vm":
+        depot_vm = Depot("vm", m.Vm)
+        vm = await depot_vm.obtenir(ctx, corps.cibleId)
+        ips_vm = [i for i in vm.ips if not (i.type == "publique" and i.adresse == ip.adresse)]
+        ips_vm.append(m.Ip(adresse=ip.adresse, type="publique", ptr=changement.get("ptr", ip.ptr)))
+        await depot_vm.modifier(ctx, vm.id, {"ips": [i.model_dump() for i in ips_vm]})
     await journaliser(
         ctx, action="ip.attachement", cible_type="ip_publique", cible_id=ipId, cible=label
     )
@@ -248,6 +255,12 @@ async def attacher_ip(
 async def detacher_ip(ipId: str, ctx: Contexte = Depends(exige("network.manage"))) -> Any:  # noqa: N803
     ip = await depot_ip.obtenir(ctx, ipId)
     await dissocier_ip_amont(ctx, ipId)
+    if ip.attachedTo:
+        depot_vm = Depot("vm", m.Vm)
+        vm = await depot_vm.trouver(ctx, ip.attachedTo)
+        if vm is not None:
+            ips_vm = [i for i in vm.ips if not (i.type == "publique" and i.adresse == ip.adresse)]
+            await depot_vm.modifier(ctx, vm.id, {"ips": [i.model_dump() for i in ips_vm]})
     await depot_ip.remplacer(
         ctx, ipId, ip.model_copy(update={"attachedTo": None, "attachedLabel": None})
     )
@@ -760,15 +773,36 @@ async def creer_profil_vpn(
         cible_id=tunnelId,
         details={"profil": corps.nom},
     )
-    configuration = (
-        f"client\n"
-        f"dev tun\n"
-        f"proto udp\n"
-        f"remote vpn.synelia.cloud 1194\n"
-        f"auth-user-pass\n"
-        f"<ca>\n{certificat_bidon(corps.nom, corps.utilisateur)}\n</ca>\n"
+    from synelia.modules.espaces import openvpn
+
+    configuration = await openvpn.emettre_profil_openvpn(
+        ctx, tunnelId, corps.nom, corps.utilisateur
     )
     return m.VpnTunnelIdProfilsPostResponse(nom=corps.nom, configuration=configuration, expire=None)
+
+
+@router_vpn.get(
+    "/{tunnelId}/profils/{profilNom}",
+    response_model=m.VpnTunnelIdProfilsPostResponse,
+    response_model_exclude_none=True,
+)
+async def telecharger_profil_vpn(
+    tunnelId: str, profilNom: str, ctx: Contexte = Depends(exige("network.manage"))
+) -> Any:  # noqa: N803
+    t = await depot_vpn.obtenir(ctx, tunnelId)
+    profil = next((p for p in (t.profils or []) if p.nom == profilNom), None)
+    if profil is None:
+        raise erreurs.introuvable("Profil VPN", profilNom)
+    if profil.revoque:
+        raise erreurs.non_porte("Ce profil a été révoqué.", code="profil_revoque")
+    from synelia.modules.espaces import openvpn
+
+    configuration = await openvpn.emettre_profil_openvpn(
+        ctx, tunnelId, profilNom, profil.utilisateur
+    )
+    return m.VpnTunnelIdProfilsPostResponse(
+        nom=profilNom, configuration=configuration, expire=None
+    )
 
 
 def certificat_bidon(nom: str, utilisateur: str) -> str:

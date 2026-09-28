@@ -267,7 +267,9 @@ class ExecuteurFacturationExport(Executeur):
         from synelia.modules.stockage.service import amont_objet
 
         cle = f"{ctx.org_id}/{periode}-{nouvel_id()[:8]}.{ext}"
-        await asyncio.to_thread(amont_objet().deposer_objet, BUCKET_EXPORTS, cle, contenu, content_type)
+        await asyncio.to_thread(
+            amont_objet().deposer_objet, BUCKET_EXPORTS, cle, contenu, content_type
+        )
         travail.contexte = {**travail.contexte, "export_bucket": BUCKET_EXPORTS, "export_cle": cle}
 
 

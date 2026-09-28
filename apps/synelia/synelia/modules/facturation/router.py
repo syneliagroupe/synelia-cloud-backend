@@ -399,8 +399,7 @@ async def reclamer_credit_sla(
         raise erreurs.validation(
             "Composant SLA inconnu.",
             champs={
-                "composant": "Valeurs acceptées : "
-                + ", ".join(e["composant"] for e in engagements)
+                "composant": "Valeurs acceptées : " + ", ".join(e["composant"] for e in engagements)
             },
         )
     if engagement["constate"] >= engagement["dispo"]:

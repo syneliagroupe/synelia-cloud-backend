@@ -46,7 +46,15 @@ class SshReel(SshSimule):
     def _client(self, hote: str, cle_privee: str, utilisateur: str):  # type: ignore[no-untyped-def]
         import paramiko
 
-        cle = paramiko.RSAKey.from_private_key(io.StringIO(cle_privee))
+        cle = None
+        for key_cls in (paramiko.RSAKey, paramiko.Ed25519Key, paramiko.ECDSAKey):
+            try:
+                cle = key_cls.from_private_key(io.StringIO(cle_privee))
+                break
+            except paramiko.SSHException:
+                continue
+        if cle is None:
+            raise paramiko.SSHException("clé privée SSH non reconnue (RSA/Ed25519/ECDSA)")
         client = paramiko.SSHClient()
         # VM interne de la zone VPS, jamais exposée en dehors du réseau privé partagé : pas
         # d'infrastructure de clés d'hôte à vérifier, comme pour toute VM fraîchement créée
