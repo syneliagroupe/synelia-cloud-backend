@@ -800,9 +800,7 @@ async def telecharger_profil_vpn(
     configuration = await openvpn.emettre_profil_openvpn(
         ctx, tunnelId, profilNom, profil.utilisateur
     )
-    return m.VpnTunnelIdProfilsPostResponse(
-        nom=profilNom, configuration=configuration, expire=None
-    )
+    return m.VpnTunnelIdProfilsPostResponse(nom=profilNom, configuration=configuration, expire=None)
 
 
 def certificat_bidon(nom: str, utilisateur: str) -> str:

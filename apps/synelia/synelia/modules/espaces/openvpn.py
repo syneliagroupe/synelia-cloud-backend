@@ -227,9 +227,7 @@ async def emettre_profil_openvpn(
         f"export SYNELIA_VPN_PUBLIC_PORT={client_port!r}; "
         f"/usr/local/bin/synelia-vpn-issue-client {nom_profil!r}"
     )
-    brut = await asyncio.to_thread(
-        _ssh().executer, ssh_host, secrets["ssh_prive"], cmd, "root"
-    )
+    brut = await asyncio.to_thread(_ssh().executer, ssh_host, secrets["ssh_prive"], cmd, "root")
     idx = brut.find("client\n")
     profil = brut[idx:] if idx >= 0 else brut
     # VM créées avant SYNELIA_VPN_PUBLIC_PORT : forcer remote public (dev01 DNAT).

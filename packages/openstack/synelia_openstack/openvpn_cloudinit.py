@@ -92,6 +92,5 @@ CFG
         + "".join(f"      {ligne}\n" for ligne in script_setup.splitlines())
         + "  - path: /usr/local/bin/synelia-vpn-issue-client\n"
         "    permissions: '0755'\n"
-        "    content: |\n"
-        + "".join(f"      {ligne}\n" for ligne in script_issue.splitlines())
+        "    content: |\n" + "".join(f"      {ligne}\n" for ligne in script_issue.splitlines())
     )

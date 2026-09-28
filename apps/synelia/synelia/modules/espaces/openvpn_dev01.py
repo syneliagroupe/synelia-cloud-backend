@@ -34,9 +34,7 @@ def exposer_udp_openvpn(dest_fip: str) -> tuple[str, int]:
     public_host = r.openvpn_dev01_public_host or "dev01.ovh.smile.ci"
     script = r.openvpn_dev01_firewall_script
     if script:
-        _ssh_hote(
-            f"bash {shlex.quote(script)} add {port} {shlex.quote(dest_fip)}"
-        )
+        _ssh_hote(f"bash {shlex.quote(script)} add {port} {shlex.quote(dest_fip)}")
     else:
         cmd = (
             f"firewall-cmd --permanent --add-port={port}/udp && "
@@ -54,9 +52,7 @@ def retirer_udp_openvpn(port: int, dest_fip: str) -> None:
     script = reglages().openvpn_dev01_firewall_script
     if script:
         try:
-            _ssh_hote(
-                f"bash {shlex.quote(script)} remove {port} {shlex.quote(dest_fip)}"
-            )
+            _ssh_hote(f"bash {shlex.quote(script)} remove {port} {shlex.quote(dest_fip)}")
         except erreurs.AppError:
             pass
         return
