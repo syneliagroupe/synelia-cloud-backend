@@ -71,16 +71,6 @@ class Reglages(BaseSettings):
     vps_zone_lb_id: str | None = None
     vps_zone_lb_listener_id: str | None = None
 
-    # Passerelle OpenVPN créée avec chaque Espace (`espaces.openvpn`, étape `espace.create`).
-    openvpn_actif: bool = True
-    openvpn_image_id: str | None = None
-    openvpn_flavor_id: str | None = None
-    openvpn_dev01_firewall: bool = False
-    openvpn_dev01_public_host: str | None = None
-    openvpn_dev01_ssh_host: str = "dev01.ovh.smile.ci"
-    openvpn_dev01_ssh_key_path: str | None = None
-    openvpn_dev01_firewall_script: str | None = None
-
     # Audit : ancrage quotidien hors-rôle (SYNELIA_AUDIT_ANCRAGE_EMAIL), cf. `synelia.audit.ancrer`
     # et §3 de docs/PLAN-ARCHITECTURE-SUITE.md. Optionnelle : sans elle, seul le journal
     # structuré (`audit.ancrage`, logs Docker) sert d'ancrage — pas d'adresse inventée ici.

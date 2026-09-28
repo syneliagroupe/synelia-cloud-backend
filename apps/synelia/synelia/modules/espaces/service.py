@@ -262,27 +262,10 @@ class ExecuteurEspaceCreate(Executeur):
                     "application_credential_secret": ac["secret"],
                 },
             )
-        elif index == 4:
-            from synelia.modules.espaces import openvpn
-
-            secrets = await depot.secrets(ctx, e.id)
-            vpn = await openvpn.provisionner_passerelle_openvpn(ctx, e, secrets)
-            c.update(vpn)
-            await depot.definir_secrets(
-                ctx,
-                e.id,
-                {k: str(v) for k, v in vpn.items() if k.startswith("vpn_")},
-            )
-            return f"Passerelle OpenVPN : {vpn.get('vpn_endpoint', 'simulée')}"
         travail.contexte = c
         return None
 
     async def compenser(self, ctx: Contexte, travail: Travail, index_echoue: int) -> None:
-        from synelia.modules.espaces import openvpn
-
-        ctx_vpn = {**travail.contexte, **(await depot.secrets(ctx, travail.cible_id or ""))}
-        if ctx_vpn.get("vpn_serveur_id") or ctx_vpn.get("vpn_tunnel_id"):
-            await openvpn.supprimer_passerelle_openvpn(ctx, ctx_vpn)
         pid = travail.contexte.get("projet_id")
         if pid:
             await asyncio.to_thread(amont().supprimer_projet, pid)
@@ -295,13 +278,9 @@ class ExecuteurEspaceCreate(Executeur):
 @executeur("espace.delete")
 class ExecuteurEspaceDelete(Executeur):
     async def terminer(self, ctx: Contexte, travail: Travail) -> None:
-        from synelia.modules.espaces import openvpn
-
         # Le projet/réseau amont est posé en secrets par ExecuteurEspaceCreate, pas dans
         # `travail.contexte` (qui n'existe que pour ce job-ci, vide pour un `espace.delete`).
         secrets = await depot.secrets(ctx, travail.cible_id or "")
-        if secrets.get("vpn_serveur_id") or secrets.get("vpn_tunnel_id"):
-            await openvpn.supprimer_passerelle_openvpn(ctx, secrets)
         pid = secrets.get("projet_id")
         if pid:
             rid, rtid = secrets.get("reseau_id"), secrets.get("routeur_id")

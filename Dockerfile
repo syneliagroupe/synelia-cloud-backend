@@ -2,7 +2,6 @@ FROM rustfs/rc:latest AS rustfs-rc
 FROM python:3.13-slim AS base
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 COPY --from=rustfs-rc /usr/bin/rc /usr/local/bin/rc
-RUN ln -s /usr/local/bin/rc /usr/local/bin/mc
 WORKDIR /app
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PROJECT_ENVIRONMENT=/app/.venv
 COPY pyproject.toml uv.lock ./

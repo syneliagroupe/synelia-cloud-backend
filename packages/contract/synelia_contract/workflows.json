@@ -24,10 +24,6 @@
         "dureeS": 34
       },
       {
-        "nom": "Déployer la passerelle OpenVPN (accès nomade)",
-        "dureeS": 90
-      },
-      {
         "nom": "Enregistrer l’espace dans la facturation",
         "dureeS": 7
       }
