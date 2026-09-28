@@ -148,6 +148,11 @@ async def approuver_deploiement(
         raise erreurs.conflit(
             "Ce déploiement n'attend pas d'approbation.", code="pas_d_approbation_en_attente"
         )
+    if ctx.principal and ctx.principal.email == d.auteur:
+        raise erreurs.interdit(
+            "L'approbateur ne peut pas être l'auteur du déploiement.",
+            code="auto_approbation_interdite",
+        )
     if corps.decision == "refuser":
         await service._poser_drapeau(ctx, d.id, _CLE_APPROBATION, False)
         await depot_deploy.modifier(ctx, d.id, {"statut": "failed"})
@@ -322,7 +327,14 @@ async def annuler_deploiement(
         cible_id=d.id,
         cible=corps.versionCible or d.version,
     )
-    await depot_deploy.modifier(ctx, d.id, {"statut": "rolled_back"})
+    await demarrer_travail(
+        ctx,
+        "app.rollback",
+        corps.versionCible or d.version,
+        cible_type="deploiement",
+        cible_id=d.id,
+        entree=corps.model_dump(mode="json"),
+    )
     return await _deploiement_depuis_id(ctx, d.id)
 
 
@@ -358,7 +370,7 @@ async def creer_environnement(
         protection=corps.protection,
         sante=SANTE_NULLE,
         strategie=corps.strategie,
-        canari=corps.canari,
+        canari=m.Canari(**corps.canari.model_dump()) if corps.canari else None,
     )
     await depot_env.creer(ctx, env, parent_id=parent_id)
     if app_id:

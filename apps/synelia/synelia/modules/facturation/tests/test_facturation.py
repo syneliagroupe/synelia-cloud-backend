@@ -1,5 +1,7 @@
 """Facturation : estimation, consommation, factures, paiement, prépayé, SLA, souscriptions, devis."""
 
+from datetime import date, timedelta
+
 
 async def _espace(client) -> str:
     existants = (await client.get("/v1/espaces")).json()["donnees"]
@@ -127,6 +129,71 @@ async def test_consommation(client):
     assert r.status_code == 200, r.text
     body = r.json()
     assert "periode" in body and "jours" in body
+
+
+async def test_consommation_avant_creation_espace(client):
+    # L'espace de démo est créé "maintenant" (au démarrage du test) : une période
+    # antérieure au mois courant est donc entièrement avant sa création et ne doit
+    # fabriquer aucune consommation, même si le snapshot courant des VM est non nul.
+    mois_precedent = (date.today().replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+    r = await client.get(f"/v1/espaces/espace-demo-abj/consommation?periode={mois_precedent}")
+    assert r.status_code == 200, r.text
+    jours = r.json()["jours"]
+    assert jours, "la période devrait contenir des jours"
+    assert all(j["montant"] == 0 and j["vcpuHeures"] == 0 for j in jours)
+    assert r.json()["total"] == 0
+
+
+async def test_consommation_exclut_vm_en_erreur(client):
+    """Une VM au statut 'error' (provisionnement échoué) ne doit pas être facturée."""
+    from synelia_contract import modeles as m
+    from synelia_db.modeles import Ressource
+    from synelia_db.session import session as db_session
+    from synelia_kernel.ids import nouvel_id
+
+    hardware = m.MateielVirtuel(scsiControllers=1, nics=1, usb=False, secureBoot=False)
+
+    def _vm(nom: str, statut: str) -> m.Vm:
+        return m.Vm(
+            id=nouvel_id(),
+            espaceId="espace-test",
+            nom=nom,
+            os="ubuntu-24.04",
+            vcpu=4,
+            ramGo=8,
+            diskGo=100,
+            ips=[],
+            statut=statut,
+            hardware=hardware,
+            site="ABJ",
+        )
+
+    en_cours = _vm("vm-running", "running")
+    en_erreur = _vm("vm-erreur", "error")
+
+    periode = date.today().strftime("%Y-%m")
+    avant = (await client.get(f"/v1/facturation/consommation?periode={periode}")).json()["jours"][0]
+
+    async with db_session() as s:
+        for vm in (en_cours, en_erreur):
+            s.add(
+                Ressource(
+                    id=vm.id,
+                    org_id=client.org_id,
+                    type="vm",
+                    nom=vm.nom,
+                    statut=vm.statut,
+                    donnees=vm.model_dump(mode="json"),
+                )
+            )
+        await s.commit()
+
+    r = await client.get(f"/v1/facturation/consommation?periode={periode}")
+    assert r.status_code == 200, r.text
+    apres = r.json()["jours"][0]
+    # Seule la VM "running" doit alourdir la consommation ; la VM "error" est ignorée.
+    assert apres["vcpuHeures"] - avant["vcpuHeures"] == en_cours.vcpu * 24
+    assert apres["ramGoHeures"] - avant["ramGoHeures"] == en_cours.ramGo * 24
 
 
 async def test_consommation_export(client):

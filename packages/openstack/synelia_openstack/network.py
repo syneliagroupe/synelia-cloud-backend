@@ -135,6 +135,9 @@ class NetworkSimule:
     def assurer_regle_ssh(self, serveur_id: str) -> None:
         return None
 
+    def retirer_regle_ssh(self, serveur_id: str) -> None:
+        return None
+
     def assurer_regle_port(self, serveur_id: str, port: int) -> None:
         return None
 
@@ -488,6 +491,51 @@ class NetworkOpenStack(NetworkSimule):
 
     def assurer_regle_ssh(self, serveur_id: str) -> None:
         self._assurer_regle_ingress_tcp(serveur_id, 22)
+
+    def _assurer_regle_ingress_udp(self, serveur_id: str, port_num: int) -> None:
+        c = self._c()
+        port = next(iter(c.network.ports(device_id=serveur_id)), None)
+        if port is None or not port.security_group_ids:
+            return
+        for sg_id in port.security_group_ids:
+            sg = c.network.get_security_group(sg_id)
+            deja = any(
+                r.get("protocol") == "udp"
+                and r.get("port_range_min") == port_num
+                and r.get("direction") == "ingress"
+                for r in (sg.security_group_rules or [])
+            )
+            if not deja:
+                c.network.create_security_group_rule(
+                    security_group_id=sg_id,
+                    direction="ingress",
+                    protocol="udp",
+                    port_range_min=port_num,
+                    port_range_max=port_num,
+                    ethertype="IPv4",
+                )
+
+    def assurer_regle_ingress_udp(self, serveur_id: str, port_num: int) -> None:
+        self._assurer_regle_ingress_udp(serveur_id, port_num)
+
+    def retirer_regle_ssh(self, serveur_id: str) -> None:
+        """Retire la règle d'entrée TCP/22 posée par `assurer_regle_ssh` — sans elle,
+        `PUT .../acces` avec `ssh: false` ne faisait que mentir : le port restait ouvert
+        au niveau réseau quoi que dise le drapeau en base (constaté en lisant le code —
+        `assurer_regle_ssh` est appelée sans condition à la création de la VM)."""
+        c = self._c()
+        port = next(iter(c.network.ports(device_id=serveur_id)), None)
+        if port is None or not port.security_group_ids:
+            return
+        for sg_id in port.security_group_ids:
+            sg = c.network.get_security_group(sg_id)
+            for r in sg.security_group_rules or []:
+                if (
+                    r.get("protocol") == "tcp"
+                    and r.get("port_range_min") == 22
+                    and r.get("direction") == "ingress"
+                ):
+                    c.network.delete_security_group_rule(r["id"], ignore_missing=True)
 
     def assurer_regle_port(self, serveur_id: str, port: int) -> None:
         """Autorise le port du listener LB en entrée sur le groupe de sécurité du membre de

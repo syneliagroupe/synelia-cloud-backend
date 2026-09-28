@@ -40,9 +40,13 @@ async def consommation(ctx: Contexte, periode: str, espace_id: str | None = None
     debut = date(annee, mois, 1)
     fin = (debut.replace(day=28) + timedelta(days=4)).replace(day=1)
     aujourdhui = date.today()
-
+    espace_cree_le = None
+    if espace_id is not None:
+        espace = await Depot("espace", m.EspaceCloud).obtenir(ctx, espace_id)
+        espace_cree_le = espace.createdAt.date()
     vms = await Depot("vm", m.Vm).tous(
-        ctx, filtre=lambda v: espace_id is None or v.espaceId == espace_id
+        ctx,
+        filtre=lambda v: (espace_id is None or v.espaceId == espace_id) and v.statut != "error",
     )
     vcpu = sum(v.vcpu for v in vms)
     ram = sum(v.ramGo for v in vms)
@@ -78,6 +82,23 @@ async def consommation(ctx: Contexte, periode: str, espace_id: str | None = None
     jours = []
     j = debut
     while j < fin and j <= aujourdhui:
+        # L'espace n'existait pas encore ce jour-là : pas de fabrication d'usage,
+        # même si le snapshot courant des ressources est non nul.
+        avant_creation = espace_cree_le is not None and j < espace_cree_le
+        if avant_creation:
+            montant = 0
+            jours.append(
+                {
+                    "date": j,
+                    "vcpuHeures": 0,
+                    "ramGoHeures": 0,
+                    "stockageToJour": 0,
+                    "egressGo": 0,
+                    "montant": montant,
+                }
+            )
+            j += timedelta(days=1)
+            continue
         montant = (
             vcpu * 24 * PRIX["vcpu_heure"]
             + ram * 24 * PRIX["ram_go_heure"]

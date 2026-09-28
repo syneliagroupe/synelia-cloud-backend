@@ -1,6 +1,6 @@
 """Bases managées : cycle de vie, identifiants, réplicas, restauration."""
 
-from synelia_testing import connexion_lab, sur_lab_reel
+from synelia_testing import connexion_lab, corriger_amont, sur_lab_reel
 
 
 async def _espace(client_org) -> str:
@@ -66,8 +66,18 @@ async def test_cycle_base(client_org):
     rotation = r.json()
     assert rotation["motDePasse"]
 
-    r = await client_org.get(f"/v1/bases/{bid}/metriques")
-    assert r.status_code == 200 and r.json()["series"] == []
+    r = await client_org.get(f"/v1/bases/{bid}/metriques", params={"fenetre": "7j"})
+    assert r.status_code == 200
+    series = r.json()["series"]
+    # Pas de supervision temps réel branchée pour les bases managées : les séries sont
+    # déclarées (métrique/unité/fenêtre honorée) mais sans points historiques pour l'instant.
+    assert {s["metrique"] for s in series} == {"cpu", "ram", "disque", "connexions"}
+    assert all(s["fenetre"] == "7j" and s["points"] == [] for s in series)
+
+    # Une fenêtre inconnue retombe sur la valeur par défaut plutôt que de planter.
+    r = await client_org.get(f"/v1/bases/{bid}/metriques", params={"fenetre": "n_importe_quoi"})
+    assert r.status_code == 200
+    assert all(s["fenetre"] == "24h" for s in r.json()["series"])
 
     r = await client_org.post(f"/v1/bases/{bid}/replicas", json={"site": "ABJ"})
     assert r.status_code == 202 and r.json()["statut"] == "done"
@@ -86,3 +96,124 @@ async def test_cycle_base(client_org):
 
     r = await client_org.get("/v1/bases")
     assert r.json()["pagination"]["total"] == 0
+
+
+async def test_rotation_identifiants_refuse_franchement_en_amont_reel(client_org, monkeypatch):
+    """Fournisseur réel (`ComputeOpenStack`) : aucun canal d'exécution distante (SSH/exec)
+    vers la VM Docker de la base n'existe encore — la rotation ne doit pas renvoyer un 200
+    qui ferait croire que l'ancien mot de passe (potentiellement fuité) vient d'être révoqué
+    auprès du moteur. Elle doit refuser franchement (424), et ne rien changer en base."""
+    from synelia.modules.bases import service as bases_service
+    from synelia_openstack.compute import ComputeOpenStack
+
+    espace_id = await _espace(client_org)
+    r = await client_org.post(
+        "/v1/bases",
+        json={
+            "espaceId": espace_id,
+            "nom": "rotation-honnete",
+            "moteur": "postgresql",
+            "version": "16",
+            "palier": "s1",
+        },
+    )
+    assert r.status_code == 202, r.text
+    bases = (await client_org.get("/v1/bases")).json()["donnees"]
+    bid = next(b["id"] for b in bases if b["nom"] == "rotation-honnete")
+
+    secrets_avant = (await client_org.get(f"/v1/bases/{bid}/identifiants")).json()
+
+    monkeypatch.setattr(bases_service, "amont", lambda: ComputeOpenStack())
+    r = await client_org.post(f"/v1/bases/{bid}/identifiants/rotation", json={})
+    assert r.status_code == 424, r.text
+    assert r.json()["erreur"]["code"] == "amont_indisponible"
+
+    secrets_apres = (await client_org.get(f"/v1/bases/{bid}/identifiants")).json()
+    assert secrets_apres["utilisateur"] == secrets_avant["utilisateur"]
+
+
+async def test_replica_provisionne_un_serveur_reel(client_org, monkeypatch):
+    """Ajouter un réplica doit vraiment provisionner un second serveur amont — pas seulement
+    incrémenter `replicas` sans aucune ressource derrière (bug de l'audit exhaustif du
+    2026-09-26 : `ExecuteurBaseReplica.terminer` ne faisait que `base.replicas + 1`, aucun
+    Nova/serveur créé, VM count identique avant/après). On vérifie l'appel réel à
+    `creer_serveur` (nom distinct de l'instance primaire) et son nettoyage à la suppression
+    (sinon fuite de VM orpheline — cf. `ExecuteurBaseDelete`)."""
+    from synelia.modules.bases import service as bases_service
+
+    espace_id = await _espace(client_org)
+    corps = {
+        "espaceId": espace_id,
+        "nom": "app-replica-test",
+        "moteur": "postgresql",
+        "version": "16",
+        "palier": "s1",
+        "ha": False,
+        "tailleGo": 20,
+        "pitr": False,
+        "replicas": 0,
+    }
+    r = await client_org.post("/v1/bases", json=corps)
+    assert r.status_code == 202, r.text
+    bid = (await client_org.get("/v1/bases")).json()["donnees"][0]["id"]
+
+    appels: list[dict] = []
+    supprimes: list[str] = []
+    corriger_amont(
+        monkeypatch,
+        bases_service,
+        "ComputeSimule",
+        "ComputeOpenStack",
+        "creer_serveur",
+        lambda self, **kw: (
+            appels.append(kw)
+            or {"id": f"srv-repl-{len(appels)}", "statut": "ACTIVE", "ip_privee": "10.0.0.9"}
+        ),
+    )
+    corriger_amont(
+        monkeypatch,
+        bases_service,
+        "ComputeSimule",
+        "ComputeOpenStack",
+        "supprimer_serveur",
+        lambda self, serveur_id: supprimes.append(serveur_id),
+    )
+
+    r = await client_org.post(f"/v1/bases/{bid}/replicas", json={"site": "ABJ"})
+    assert r.status_code == 202 and r.json()["statut"] == "done"
+    assert len(appels) == 1, "aucun serveur amont réel provisionné pour le réplica"
+    assert appels[0]["nom"].startswith(f"db-{bid[:8]}-rl-")
+
+    r = await client_org.get(f"/v1/bases/{bid}")
+    assert r.status_code == 200 and r.json()["replicas"] == 1
+
+    r = await client_org.delete(f"/v1/bases/{bid}", params={"confirmation": "app-replica-test"})
+    assert r.status_code == 202 and r.json()["statut"] == "done"
+    assert "srv-repl-1" in supprimes, "le serveur du réplica doit être nettoyé à la suppression"
+
+
+async def test_restauration_refuse_si_pitr_desactive(client_org):
+    """`POST /bases/{id}/restauration` ne doit pas laisser croire qu'un instantané existe
+    et qu'une restauration est possible si le PITR n'a jamais été activé sur la base — il
+    n'y a alors rien de réel à restaurer."""
+    espace_id = await _espace(client_org)
+    r = await client_org.post(
+        "/v1/bases",
+        json={
+            "espaceId": espace_id,
+            "nom": "sans-pitr",
+            "moteur": "postgresql",
+            "version": "16",
+            "palier": "s1",
+            "pitr": False,
+        },
+    )
+    assert r.status_code == 202, r.text
+    bid = (await client_org.get("/v1/bases")).json()["donnees"][0]["id"]
+
+    r = await client_org.post(
+        f"/v1/bases/{bid}/restauration",
+        json={"instant": "2026-09-01T10:00:00Z", "nomCible": "sans-pitr-restore"},
+    )
+    assert r.status_code == 409, r.text
+    assert r.json()["erreur"]["code"] == "pitr_desactive"

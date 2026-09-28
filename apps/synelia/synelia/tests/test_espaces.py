@@ -62,3 +62,31 @@ async def test_cycle_espace(client_org):
         "/v1/audit"
     )  # module audit pas encore écrit → 404 chemin inconnu accepté ici
     assert r.status_code in (200, 404)
+
+
+async def test_lister_espaces_usage_recalculee(client):
+    """La liste des Espaces Cloud doit refléter le même usage recalculé que le détail (pas 0/0/0 figé)."""
+    r = await client.get("/v1/espaces")
+    demo = next(e for e in r.json()["donnees"] if e["code"] == "demo-abj")
+    espace_id = demo["id"]
+
+    r = await client.post(
+        "/v1/vms",
+        json={
+            "espaceId": espace_id,
+            "nom": "vm-usage-test",
+            "imageId": "ubuntu-24.04",
+            "gabarit": "g1.medium",
+        },
+    )
+    assert r.status_code == 202, r.text
+
+    r = await client.get(f"/v1/espaces/{espace_id}")
+    assert r.status_code == 200
+    usage_detail = r.json()["usage"]
+    assert usage_detail["vcpu"] > 0
+
+    r = await client.get("/v1/espaces")
+    assert r.status_code == 200
+    demo_liste = next(e for e in r.json()["donnees"] if e["id"] == espace_id)
+    assert demo_liste["usage"] == usage_detail

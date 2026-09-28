@@ -4,7 +4,9 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, status
 from synelia_contract import modeles as m
+from synelia_kernel import erreurs
 from synelia_kernel.ids import nouvel_id
+from synelia_openstack.compute import ComputeOpenStack
 
 from synelia.audit import journaliser
 from synelia.deps import Contexte, Page, exige, exiger_confirmation
@@ -190,8 +192,18 @@ async def rotationner_identifiants_base(
 ) -> Any:  # noqa: N803
     # Rotation locale du secret : génère et stocke un nouveau mot de passe réel. Le moteur
     # tournant dans le conteneur Docker de la VM garde l'ancien tant qu'il n'est pas mis à jour
-    # via une exécution distante (hors périmètre ici, pas d'accès SSH/exec depuis l'API).
+    # via une exécution distante (hors périmètre ici, pas d'accès SSH/exec depuis l'API) : en
+    # fournisseur réel, on refuse franchement plutôt que de renvoyer un 200 qui ferait croire
+    # que l'ancien mot de passe (potentiellement fuité) vient d'être révoqué — cf. `web_hebergement.
+    # executer_commande_vps`, même discipline (424 franc quand le canal d'exécution n'existe pas).
     base = await depot.obtenir(ctx, baseId)
+    if isinstance(service.amont(), ComputeOpenStack):
+        raise erreurs.amont_indisponible(
+            "base (rotation moteur)",
+            "Le mot de passe n'a pas été appliqué au moteur en cours d'exécution : aucun canal "
+            "d'exécution distante (SSH/exec) vers la VM n'existe encore pour ce module. "
+            "L'ancien mot de passe reste valide auprès du moteur — rotation refusée.",
+        )
     secrets_actuels = await depot.secrets(ctx, baseId)
     utilisateur = secrets_actuels.get("utilisateur") or service.utilisateur_pour_moteur(base.moteur)
     nouveau_mdp = service.nouveau_mot_de_passe()
@@ -211,6 +223,14 @@ async def rotationner_identifiants_base(
     )
 
 
+_SERIES_BASE: tuple[tuple[str, str], ...] = (
+    ("cpu", "%"),
+    ("ram", "Go"),
+    ("disque", "Go"),
+    ("connexions", "conn"),
+)
+
+
 @router.get(
     "/{baseId}/metriques",
     response_model=m.BasesBaseIdMetriquesGetResponse,
@@ -220,7 +240,16 @@ async def obtenir_metriques_base(
     baseId: str, fenetre: str | None = None, ctx: Contexte = Depends(exige(None))
 ) -> Any:  # noqa: N803
     await depot.obtenir(ctx, baseId)
-    return m.BasesBaseIdMetriquesGetResponse(series=[])
+    fen = fenetre if fenetre in ("24h", "7j", "30j") else "24h"
+    # Pas d'intégration de supervision temps réel pour les bases managées aujourd'hui (même
+    # limite que services_manages) : on déclare les séries attendues, avec `fenetre` honorée,
+    # plutôt qu'un stub vide qui ignore le paramètre. Aucun point historique n'est encore
+    # disponible tant qu'aucun amont de métriques n'est branché.
+    series = [
+        m.Serie(metrique=metrique, unite=unite, fenetre=fen, points=[])
+        for metrique, unite in _SERIES_BASE
+    ]
+    return m.BasesBaseIdMetriquesGetResponse(series=series)
 
 
 @router.post(
@@ -270,6 +299,11 @@ async def restaurer_base_dans_le_temps(
     ctx: Contexte = Depends(exige("backup.restore")),
 ) -> Any:  # noqa: N803
     base = await depot.obtenir(ctx, baseId)
+    if not base.pitr:
+        raise erreurs.conflit(
+            "Le PITR n'est pas activé sur cette base : aucune restauration possible.",
+            code="pitr_desactive",
+        )
     await journaliser(
         ctx,
         action="base.restauration",

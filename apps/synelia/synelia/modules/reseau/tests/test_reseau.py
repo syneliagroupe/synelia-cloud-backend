@@ -266,16 +266,27 @@ async def test_attacher_detacher_ip(client):
     ignorer_si_fip_epuise()
     r = await _creer_ip(client)
     ipid = r.json()["id"]
+    adresse = r.json()["adresse"]
 
     r = await client.put(f"/v1/ips/{ipid}/attachement", json={"cibleId": VM})
     assert r.status_code == 200, r.text
     assert r.json()["attachedTo"] == VM and r.json()["attachedLabel"] == "web-01"
+
+    r = await client.get(f"/v1/vms/{VM}")
+    assert r.status_code == 200
+    ips_vm = r.json()["ips"]
+    assert any(i["type"] == "publique" and i["adresse"] == adresse for i in ips_vm)
+    assert any(i["type"] == "privee" for i in ips_vm)
 
     r = await client.put(f"/v1/ips/{ipid}/attachement", json={"cibleId": VM})
     assert r.status_code == 409
 
     r = await client.delete(f"/v1/ips/{ipid}/attachement")
     assert r.status_code == 200 and r.json().get("attachedTo") is None
+
+    r = await client.get(f"/v1/vms/{VM}")
+    assert r.status_code == 200
+    assert not any(i["type"] == "publique" for i in r.json()["ips"])
 
 
 async def test_attacher_ip_vm_introuvable(client):

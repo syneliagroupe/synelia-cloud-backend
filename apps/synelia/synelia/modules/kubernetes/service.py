@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 from synelia_contract import modeles as m
 from synelia_db.modeles import Travail
+from synelia_kernel import erreurs
 from synelia_kernel.ids import nouvel_id
 from synelia_openstack import fournisseur
 from synelia_openstack.compute import ComputeOpenStack, ComputeSimule
@@ -12,7 +14,9 @@ from synelia_openstack.magnum import MagnumOpenStack, MagnumSimule
 
 from synelia.depot import Depot
 from synelia.deps.contexte import Contexte
-from synelia.travaux import Executeur, executeur
+from synelia.travaux import Executeur, PauseHumaine, executeur
+
+logger = logging.getLogger(__name__)
 
 depot_cluster = Depot("k8s_cluster", m.ClusterK8s)
 depot_pool = Depot("k8s_pool", m.PoolWorkers)
@@ -141,6 +145,42 @@ def _mapper_statut_magnum(statut_amont: str) -> str | None:
     return None
 
 
+# Fenêtre bornée de sondage Magnum, tentée juste avant la dernière étape du catalogue
+# `k8s.create` (« Publier le kubeconfig », cf. workflows.json) : `POST /kubernetes` répondait
+# `done`/toutes étapes `ok` en ~1 s sans jamais interroger Magnum, y compris quand la création
+# amont échoue vite (ex. le 403 Keystone d'imbrication d'Application Credential — limitation de
+# plateforme déjà connue, cf. `_mapper_statut_magnum`) : un appelant qui ne regarde que le
+# travail concluait à tort au succès, la vérité (`degraded`) n'apparaissant qu'à une lecture
+# ultérieure du cluster (`reconcilier_statut`). Bornée à quelques dizaines de secondes — même
+# motif que `stockage.service._attendre_in_use` — pour capter cet échec structurel rapide sans
+# bloquer la requête HTTP sur les plusieurs minutes que prend un provisioning réel réussi
+# (celui-ci reste alors `provisioning`, `reconcilier_statut` prenant le relais à chaque lecture
+# suivante, comme avant ce correctif).
+_DELAI_CREATION_MAX_S = 45.0
+_DELAI_CREATION_SONDE_S = 3.0
+
+
+async def _attendre_issue_creation(mid: str) -> str:
+    """Sonde le statut Magnum du cluster tout juste soumis jusqu'à un statut terminal connu de
+    `_mapper_statut_magnum` (`running`/`degraded`) ou expiration du délai borné ci-dessus.
+    Renvoie le dernier statut amont vu dans tous les cas (jamais d'exception : un sondage
+    illisible n'est qu'une lecture ratée, pas une preuve d'échec) — c'est l'appelant qui décide
+    de la suite (succès, échec réel, ou toujours en cours) à partir de la valeur renvoyée."""
+    statut = ""
+    delai = 0.0
+    while delai < _DELAI_CREATION_MAX_S:
+        try:
+            statut = await asyncio.to_thread(amont().cluster_statut, mid)
+        except Exception as exc:  # noqa: BLE001 — lecture best effort, on ressonde
+            logger.debug("sondage Magnum %s impossible : %s", mid, exc)
+        else:
+            if _mapper_statut_magnum(statut) in ("running", "degraded"):
+                return statut
+        await asyncio.sleep(_DELAI_CREATION_SONDE_S)
+        delai += _DELAI_CREATION_SONDE_S
+    return statut
+
+
 async def reconcilier_statut(ctx: Contexte, cluster: m.ClusterK8s) -> m.ClusterK8s:
     """Relit le statut réel du cluster côté Magnum et met à jour la ressource si l'amont a
     évolué depuis le dernier relevé, avant de la renvoyer.
@@ -205,13 +245,52 @@ class ExecuteurK8sCreate(Executeur):
             c["statut_amont"] = cl["statut"]
             travail.contexte = c
             return f"Cluster Magnum soumis ({cl['id']}, {cl['statut']})"
+        if index == len(travail.taches) - 1:
+            # Dernière étape du catalogue (« Publier le kubeconfig ») : avant ce correctif, le
+            # travail passait `ok`/`done` ici sans jamais reconsulter Magnum depuis la
+            # soumission (étape 0) — y compris quand la création amont échouait vite (403
+            # Keystone d'imbrication d'AC, limitation de plateforme connue), ce que seule une
+            # lecture ultérieure de la ressource révélait. On resonde donc Magnum ici, borné à
+            # `_DELAI_CREATION_MAX_S` (cf. commentaire sur la constante) :
+            #  - statut terminal `running` : l'étape réussit franchement (cluster confirmé actif).
+            #  - statut terminal `degraded` (`*_FAILED`, cluster disparu) : on fait échouer
+            #    l'étape (`compenser` supprime le cluster amont, la ressource passe `degraded`,
+            #    le travail `rolled_back`) — plus de faux `done` sur un échec réel.
+            #  - toujours non terminal après la fenêtre bornée (provisioning réel en cours,
+            #    plausible : un vrai Heat/CAPI prend plusieurs minutes) : ni succès ni échec
+            #    avéré, donc `PauseHumaine` — le travail reste `running`, cette étape reste
+            #    honnêtement non `ok` plutôt que de mentir sur une complétion pas encore connue.
+            #    Un `GET /kubernetes/{id}` (`reconcilier_statut`) continue de rafraîchir la
+            #    ressource entre-temps ; `POST /travaux/{id}/annulation` reste disponible pour
+            #    clore ce travail si l'opérateur ne veut pas attendre davantage.
+            secrets = await depot_cluster.secrets(ctx, travail.cible_id or "")
+            mid = secrets.get("magnum_cluster_id")
+            if not mid:
+                return None
+            statut_amont = await _attendre_issue_creation(mid)
+            c = dict(travail.contexte)
+            c["statut_amont"] = statut_amont
+            travail.contexte = c
+            mappe = _mapper_statut_magnum(statut_amont)
+            if mappe == "degraded":
+                raise erreurs.amont_indisponible(
+                    "magnum",
+                    f"La création du cluster Magnum a échoué (statut `{statut_amont}`).",
+                )
+            if mappe is None or mappe in ("provisioning", "updating"):
+                raise PauseHumaine(
+                    f"Cluster Magnum toujours `{statut_amont}` après "
+                    f"{int(_DELAI_CREATION_MAX_S)} s de sondage — provisioning réel "
+                    "probablement en cours, statut définitif pas encore connu."
+                )
+            return f"Cluster Magnum confirmé actif (`{statut_amont}`)"
         return None
 
     async def terminer(self, ctx: Contexte, travail: Travail) -> None:
-        # Le simulé renvoie CREATE_COMPLETE instantanément ; le réel (Heat/CAPI) prend bien
-        # plus longtemps qu'une étape de travail, donc on ne bloque pas dessus et le cluster
-        # reste `provisioning` côté plateforme jusqu'à ce que `reconcilier_statut` (appelé à
-        # chaque lecture, cf. router) confirme CREATE_COMPLETE côté Magnum.
+        # N'est atteint que si la dernière étape a confirmé `running` ci-dessus (sinon : échec/
+        # rollback, ou `PauseHumaine` qui n'appelle jamais `terminer`) — `statut_amont` ici est
+        # donc toujours une valeur `*_COMPLETE` en pratique, mais on garde le même mappage que
+        # `reconcilier_statut` par défense en profondeur plutôt que de supposer `running` en dur.
         statut_amont = str(travail.contexte.get("statut_amont", ""))
         statut = "running" if statut_amont.endswith("COMPLETE") else "provisioning"
         await depot_cluster.definir_statut(ctx, travail.cible_id or "", statut)

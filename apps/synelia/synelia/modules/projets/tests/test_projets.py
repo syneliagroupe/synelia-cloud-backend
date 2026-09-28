@@ -59,6 +59,22 @@ async def test_cycle_projet(client_org):
     r = await client_org.patch(f"/v1/projets/{pid}", json={"nom": "CRM 2", "espaceId": espace_id})
     assert r.status_code == 200 and r.json()["nom"] == "CRM 2"
 
+    # `etiquettes` et `clusterId` sont documentés comme modifiables dans `ProjetCreation`
+    # (seul `cible` est explicitement ignoré en modification) : une régression avait
+    # laissé `modifier_projet` les lire sans jamais les appliquer.
+    r = await client_org.patch(
+        f"/v1/projets/{pid}",
+        json={
+            "nom": "CRM 2",
+            "espaceId": espace_id,
+            "etiquettes": ["qa", "test"],
+            "clusterId": "cluster-abc",
+        },
+    )
+    assert r.status_code == 200
+    assert r.json()["etiquettes"] == ["qa", "test"]
+    assert r.json()["clusterId"] == "cluster-abc"
+
     r = await client_org.delete(f"/v1/projets/{pid}", params={"confirmation": "mauvais"})
     assert r.status_code == 422
 
@@ -394,6 +410,52 @@ async def test_cycle_service_vm(client_org):
     # cible k8s.
     r = await client_org.delete(f"/v1/projets/{pid}", params={"confirmation": "Site VM"})
     assert r.status_code == 202 and r.json()["statut"] == "done"
+
+
+async def test_journaux_service_vm_scope_conteneur(client_org, monkeypatch):
+    """Régression : les journaux d'un service en cible `vm` doivent lire réellement le
+    conteneur applicatif de CE service (`docker logs`) sur la VM Docker Compose de son
+    projet — jamais rester une liste vide inconditionnelle, ni renvoyer ceux d'un autre
+    service partageant la même VM."""
+    ignorer_si_fip_epuise()
+    from synelia.modules.projets import service as projets_service
+
+    espace_id = await _espace(client_org, "projet-journaux-vm")
+    projet = await _projet_vm(client_org, espace_id, "Site VM Journaux")
+    pid = projet["id"]
+    r = await client_org.post(
+        f"/v1/projets/{pid}/services",
+        json={
+            "nom": "web",
+            "type": "application",
+            "environnement": "production",
+            "ressources": {"cpu": 1, "ramMo": 512, "diskGo": 10},
+            "source": {"type": "image", "ref": "nginx:alpine"},
+        },
+    )
+    assert r.status_code == 202, r.text
+    web_id = (await client_org.get(f"/v1/projets/{pid}/services")).json()[0]["id"]
+
+    appels: list[str] = []
+
+    class _SshFactice:
+        def executer(
+            self, hote: str, cle_privee: str, commande: str, utilisateur: str = "root"
+        ) -> str:
+            appels.append(commande)
+            return "ligne 1 nginx\nligne 2 nginx\n"
+
+    monkeypatch.setattr(projets_service, "amont_ssh", lambda: _SshFactice())
+
+    r = await client_org.get(f"/v1/projets/{pid}/services/{web_id}/journaux")
+    assert r.status_code == 200, r.text
+    corps = r.json()
+    assert [ligne["message"] for ligne in corps["lignes"]] == ["ligne 1 nginx", "ligne 2 nginx"]
+    assert corps["tronque"] is False
+
+    conteneur = projets_service.nom_conteneur_service_vm(web_id)
+    assert appels, "aucun appel SSH : l'endpoint n'a rien lu de réel"
+    assert "docker logs" in appels[0] and conteneur in appels[0]
 
 
 async def test_routage(client_org):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 from synelia_contract import modeles as m
 from synelia_db.modeles import Travail
@@ -169,6 +170,17 @@ async def serveur_id(ctx: Contexte, base_id: str, travail: Travail | None = None
     return str(sec.get("serveur_id") or base_id)
 
 
+async def replica_serveur_ids(ctx: Contexte, base_id: str) -> list[str]:
+    """Identifiants Nova des réplicas réels de la base, posés dans les secrets à chaque ajout
+    (`ExecuteurBaseReplica.terminer`) — sérialisés en JSON, même convention que `sauvegarde.
+    service` pour une liste dans un secret (`chiffrer` ne prend qu'une chaîne)."""
+    try:
+        sec = await depot.secrets(ctx, base_id)
+    except Exception:  # noqa: BLE001
+        sec = {}
+    return list(json.loads(sec.get("replica_serveur_ids") or "[]"))
+
+
 @executeur("base.create")
 class ExecuteurBaseCreate(Executeur):
     compensable = True
@@ -218,15 +230,67 @@ class ExecuteurBaseCreate(Executeur):
 
 @executeur("base.replica")
 class ExecuteurBaseReplica(Executeur):
+    """Provisionne un vrai second serveur amont pour le réplica (même image/gabarit/moteur que
+    l'instance primaire — cf. `ExecuteurBaseCreate`). La « synchronisation des données » reste
+    hors périmètre au sens strict (aucune réplication logique en continu n'est pilotée : comme
+    la rotation d'identifiants ci-dessus, l'API n'a pas d'accès SSH/exec pour configurer le
+    moteur à distance) ; ce qui est réel ici, c'est bien l'instance elle-même — plus un simple
+    compteur incrémenté sans aucune ressource derrière."""
+
+    compensable = True
+
+    async def etape(self, ctx: Contexte, travail: Travail, index: int, nom: str) -> str | None:
+        if index == 0:
+            base = await depot.obtenir(ctx, travail.cible_id or "")
+            from synelia.modules.espaces.service import depot as depot_espaces
+
+            secrets_espace = await depot_espaces.secrets(ctx, base.espaceId)
+            secrets_base = await depot.secrets(ctx, base.id)
+            port = PORTS.get(base.moteur, 5432)
+            image_id = await image_ubuntu()
+            gabarit_id = await gabarit_pour_palier(base.palier)
+            srv = await asyncio.to_thread(
+                amont().creer_serveur,
+                nom=f"db-{base.id[:8]}-rl-{travail.id[:8]}",
+                image_id=image_id,
+                gabarit_id=gabarit_id,
+                reseau_id=secrets_espace.get("reseau_id"),
+                identifiants=secrets_espace,
+                org_id=ctx.org_id_ou_none,
+                espace_id=base.espaceId,
+                cloud_init=construire_cloud_init(
+                    base.moteur, base.version, port, secrets_base.get("mot_de_passe", ""), base.nom
+                ),
+            )
+            c = dict(travail.contexte)
+            c["serveur_id"] = srv["id"]
+            travail.contexte = c
+            return f"Serveur amont {srv['id']} créé"
+        return None
+
     async def terminer(self, ctx: Contexte, travail: Travail) -> None:
         base = await depot.obtenir(ctx, travail.cible_id or "")
+        nouveau_serveur_id = travail.contexte.get("serveur_id")
+        if nouveau_serveur_id:
+            existants = await replica_serveur_ids(ctx, base.id)
+            existants.append(str(nouveau_serveur_id))
+            await depot.definir_secrets(
+                ctx, base.id, {"replica_serveur_ids": json.dumps(existants)}
+            )
         await depot.remplacer(
             ctx,
-            travail.cible_id or "",
+            base.id,
             base.model_copy(
                 update={"replicas": travail.contexte.get("replicas", base.replicas + 1)}
             ),
         )
+
+    async def compenser(self, ctx: Contexte, travail: Travail, index_echoue: int) -> None:
+        # Instance primaire non affectée par l'échec d'un ajout de réplica : seul le serveur
+        # fraîchement créé (s'il existe) doit être nettoyé, pas le statut de la base.
+        sid = travail.contexte.get("serveur_id")
+        if sid:
+            await asyncio.to_thread(amont().supprimer_serveur, str(sid))
 
 
 @executeur("base.restore")
@@ -248,4 +312,9 @@ class ExecuteurBaseDelete(Executeur):
         sid = await serveur_id(ctx, travail.cible_id or "", travail)
         if sid and sid != (travail.cible_id or ""):
             await asyncio.to_thread(amont().supprimer_serveur, sid)
+        # Sans ce nettoyage, les réplicas réels posés par `ExecuteurBaseReplica` survivraient à
+        # la suppression de la base — orphelins pour toujours, jamais facturés ni retrouvables
+        # (même angle mort que `supprimer_snapshots_reels` en sauvegarde).
+        for rid in await replica_serveur_ids(ctx, travail.cible_id or ""):
+            await asyncio.to_thread(amont().supprimer_serveur, rid)
         await depot.supprimer(ctx, travail.cible_id or "", logique=True)

@@ -434,6 +434,40 @@ async def _arreter_service_vm(ctx: Contexte, service: m.ServiceProjet, projet: m
     )
 
 
+async def journaux_service_vm(
+    ctx: Contexte, service: m.ServiceProjet, projet: m.Projet, lignes: int = 20
+) -> list[str]:
+    """Journaux réels du conteneur applicatif de `service` sur la VM Docker Compose de son
+    projet (cible `vm`) — `docker logs`, scopé exactement au conteneur DE CE service
+    (`nom_conteneur_service_vm`), jamais ceux des autres services de la même VM partagée
+    (contrairement aux journaux d'une VM `vms` classique, une VM de projet en cible `vm` peut
+    héberger plusieurs services : le seul journal honnête est celui du conteneur concerné, pas
+    celui de toute la VM). Même discipline IP/clé que `_installer_service_vm` : 424 franc en
+    réel si l'accès SSH backend manque, repli simulé sinon."""
+    secrets_projet = await depot_projet.secrets(ctx, projet.id)
+    if not secrets_projet.get("vm_serveur_id"):
+        return []  # jamais provisionnée réellement (aucun service n'a jamais tourné) : rien à lire
+    zone = await web_heb.zone_vps_secrets(ctx)
+    cle_privee = zone.get("ssh_prive")
+    ip = secrets_projet.get("vm_ssh_ip")
+    ssh = amont_ssh()
+    if not cle_privee or not ip:
+        if isinstance(ssh, SshReel):
+            raise erreurs.amont_indisponible(
+                "projet (SSH)",
+                "Aucune IP de gestion SSH backend disponible pour la VM de ce projet : "
+                "impossible de lire ses journaux.",
+            )
+        # Simulation : `SshSimule` n'ouvre aucune connexion réelle, peu importe la valeur —
+        # même repli que `_installer_service_vm`.
+        cle_privee, ip = cle_privee or "cle-simulee", ip or "127.0.0.1"
+    conteneur = nom_conteneur_service_vm(service.id)
+    sortie = await asyncio.to_thread(
+        ssh.executer, ip, cle_privee, f"docker logs --tail {lignes} {conteneur} 2>&1"
+    )
+    return [ligne for ligne in sortie.splitlines() if ligne]
+
+
 async def _supprimer_service_vm(ctx: Contexte, service: m.ServiceProjet, projet: m.Projet) -> None:
     try:
         secrets_service = await depot_service.secrets(ctx, service.id)

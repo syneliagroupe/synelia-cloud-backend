@@ -26,12 +26,17 @@ async def lister_espaces(
     statut: str | None = None,
     ctx: Contexte = Depends(exige("org.dashboard.view", lecture=True)),
 ) -> Any:
-    return await depot.lister(
+    resultat = await depot.lister(
         ctx,
         page,
         filtre=lambda e: (not site or e.site == site) and (not statut or e.statut == statut),
         tri_defaut="code",
     )
+    resultat["donnees"] = [
+        e.model_copy(update={"usage": m.Quota(**await service.usage(ctx, e.id))})
+        for e in resultat["donnees"]
+    ]
+    return resultat
 
 
 @router.post(

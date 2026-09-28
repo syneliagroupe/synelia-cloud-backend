@@ -65,6 +65,7 @@ async def creer_volume(
         attachedTo=corps.attacherA,
         attachedLabel=None,
         montage=corps.montage,
+        statut="creation",
     )
     await depot_volume.creer(ctx, vol)
     await journaliser(
