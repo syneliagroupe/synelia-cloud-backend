@@ -35,7 +35,11 @@ async def test_drive_refuse_sans_hebergement(client_org):
     )
     assert r.status_code == 202, r.text
     travail = r.json()
-    assert travail["statut"] == "failed"
+    # `rolled_back`, pas `failed` : la compensation (désactiver le drive créé en base à
+    # l'étape précédente) réussit désormais — avant un correctif de cette session, elle
+    # plantait silencieusement (`Drive.actif` recevait la chaîne "suspendu" au lieu d'un
+    # booléen), ce qui empêchait le travail de jamais atteindre `rolled_back`.
+    assert travail["statut"] == "rolled_back"
     assert "hébergement" in travail["erreur"]["message"].lower()
 
 

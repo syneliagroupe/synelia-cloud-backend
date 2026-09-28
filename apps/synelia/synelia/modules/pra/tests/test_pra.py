@@ -90,8 +90,11 @@ async def test_bascule_reelle_avec_confirmation(client_org):
     assert r.status_code == 202, r.text
     assert r.json()["type"] == "dr.failover.real"
 
-    r = await client_org.get(f"/v1/pra/{pra_id}/exercices")
-    assert len(r.json()) == 1 and r.json()[0]["type"] == "reel"
+    # La bascule réelle est désactivée sur ce socle (pas de site de repli réel provisionné) :
+    # le travail échoue franchement plutôt que de prétendre avoir basculé quelque chose.
+    r = await client_org.get(f"/v1/travaux/{r.json()['id']}")
+    assert r.json()["statut"] == "failed"
+    assert "site de repli" in r.json()["erreur"]["message"].lower()
 
 
 async def test_retour_site_source(client_org):

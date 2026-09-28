@@ -227,6 +227,50 @@ async def _notifier_facture_emise(ctx: Contexte, org_id: str, facture: dict[str,
         )
 
 
+BUCKET_EXPORTS = "synelia-exports-facturation"
+
+
+@executeur("facturation.export")
+class ExecuteurFacturationExport(Executeur):
+    """Avant ce correctif : aucun exécuteur n'était enregistré pour `facturation.export` —
+    le travail se déclarait `done` sans qu'aucun fichier n'existe jamais, alors que
+    `POST /consommation/export` promettait une URL de téléchargement (`GET
+    /travaux/{id}/export`, ajouté avec ce correctif)."""
+
+    async def terminer(self, ctx: Contexte, travail: Travail) -> None:
+        entree = travail.entree or {}
+        periode = str(entree.get("periode") or "")
+        format_ = str(entree.get("format") or "csv")
+        conso = await metrologie.consommation(ctx, periode)
+        jours = conso.get("jours") or []
+        if format_ == "json":
+            import json as _json
+
+            contenu = _json.dumps(conso, default=str, ensure_ascii=False, indent=2).encode()
+            content_type = "application/json"
+            ext = "json"
+        else:
+            import csv
+            import io
+
+            buf = io.StringIO()
+            entetes = ["date", "vcpuHeures", "ramGoHeures", "stockageToJour", "egressGo", "montant"]
+            w = csv.DictWriter(buf, fieldnames=entetes, extrasaction="ignore")
+            w.writeheader()
+            for jour in jours:
+                w.writerow(jour if isinstance(jour, dict) else jour.model_dump(mode="json"))
+            contenu = buf.getvalue().encode()
+            content_type = "text/csv"
+            ext = "csv"
+        import asyncio
+
+        from synelia.modules.stockage.service import amont_objet
+
+        cle = f"{ctx.org_id}/{periode}-{nouvel_id()[:8]}.{ext}"
+        await asyncio.to_thread(amont_objet().deposer_objet, BUCKET_EXPORTS, cle, contenu, content_type)
+        travail.contexte = {**travail.contexte, "export_bucket": BUCKET_EXPORTS, "export_cle": cle}
+
+
 @executeur("facturation.cycle")
 class ExecuteurCycleFacturation(Executeur):
     async def terminer(self, ctx: Contexte, travail) -> None:

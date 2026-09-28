@@ -74,10 +74,31 @@ async def test_cycle_souscription(client_org):
     assert r.status_code == 200
 
     r = await client_org.post(f"/v1/services/{sid}/export", json={"format": "zip"})
-    assert r.status_code == 202
+    assert r.status_code == 202, r.text
+    assert r.json()["statut"] == "done", r.text
 
     r = await client_org.get(f"/v1/services/{sid}/exports")
     assert r.status_code == 200 and len(r.json()) >= 1
+    # Avant correctif : `ExecuteurServiceExport` était une classe vide, la ligne restait
+    # `en_cours` indéfiniment sans qu'aucun fichier ne soit jamais produit.
+    assert r.json()[-1]["statut"] == "pret"
+
+    # Mise à jour puis rollback : la version précédente doit être réellement restaurée
+    # (avant correctif, `ExecuteurServiceRollback` était une classe vide — no-op silencieux).
+    version_avant = (await client_org.get(f"/v1/services/{sid}")).json()["version"]
+    r = await client_org.post(f"/v1/services/{sid}/mise-a-jour", json={})
+    assert r.status_code == 202, r.text
+    assert r.json()["statut"] == "done", r.text
+    version_apres_maj = (await client_org.get(f"/v1/services/{sid}")).json()["version"]
+    assert version_apres_maj != version_avant
+
+    r = await client_org.post(
+        f"/v1/services/{sid}/versions/rollback", json={"confirmation": "Renommé"}
+    )
+    assert r.status_code == 202, r.text
+    assert r.json()["statut"] == "done", r.text
+    version_apres_rollback = (await client_org.get(f"/v1/services/{sid}")).json()["version"]
+    assert version_apres_rollback == version_avant
 
     r = await client_org.get(f"/v1/services/{sid}/metriques")
     assert r.status_code == 200 and r.json()["series"][0]["points"] == []
