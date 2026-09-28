@@ -99,7 +99,7 @@ PROBES: list[tuple[str, str, str, str, str, str]] = [
         "Dispo domaine",
         "/app/web/domaines",
         "GET",
-        "/web/domaines/disponibilite?nom=test-demo.ci",
+        "/web/domaines/disponibilite?nom=synelia-lab-probe-deadbeef.com",
         "",
     ),
     ("Web Cloud", "Hébergements", "/app/web/hebergement", "GET", "/web/hebergements", ""),
