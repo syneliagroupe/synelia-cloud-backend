@@ -3315,7 +3315,7 @@ class ServeurBases(BaseModel):
     id: str
     hebergementId: str
     serveur: str
-    moteur: Literal["mariadb", "mysql", "postgresql", "mongodb", "redis"]
+    moteur: Literal["mariadb", "postgresql", "redis"]
     version: str
     actif: Annotated[bool, Field(description="Un moteur non activé est proposé, pas facturé.")]
     hoteInterne: Annotated[
@@ -3894,7 +3894,7 @@ class Utilisateur(BaseModel):
     lastLoginAt: AwareDatetime | None = None
     orgId: str | None = None
     fonction: str | None = None
-    statut: Literal["actif", "invite", "suspendu"] | None = None
+    statut: Literal["actif", "invite", "suspendu", "verification_requise"] | None = None
 
 
 class VariableEnvironnement(BaseModel):
@@ -4100,7 +4100,6 @@ class Volume(BaseModel):
     ephemere: bool
     iops: int
     montage: str | None = None
-    statut: Literal["creation", "disponible", "erreur"] = "disponible"
 
 
 class VolumeCreation(BaseModel):
