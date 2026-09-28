@@ -139,10 +139,17 @@ async def modifier_drive(
     corps: m.WebDriveDriveIdPatchRequest,
     ctx: Contexte = Depends(exige("service.admin")),
 ) -> Any:  # noqa: N803
-    await depot.obtenir(ctx, driveId)
+    drive = await depot.obtenir(ctx, driveId)
     modifs = {
         k: v for k, v in corps.model_dump(mode="json", exclude_unset=True).items() if v is not None
     }
+    # Fusion profonde des sous-objets du contrat (Partage1, etc.) : un PATCH partiel ne doit
+    # pas écraser tout `partage` et faire échouer la revalidation Drive (champs requis manquants).
+    for cle in ("partage", "versionsFichiers", "corbeille"):
+        if isinstance(modifs.get(cle), dict):
+            base = getattr(drive, cle).model_dump(mode="json")
+            base.update(modifs[cle])
+            modifs[cle] = base
     await depot.modifier(ctx, driveId, modifs)
     await journaliser(
         ctx,
