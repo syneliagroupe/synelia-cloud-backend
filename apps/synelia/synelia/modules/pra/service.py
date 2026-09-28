@@ -66,17 +66,16 @@ def _rpo_constate(replication: m.Replication3) -> int | None:
 
 
 @executeur("dr.failover.test")
-@executeur("dr.failover.real")
-class ExecuteurBascule(Executeur):
-    def _type(self, travail: Travail) -> str:
-        valeur = travail.type.split(".")[-1]
-        return "reel" if valeur == "real" else valeur
+class ExecuteurBasculeTest(Executeur):
+    """Un exercice « test » ne bascule jamais réellement le trafic — c'est le sens même du
+    terme en PRA (valider la procédure sans toucher la production). Simuler ici est donc
+    légitime, contrairement à `dr.failover.real` (voir plus bas)."""
 
     async def terminer(self, ctx: Contexte, travail: Travail) -> None:
         pra_id = travail.cible_id or ""
         exercice = m.ExercicePra(
             date=maintenant(),
-            type=self._type(travail),
+            type="test",
             dureeMin=24,
             rtoConstateMin=int((travail.duree_s or 0) // 60) + 6,
             succes=True,
@@ -84,8 +83,24 @@ class ExecuteurBascule(Executeur):
             incidents=None,
         )
         await exercices.creer(ctx, exercice, parent_id=pra_id)
-        await depot.modifier(
-            ctx, pra_id, {"statut": "operationnel", "rtoConstateMin": exercice.rtoConstateMin}
+
+
+@executeur("dr.failover.real")
+class ExecuteurBasculeReelle(Executeur):
+    """Avant ce correctif : identique à l'exercice de test — aucun appel `amont()`, le plan
+    passait `operationnel` et l'exercice `succes: True` sans qu'aucune ressource n'ait jamais
+    été créée sur le site de repli. Une vraie bascule exigerait de provisionner le site de
+    repli (VM, réseau, DNS) et de réellement y router le trafic — aucun de ces éléments
+    n'existe sur ce socle. Plutôt que de continuer à mentir sur un « succès », on échoue
+    franchement : mieux vaut un opérateur qui sait que le PRA n'est pas prêt qu'un qui le
+    croit opérationnel un jour d'incident réel."""
+
+    async def terminer(self, ctx: Contexte, travail: Travail) -> None:
+        raise erreurs.non_porte(
+            "Bascule PRA réelle non prise en charge sur ce socle : aucun site de repli "
+            "n'est provisionné (pas de VM, réseau ni bascule DNS réels). Utilisez "
+            "l'exercice « test » pour valider la procédure, ou traitez la bascule "
+            "manuellement en attendant l'implémentation réelle."
         )
 
 

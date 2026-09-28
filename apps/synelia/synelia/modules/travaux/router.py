@@ -54,6 +54,32 @@ async def obtenir_travail(ctx: Ctx, travailId: str) -> Any:  # noqa: N803
     return vers_contrat(await _travail(ctx, travailId))
 
 
+@router.get("/{travailId}/export")
+async def telecharger_export_travail(ctx: Ctx, travailId: str) -> Response:  # noqa: N803
+    """Sert le fichier déposé par un exécuteur d'export (ex. `facturation.export`) — les
+    clés `export_bucket`/`export_cle` sont posées dans `travail.contexte` par l'exécuteur.
+    Sans ce chemin, `POST /consommation/export` renvoyait une URL qui ne menait jamais nulle
+    part (404 franc, pas une réponse mensongère à une URL par ailleurs inexistante)."""
+    t = await _travail(ctx, travailId)
+    bucket = t.contexte.get("export_bucket")
+    cle = t.contexte.get("export_cle")
+    if not bucket or not cle:
+        raise erreurs.introuvable("Export", travailId)
+    import asyncio
+
+    from synelia.modules.stockage.service import amont_objet
+
+    contenu = await asyncio.to_thread(amont_objet().recuperer_objet, bucket, cle)
+    if contenu is None:
+        raise erreurs.introuvable("Export", travailId)
+    content_type = "application/json" if cle.endswith(".json") else "text/csv"
+    return Response(
+        content=contenu,
+        media_type=content_type,
+        headers={"Content-Disposition": f'attachment; filename="{cle.rsplit("/", 1)[-1]}"'},
+    )
+
+
 @router.post(
     "/{travailId}/relance",
     response_model=m.TravailProvisioning,

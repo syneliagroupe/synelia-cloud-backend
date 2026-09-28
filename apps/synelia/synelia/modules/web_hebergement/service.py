@@ -1129,6 +1129,70 @@ async def serveur_id(ctx: Contexte, hebergement_id: str, travail: Travail | None
     return str(sec.get("serveur_id") or hebergement_id)
 
 
+async def appliquer_acces_ssh(ctx: Contexte, hebergement_id: str, ssh_actif: bool) -> None:
+    """Ouvre ou retire réellement la règle réseau TCP/22 selon `acces.ssh` — sans cet appel,
+    `PUT .../acces` ne faisait que mentir : `assurer_regle_ssh` est posée sans condition à la
+    création de la VM (`etape` index 1 de `ExecuteurHebergementCreer`), donc le port restait
+    ouvert quoi que dise le drapeau en base, dans un sens comme dans l'autre."""
+    sid = await serveur_id(ctx, hebergement_id)
+    n = amont_network()
+    if ssh_actif:
+        await asyncio.to_thread(n.assurer_regle_ssh, sid)
+    else:
+        await asyncio.to_thread(n.retirer_regle_ssh, sid)
+
+
+PREFIXE_POLICY_DOMAINE_ATTACHE = "lb_policy_id_domaine_"
+
+
+async def appliquer_attachement_domaine(ctx: Contexte, hebergement_id: str, domaine: str) -> None:
+    """Route réellement `domaine` sur le load balancer partagé, vers le même pool que
+    `domaineProvisoire` — sans cet appel, `POST .../attachement-domaine` ne faisait que
+    changer le champ `domaine` en base : aucune règle L7 n'existait pour ce nom, donc aucun
+    trafic réel n'y était jamais routé. Une policy L7 par nom d'hôte (Octavia ne permet pas
+    plusieurs `HOST_NAME` sur une même policy avec sémantique OR) ; l'id est mémorisé sous
+    `lb_policy_id_domaine_<domaine>` pour être nettoyé à la suppression de l'hébergement."""
+    try:
+        secrets = await depot.secrets(ctx, hebergement_id)
+    except Exception:  # noqa: BLE001
+        secrets = {}
+    cle = f"{PREFIXE_POLICY_DOMAINE_ATTACHE}{domaine}"
+    if secrets.get(cle):
+        return  # déjà routé pour ce nom (rejeu idempotent)
+    pool_id = secrets.get("lb_pool_id")
+    if not pool_id:
+        return  # hébergement jamais routé sur le LB partagé (simulé, ou création antérieure)
+    zone = await zone_vps_secrets(ctx)
+    n = amont_network()
+    regle = await asyncio.to_thread(
+        n.ajouter_regle_hote,
+        listener_id=zone.get("lb_listener_id"),
+        loadbalancer_id=zone.get("lb_id"),
+        pool_id=pool_id,
+        hote=domaine,
+    )
+    await depot.definir_secrets(ctx, hebergement_id, {cle: regle["policy_id"]})
+
+
+async def appliquer_version_php(ctx: Contexte, hebergement_id: str, version: str) -> None:
+    """Change réellement l'image du conteneur `site` (`php:{version}-apache`, cf.
+    `construire_cloud_init`) et le recrée — sans cet appel, `PUT .../php` ne faisait que
+    changer la version en base, sans jamais toucher le vrai php-fpm de la VM. `version` est
+    déjà validée contre `VERSIONS_PHP` par l'appelant avant d'atteindre l'interpolation shell
+    ci-dessous : jamais de valeur arbitraire dans la commande."""
+    if version not in VERSIONS_PHP:
+        raise erreurs.validation(
+            "Version PHP non prise en charge.",
+            champs={"versionDefaut": "Versions acceptées : 8.1 à 8.4."},
+        )
+    commande = (
+        f"sed -i -E 's#image: php:[0-9]+\\.[0-9]+-apache#image: php:{version}-apache#' "
+        f"{_RACINE_DOCKER}/docker-compose.yml && "
+        f"cd {_RACINE_DOCKER} && docker compose up -d site"
+    )
+    await executer_commande_vps(ctx, hebergement_id, commande)
+
+
 async def reconcilier_statut(ctx: Contexte, h: m.Hebergement) -> m.Hebergement:
     """Relit l'existence réelle de la VM côté Nova et rend le statut sincère si elle a disparu
     depuis le dernier relevé, avant de renvoyer la ressource.
@@ -1938,6 +2002,13 @@ class ExecuteurHebergementSupprimer(Executeur):
         policy_id = secrets.get("lb_policy_id")
         if policy_id:
             await asyncio.to_thread(n.supprimer_regle_hote, policy_id, loadbalancer_id=lb_id)
+        # Domaines attachés après coup (`attachement-domaine`) : chacun porte sa propre
+        # policy L7 sur ce même pool (cf. `appliquer_attachement_domaine`) — même motif que
+        # les policies de `site.installer` juste en dessous, Octavia refuse de supprimer le
+        # pool tant qu'une seule le référence encore.
+        for cle, valeur in secrets.items():
+            if cle.startswith(PREFIXE_POLICY_DOMAINE_ATTACHE) and valeur:
+                await asyncio.to_thread(n.supprimer_regle_hote, valeur, loadbalancer_id=lb_id)
         # Avant de supprimer le pool : chaque application installée dessus (`site.installer`)
         # porte sa propre règle L7 sur ce même pool — Octavia refuse de le supprimer tant
         # qu'une policy le référence encore (vécu en direct, `Pool ... is in use by L7
@@ -2200,10 +2271,23 @@ class ExecuteurBaseImport(Executeur):
 class ExecuteurTacheExecution(Executeur):
     async def terminer(self, ctx: Contexte, travail: Travail) -> None:
         t = await depot_taches.obtenir(ctx, travail.cible_id or "")
+        debut = maintenant()
+        statut = "ok"
+        try:
+            # Avant ce correctif : `t.commande` n'était jamais exécutée, la tâche se
+            # marquait `ok` sans que rien ne tourne réellement sur le VPS — faux succès
+            # silencieux. `executer_commande_vps` garde la même discipline que partout
+            # ailleurs (no-op simulé, 424 franc en réel si le VPS n'est pas joignable).
+            await executer_commande_vps(ctx, t.hebergementId, t.commande)
+        except Exception:  # noqa: BLE001 — une tâche cron qui échoue n'est pas une panne API
+            statut = "echec"
+        duree_s = max(1, int((maintenant() - debut).total_seconds()))
         await depot_taches.remplacer(
             ctx,
             t.id,
-            t.model_copy(update={"derniereExecution": maintenant(), "statut": "ok", "dureeS": 3}),
+            t.model_copy(
+                update={"derniereExecution": maintenant(), "statut": statut, "dureeS": duree_s}
+            ),
         )
 
 

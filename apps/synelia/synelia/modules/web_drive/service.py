@@ -188,7 +188,11 @@ class ExecuteurDriveActivate(Executeur):
                 f"cd {racine} && docker compose down -v; rm -rf {racine} "
                 f"{_RACINE_DOCKER}/traefik-dynamic/drive-{did}.yml",
             )
-        await depot.definir_statut(ctx, did, "suspendu")
+        # `depot.definir_statut` écrit `champ_statut` ("actif" pour ce dépôt, un booléen dans
+        # le contrat) — `"suspendu"` y plantait la validation Pydantic à la prochaine lecture
+        # (`Input should be a valid boolean`), empêchant même la compensation de se terminer
+        # proprement. `actif=False` est le pendant exact de `terminer()` juste au-dessus.
+        await depot.modifier(ctx, did, {"actif": False})
 
 
 @executeur("web.drive.desactiver")

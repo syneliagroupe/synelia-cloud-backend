@@ -7,6 +7,7 @@ from typing import Any
 import synelia_catalogue as _catalogue
 from synelia_contract import modeles as m
 from synelia_db.modeles import Ressource, Travail, Utilisateur
+from synelia_kernel import erreurs
 from synelia_kernel.dates import maintenant
 from synelia_kernel.ids import nouvel_id
 
@@ -592,9 +593,42 @@ class ExecuteurServiceResilier(Executeur):
         await depot_service.supprimer(ctx, travail.cible_id or "", logique=True)
 
 
+BUCKET_EXPORTS_SERVICES = "synelia-exports-services-manages"
+
+
 @executeur("service_manage.export")
 class ExecuteurServiceExport(Executeur):
-    pass
+    """Avant ce correctif : classe vide — le travail passait `done` en ~2 étapes simulées
+    sans jamais produire de fichier, et la ligne `ExportService` restait `en_cours` pour
+    toujours (jamais `pret`/`echec`). Corrigé : dépose un export réel (représentation JSON
+    du service — configuration/métadonnées, seule donnée dont ce module dispose ; pas de
+    contenu applicatif fabriqué) et fait progresser le statut de la ligne d'export."""
+
+    async def terminer(self, ctx: Contexte, travail: Travail) -> None:
+        import asyncio
+        import json
+
+        sid = travail.cible_id or ""
+        s = await depot_service.obtenir(ctx, sid)
+        exports = await depot_export.tous(ctx, parent_id=sid)
+        export = max(exports, key=lambda e: e.demandeLe, default=None) if exports else None
+        if export is None:
+            return
+        try:
+            from synelia.modules.stockage.service import amont_objet
+
+            contenu = json.dumps(s.model_dump(mode="json"), ensure_ascii=False, indent=2).encode()
+            cle = f"{sid}/{export.id}.json"
+            await asyncio.to_thread(
+                amont_objet().deposer_objet,
+                BUCKET_EXPORTS_SERVICES,
+                cle,
+                contenu,
+                "application/json",
+            )
+            await depot_export.modifier(ctx, export.id, {"statut": "pret"})
+        except Exception:  # noqa: BLE001 — un export raté est un échec du sien, pas de l'API
+            await depot_export.modifier(ctx, export.id, {"statut": "echec"})
 
 
 @executeur("service_manage.mise_a_jour")
@@ -603,12 +637,36 @@ class ExecuteurServiceMiseAJour(Executeur):
         sid = travail.cible_id or ""
         nouvelle = travail.contexte.get("nouvelleVersion")
         if nouvelle:
+            s = await depot_service.obtenir(ctx, sid)
+            # Mémorise la version quittée pour permettre un vrai rollback ensuite — sans
+            # ceci, `service_manage.rollback` n'avait littéralement aucune donnée à
+            # restaurer (le catalogue de versions est fabriqué à la volée, pas un
+            # historique réel).
+            await depot_service.definir_secrets(ctx, sid, {"version_precedente": s.version})
             await depot_service.modifier(ctx, sid, {"version": nouvelle})
 
 
 @executeur("service_manage.rollback")
 class ExecuteurServiceRollback(Executeur):
-    pass
+    """Avant ce correctif : classe vide — le travail se déclarait `done` sans jamais
+    restaurer quoi que ce soit, alors que le catalogue de versions (fabriqué, cf.
+    `versions()`) prétendait toujours `rollbackPossible: True`. Restaure maintenant la
+    version mémorisée par `service_manage.mise_a_jour` ; sans elle (aucune mise à jour
+    n'a jamais eu lieu), échoue franchement plutôt que de prétendre avoir restauré quelque
+    chose."""
+
+    async def terminer(self, ctx: Contexte, travail: Travail) -> None:
+        sid = travail.cible_id or ""
+        try:
+            secrets = await depot_service.secrets(ctx, sid)
+        except Exception:  # noqa: BLE001
+            secrets = {}
+        precedente = secrets.get("version_precedente")
+        if not precedente:
+            raise erreurs.non_porte(
+                "Aucune version antérieure mémorisée pour ce service : rien à restaurer."
+            )
+        await depot_service.modifier(ctx, sid, {"version": precedente})
 
 
 @peupleur

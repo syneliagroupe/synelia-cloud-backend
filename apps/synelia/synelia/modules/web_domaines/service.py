@@ -30,7 +30,7 @@ PRIX_TLD = {".com": 9500, ".net": 8500, ".org": 8000, ".ci": 6500, ".africa": 70
 
 def amont() -> RegistrarSimule:
     # URL-gaté (comme ACME/Zimbra/relais), pas `fournisseur()` : aucun partenaire
-    # registrar n'existe sur le lab — basculer sur `RegistrarOpenStack` au seul motif
+    # registrar n'existe sur le lab — basculer sur `RegistrarOvh` au seul motif
     # `SYNELIA_FOURNISSEUR=openstack` donnerait un faux « réel » (la classe reste le
     # simulé sous un autre nom tant qu'aucune URL partenaire n'est posée).
     from synelia_openstack.registrar import choisir_registrar
@@ -93,15 +93,27 @@ class ExecuteurDomaineCommander(Executeur):
     async def terminer(self, ctx: Contexte, travail: Travail) -> None:
         d = await depot.obtenir(ctx, travail.cible_id or "")
         annees = _duree_annees(travail)
+        resultat = amont().commander(d.nom, annees)
+        if resultat.get("code_auth"):
+            await depot.definir_secrets(ctx, d.id, {"code_auth": resultat["code_auth"]})
         await depot.remplacer(
-            ctx, d.id, d.model_copy(update={"expiration": expiration_dans(annees)})
+            ctx,
+            d.id,
+            d.model_copy(
+                update={"expiration": expiration_dans(annees), "provisionnement": "automatique"}
+            ),
         )
 
 
 @executeur("domaine.transferer")
 class ExecuteurDomaineTransferer(Executeur):
     async def terminer(self, ctx: Contexte, travail: Travail) -> None:
-        return None
+        d = await depot.obtenir(ctx, travail.cible_id or "")
+        code_auth = (travail.entree or {}).get("codeAuth", "")
+        resultat = amont().transferer(d.nom, code_auth)
+        if resultat.get("code_auth"):
+            await depot.definir_secrets(ctx, d.id, {"code_auth": resultat["code_auth"]})
+        await depot.remplacer(ctx, d.id, d.model_copy(update={"provisionnement": "automatique"}))
 
 
 @executeur("domaine.renouveler")
@@ -109,6 +121,7 @@ class ExecuteurDomaineRenouveler(Executeur):
     async def terminer(self, ctx: Contexte, travail: Travail) -> None:
         d = await depot.obtenir(ctx, travail.cible_id or "")
         annees = _duree_annees(travail)
+        amont().renouveler(d.nom, annees)
         aujourdhui = maintenant().date()
         base = d.expiration if d.expiration and d.expiration >= aujourdhui else aujourdhui
         nouvelle = base + timedelta(days=365 * max(1, annees))

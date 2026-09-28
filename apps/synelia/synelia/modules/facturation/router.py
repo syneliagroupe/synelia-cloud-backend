@@ -388,6 +388,27 @@ async def obtenir_sla(ctx: Contexte = Depends(exige("invoice.view", lecture=True
 async def reclamer_credit_sla(
     corps: m.ReclamationCredit, ctx: Contexte = Depends(exige("invoice.view", lecture=True))
 ) -> Any:
+    # Avant ce correctif : aucune vérification, n'importe quel utilisateur authentifié
+    # (portée `invoice.view` en lecture) déclenchait un crédit de 5000 FCFA sans qu'aucun
+    # manquement SLA ne soit constaté — fraude interne triviale. On exige maintenant une
+    # dispo réellement mesurée (30 derniers jours, `sla_engagements`) en dessous de
+    # l'engagement pour ce composant avant de créditer quoi que ce soit.
+    engagements = (await service.sla_engagements(ctx))["engagements"]
+    engagement = next((e for e in engagements if e["composant"] == corps.composant), None)
+    if engagement is None:
+        raise erreurs.validation(
+            "Composant SLA inconnu.",
+            champs={
+                "composant": "Valeurs acceptées : " + ", ".join(e["composant"] for e in engagements)
+            },
+        )
+    if engagement["constate"] >= engagement["dispo"]:
+        raise erreurs.conflit(
+            "Aucun manquement SLA constaté sur les 30 derniers jours pour ce composant "
+            f"({engagement['constate']}% observé pour {engagement['dispo']}% engagé) : "
+            "rien à créditer.",
+            code="sla_non_manque",
+        )
     await crediter(ctx, ctx.org_id, f"Crédit SLA {corps.composant} {corps.periode}", 5000)
     ref = nouvel_id()
     await journaliser(

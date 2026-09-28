@@ -201,7 +201,21 @@ async def test_consommation_export(client):
         "/v1/facturation/consommation/export", json={"periode": "2026-08", "format": "csv"}
     )
     assert r.status_code == 202, r.text
+    url = r.json()["url"]
     assert "url" in r.json()
+
+    # Avant correctif : aucun exécuteur `facturation.export` n'existait, et
+    # `GET /travaux/{id}/export` n'existait pas du tout — l'URL rendue par l'API ne menait
+    # jamais nulle part. On vérifie maintenant que le fichier est réellement produit et
+    # téléchargeable.
+    travail_id = url.split("/")[3]
+    r = await client.get(f"/v1/travaux/{travail_id}")
+    assert r.status_code == 200 and r.json()["statut"] == "done", r.text
+
+    r = await client.get(url)
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"].startswith("text/csv")
+    assert b"date" in r.content and b"montant" in r.content
 
 
 async def test_factures(client):
@@ -252,6 +266,46 @@ async def test_prepaye_rechargement(client):
 async def test_sla(client):
     r = await client.get("/v1/facturation/sla")
     assert r.status_code == 200 and len(r.json()["engagements"]) == 3
+
+    # Aucune opération mesurée sur 30 jours pour cette organisation : `sla_engagements`
+    # considère l'engagement respecté (pas de manquement constaté) — la réclamation doit
+    # être refusée, pas créditée à l'aveugle (fraude interne triviale sinon).
+    r = await client.post(
+        "/v1/facturation/sla/reclamations",
+        json={"periode": "2026-08", "composant": "compute", "motif": "Coupure 2h"},
+    )
+    assert r.status_code == 409 and r.json()["erreur"]["code"] == "sla_non_manque"
+
+    r = await client.post(
+        "/v1/facturation/sla/reclamations",
+        json={"periode": "2026-08", "composant": "inconnu", "motif": "x"},
+    )
+    assert r.status_code == 422
+
+    # Manquement réel : assez de travaux `failed` récents sur une cible "compute" pour faire
+    # passer la dispo constatée sous l'engagement (99.9 %) — la réclamation doit alors passer.
+    from synelia_db.modeles import Travail
+    from synelia_db.session import fabrique
+    from synelia_kernel.dates import maintenant
+    from synelia_kernel.ids import nouvel_id
+
+    org_id = client.org_id
+    async with fabrique()() as s:
+        for i in range(20):
+            s.add(
+                Travail(
+                    id=nouvel_id(),
+                    org_id=org_id,
+                    type="vm.create",
+                    label="x",
+                    statut="failed" if i == 0 else "done",
+                    cible_type="vm",
+                    started_at=maintenant(),
+                    taches=[],
+                )
+            )
+        await s.commit()
+
     r = await client.post(
         "/v1/facturation/sla/reclamations",
         json={"periode": "2026-08", "composant": "compute", "motif": "Coupure 2h"},

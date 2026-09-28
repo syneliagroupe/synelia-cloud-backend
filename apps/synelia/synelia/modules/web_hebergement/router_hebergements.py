@@ -201,6 +201,13 @@ async def modifier_acces_hebergement(
     h = await depot.obtenir(ctx, hebergementId)
     acces = h.acces.model_dump(exclude_none=True)
     acces.update(corps.model_dump(exclude_none=True))
+    if corps.ssh is not None:
+        try:
+            await service.appliquer_acces_ssh(ctx, hebergementId, corps.ssh)
+        except Exception as exc:  # noqa: BLE001 — openstacksdk et co : 424 franc, pas 500
+            if isinstance(exc, erreurs.AppError):
+                raise
+            raise erreurs.amont_indisponible("acces SSH (réseau)", str(exc)[:200]) from None
     await depot.modifier(ctx, hebergementId, {"acces": acces})
     await journaliser(
         ctx,
@@ -233,6 +240,12 @@ async def attacher_domaine_hebergement(
         )
     await depot_domaines.modifier(ctx, domaine.id, {"hebergementId": hebergementId})
     h = await depot.modifier(ctx, hebergementId, {"domaine": corps.domaine})
+    try:
+        await service.appliquer_attachement_domaine(ctx, hebergementId, corps.domaine)
+    except Exception as exc:  # noqa: BLE001 — openstacksdk et co : 424 franc, pas 500
+        if isinstance(exc, erreurs.AppError):
+            raise
+        raise erreurs.amont_indisponible("attachement domaine (LB)", str(exc)[:200]) from None
     await journaliser(
         ctx,
         action="hebergement.attachement_domaine",
@@ -377,6 +390,8 @@ async def modifier_php(
             raise erreurs.conflit(
                 "Cette version PHP est déjà celle du serveur.", code="version_php_identique"
             )
+    if version is not None:
+        await service.appliquer_version_php(ctx, hebergementId, version)
     php = h.php.model_dump(exclude_none=True)
     if version is not None:
         php["versionDefaut"] = version

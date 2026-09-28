@@ -57,12 +57,16 @@ def test_webmail_publique_jamais_interne(monkeypatch):
 
 
 def test_registrar_simule_sans_partenaire(monkeypatch):
-    # Aucun partenaire câblé : `RegistrarOpenStack` reste le simulé sous un autre
+    # Aucun partenaire câblé : `RegistrarOvh` reste le simulé sous un autre
     # nom — le choix explicite évite le faux « réel » que `fournisseur()` donnait
     # sur lab au seul motif `SYNELIA_FOURNISSEUR=openstack`.
     from synelia_openstack import registrar
 
     monkeypatch.delenv(registrar.ENV_URL, raising=False)
+    monkeypatch.delenv(registrar.ENV_APPKEY, raising=False)
     assert type(registrar.choisir_registrar()) is registrar.RegistrarSimule
-    monkeypatch.setenv(registrar.ENV_URL, "https://registrar.example.ci")
-    assert isinstance(registrar.choisir_registrar(), registrar.RegistrarOpenStack)
+    monkeypatch.setenv(registrar.ENV_URL, "https://eu.api.ovh.com/1.0")
+    monkeypatch.setenv(registrar.ENV_APPKEY, "x")
+    monkeypatch.setenv(registrar.ENV_APPSECRET, "x")
+    monkeypatch.setenv(registrar.ENV_CONSUMERKEY, "x")
+    assert isinstance(registrar.choisir_registrar(), registrar.RegistrarOvh)

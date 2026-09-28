@@ -338,7 +338,18 @@ async def relancer(ctx: Contexte, travail: Travail) -> Travail:
             "Seul un travail en échec peut être relancé.", code="travail_non_relancable"
         )
     taches = [dict(t) for t in travail.taches]
-    depuis = next((i for i, t in enumerate(taches) if t["statut"] == "failed"), 0)
+    # `rolled_back` (par opposition à `failed`) signifie que `compenser()` a réellement
+    # défait les étapes précédentes (ex. supprimé la VM créée à l'étape 1) — reprendre
+    # seulement à l'étape qui a échoué rejouerait les étapes suivantes contre une ressource
+    # déjà détruite, menant à un job `done` mensonger (constaté en direct : un hébergement
+    # `en_ligne` pour un serveur Nova qui n'existait plus). Repartir de zéro dans ce cas ;
+    # sinon (compensation absente ou elle-même en échec), rien n'a été défait : reprendre à
+    # l'étape échouée reste correct et évite de rejouer des étapes déjà réussies pour de bon.
+    depuis = (
+        0
+        if travail.statut == "rolled_back"
+        else next((i for i, t in enumerate(taches) if t["statut"] == "failed"), 0)
+    )
     for t in taches[depuis:]:
         t["statut"] = "pending"
         t.pop("message", None)
