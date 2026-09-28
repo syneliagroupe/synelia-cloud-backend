@@ -51283,7 +51283,9 @@
             "type": "string",
             "enum": [
               "mariadb",
+              "mysql",
               "postgresql",
+              "mongodb",
               "redis"
             ]
           },
