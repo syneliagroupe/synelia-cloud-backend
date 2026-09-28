@@ -59,7 +59,14 @@ class RegistrarOvh(RegistrarSimule):
         except httpx.HTTPError:
             return 0
 
-    def _requete(self, methode: str, chemin: str, corps: dict[str, Any] | None = None) -> Any:
+    def _requete(
+        self,
+        methode: str,
+        chemin: str,
+        corps: dict[str, Any] | None = None,
+        *,
+        accepter_400: bool = False,
+    ) -> Any:
         import json as _json
 
         url = f"{self.base}{chemin}"
@@ -92,6 +99,8 @@ class RegistrarOvh(RegistrarSimule):
         except httpx.HTTPError as exc:
             raise erreurs.amont_indisponible("registrar", str(exc)) from exc
         if r.status_code >= 400:
+            if accepter_400 and r.status_code == 400:
+                return None
             raise erreurs.amont_indisponible("registrar", f"HTTP {r.status_code}: {r.text[:300]}")
         return r.json() if r.content else None
 
@@ -101,8 +110,14 @@ class RegistrarOvh(RegistrarSimule):
         self._requete("POST", f"/order/cart/{panier_id}/assign")
         try:
             resultat = self._requete(
-                "GET", f"/order/cart/{panier_id}/domain?domain={nom}&exclusiveOption=false"
+                "GET",
+                f"/order/cart/{panier_id}/domain?domain={nom}&exclusiveOption=false",
+                accepter_400=True,
             )
+            if resultat is None:
+                # OVH renvoie 400 pour certains TLD/noms (ex. `.ci` via panier FR) : indisponible
+                # à la création, pas une panne registrar (évite un 424 trompeur sur `/disponibilite`).
+                return False
             # OVH répond `orderable: true` aussi pour un domaine déjà enregistré ailleurs —
             # dans ce cas `action` vaut "transfer" (achetable comme transfert, pas comme
             # création). Sans ce filtre, un domaine pris (ex. google.com) ressortait
