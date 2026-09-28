@@ -212,7 +212,7 @@ async def obtenir_capacite(
         if any(x.id == b.backendId for x in backends)
     ]
     par_site = []
-    for c in ("ABJ", "GBM"):
+    for c in sorted({b.site for b in backends}):
         s_backends = [b for b in backends if b.site == c]
         if not s_backends:
             continue
@@ -1045,6 +1045,11 @@ async def lister_tickets_organisation(
 
 
 # ── placements ───────────────────────────────────────────────────────────────
+@router.get("/placements", response_model=list[m.Placement], response_model_exclude_none=True)
+async def lister_placements(ctx: Contexte = Depends(exige_admin("capacity.manage"))) -> Any:
+    return await depot_placement.tous(ctx)
+
+
 @router.put("/placements", response_model=list[m.Placement], response_model_exclude_none=True)
 async def modifier_placements(
     corps: m.AdminPlacementsPutRequest, ctx: Contexte = Depends(exige_admin("capacity.manage"))
@@ -1198,6 +1203,13 @@ async def mettre_a_jour_incident(
         details={"statut": corps.statut},
     )
     return inc
+
+
+@router.get(
+    "/statut/services", response_model=list[m.StatutService], response_model_exclude_none=True
+)
+async def lister_statut_services(ctx: Contexte = Depends(exige_admin("capacity.manage"))) -> Any:
+    return await depot_statut_service.tous(ctx)
 
 
 @router.put(
