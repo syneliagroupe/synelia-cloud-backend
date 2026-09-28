@@ -70,3 +70,35 @@ def test_registrar_simule_sans_partenaire(monkeypatch):
     monkeypatch.setenv(registrar.ENV_APPSECRET, "x")
     monkeypatch.setenv(registrar.ENV_CONSUMERKEY, "x")
     assert isinstance(registrar.choisir_registrar(), registrar.RegistrarOvh)
+
+
+def test_registrar_ovh_verifier_400_com_me_indisponible(monkeypatch):
+    """OVH panier FR renvoie 400 pour certains noms/TLD (ex. `.ci`) : indisponible, pas 424."""
+    from synelia_openstack import registrar
+
+    monkeypatch.setenv(registrar.ENV_URL, "https://eu.api.ovh.com/1.0")
+    monkeypatch.setenv(registrar.ENV_APPKEY, "k")
+    monkeypatch.setenv(registrar.ENV_APPSECRET, "s")
+    monkeypatch.setenv(registrar.ENV_CONSUMERKEY, "c")
+    reg = registrar.RegistrarOvh()
+
+    def fake_requete(
+        methode: str,
+        chemin: str,
+        corps=None,
+        *,
+        accepter_400: bool = False,
+    ):
+        if methode == "POST" and chemin == "/order/cart":
+            return {"cartId": "cart-1"}
+        if methode == "POST" and chemin.endswith("/assign"):
+            return None
+        if methode == "GET" and "domain?domain=" in chemin:
+            assert accepter_400
+            return None
+        if methode == "DELETE":
+            return None
+        raise AssertionError((methode, chemin))
+
+    monkeypatch.setattr(reg, "_requete", fake_requete)
+    assert reg.verifier("test-demo.ci") is False
