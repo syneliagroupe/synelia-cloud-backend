@@ -1,5 +1,7 @@
 """Web Cloud — hébergement, applications web et bases."""
 
+import secrets
+
 from synelia_testing import connexion_lab, corriger_amont, sur_lab_reel
 
 DES = "/v1"
@@ -38,7 +40,9 @@ async def _enregistrer_domaine(client_org, nom: str) -> None:
     assert r.status_code == 202, r.text
 
 
-async def _creer_hebergement(client_org, nom="demo-h.com") -> dict:
+async def _creer_hebergement(client_org, nom: str | None = None) -> dict:
+    if nom is None:
+        nom = f"demo-{secrets.token_hex(4)}.com"
     await _enregistrer_domaine(client_org, nom)
     r = await client_org.post(
         f"{DES}/web/hebergements", json={"palier": "pro", "site": "ABJ", "domaine": nom}

@@ -196,4 +196,5 @@ async def test_impayes(client):
 async def test_marges(client):
     r = await client.get("/v1/admin/facturation/marges")
     assert r.status_code == 200
-    assert all(x["marge"] == 0.0 for x in r.json())
+    data = r.json()
+    assert data and all("backend" in x and "marge" in x for x in data)

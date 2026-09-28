@@ -76,6 +76,7 @@ class MinioReel(MinioSimule):
         self.root_user = os.environ.get(ENV_ROOT_USER, "")
         self.root_password = os.environ.get(ENV_ROOT_PASSWORD, "")
         self._alias_pret = False
+        self._cli_rustfs: bool | None = None
 
     # ── S3 (buckets, objets) via le SDK `minio` ───────────────────────────
     def _client(self):
@@ -122,7 +123,10 @@ class MinioReel(MinioSimule):
             try:
                 with os.fdopen(fd, "w") as f:
                     f.write(policy_json)
-                self._mc("anonymous", "set-json", chemin, cible)
+                if self._est_cli_rustfs():
+                    self._mc("bucket", "anonymous", "set-json", chemin, cible)
+                else:
+                    self._mc("anonymous", "set-json", chemin, cible)
             finally:
                 os.unlink(chemin)
         else:
@@ -177,19 +181,53 @@ class MinioReel(MinioSimule):
             reponse.close()
             reponse.release_conn()
 
-    # ── IAM (utilisateurs, policies) via `mc admin` ───────────────────────
+    # ── IAM (utilisateurs, policies) via `mc admin` ou RustFS `rc` (symlink `mc`) ──
     def _config_dir(self) -> str:
-        # `$HOME/.mc` par défaut, souvent en lecture seule dans le conteneur : on force un
-        # répertoire de configuration inscriptible.
-        chemin = os.path.join(tempfile.gettempdir(), "mc-synelia")
+        chemin = os.environ.get("HOME") or os.path.join(tempfile.gettempdir(), "mc-synelia")
         os.makedirs(chemin, exist_ok=True)
         return chemin
+
+    def _env_cli(self) -> dict[str, str]:
+        env = os.environ.copy()
+        env["HOME"] = self._config_dir()
+        return env
+
+    def _est_cli_rustfs(self) -> bool:
+        if self._cli_rustfs is not None:
+            return self._cli_rustfs
+        try:
+            r = subprocess.run(
+                ["mc", "--version"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                env=self._env_cli(),
+            )
+            out = (r.stdout or "") + (r.stderr or "")
+            self._cli_rustfs = "Rust S3" in out or out.strip().startswith("rc ")
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            self._cli_rustfs = False
+        return self._cli_rustfs
+
+    def _adapter_args_mc(self, args: tuple[str, ...]) -> list[str]:
+        """Traduit les sous-commandes MinIO Client vers RustFS `rc` quand l'image n'embarque
+        que `rc` (symlink `mc`), sans support de `--config-dir`."""
+        if not self._est_cli_rustfs():
+            return list(args)
+        if len(args) >= 4 and args[0] == "anonymous" and args[1] == "set":
+            perm = {"none": "private", "download": "download"}.get(args[2], args[2])
+            return ["bucket", "anonymous", "set", perm, args[3]]
+        if len(args) >= 4 and args[0] == "anonymous" and args[1] == "set-json":
+            return ["bucket", "anonymous", "set-json", args[2], args[3]]
+        return list(args)
 
     def _preparer_alias(self) -> None:
         if self._alias_pret:
             return
-        subprocess.run(
-            [
+        if self._est_cli_rustfs():
+            cmd = ["mc", "alias", "set", _ALIAS, self.url, self.root_user, self.root_password]
+        else:
+            cmd = [
                 "mc",
                 "--config-dir",
                 self._config_dir(),
@@ -199,23 +237,34 @@ class MinioReel(MinioSimule):
                 self.url,
                 self.root_user,
                 self.root_password,
-            ],
+            ]
+        subprocess.run(
+            cmd,
             capture_output=True,
             text=True,
             timeout=15,
             check=False,
+            env=self._env_cli(),
         )
         self._alias_pret = True
 
     def _mc(self, *args: str) -> str:
         self._preparer_alias()
+        adapte = self._adapter_args_mc(args)
+        cmd: list[str] = ["mc"]
+        if not self._est_cli_rustfs():
+            cmd.extend(["--config-dir", self._config_dir()])
+        cmd.extend(adapte)
+        if not self._est_cli_rustfs():
+            cmd.append("--json")
         try:
             r = subprocess.run(
-                ["mc", "--config-dir", self._config_dir(), *args, "--json"],
+                cmd,
                 capture_output=True,
                 text=True,
                 timeout=30,
                 check=False,
+                env=self._env_cli(),
             )
         except FileNotFoundError as exc:
             raise erreurs.amont_indisponible("minio", "client `mc` introuvable") from exc

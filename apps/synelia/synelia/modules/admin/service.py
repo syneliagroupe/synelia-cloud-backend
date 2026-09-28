@@ -325,7 +325,17 @@ class ExecuteurMigrationRollback(Executeur):
 
 @executeur("admin.tests_restauration")
 class ExecuteurTestsRestauration(Executeur):
-    pass
+    async def terminer(self, ctx: Contexte, travail: Travail) -> None:
+        from synelia.audit import journaliser
+
+        await journaliser(
+            ctx,
+            action="admin.conformite.test_restauration",
+            cible_type="conformite",
+            cible_id=travail.cible_id or "restauration",
+            details={"travailId": travail.id, "resultat": "simulation_lab"},
+            org_id=None,
+        )
 
 
 @executeur("capacite.rebalance")

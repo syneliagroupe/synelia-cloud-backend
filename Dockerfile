@@ -10,9 +10,9 @@ COPY apps ./apps
 COPY packages ./packages
 COPY tools ./tools
 RUN uv sync --frozen --no-dev --extra temporal --extra openstack
-RUN useradd -r -u 1001 synelia && chown -R synelia /app
+RUN useradd -r -u 1001 synelia && mkdir -p /home/synelia && chown -R synelia /app /home/synelia
 USER synelia
-ENV PATH="/app/.venv/bin:$PATH" PORT=4000
+ENV HOME=/home/synelia PATH="/app/.venv/bin:$PATH" PORT=4000
 EXPOSE 4000
 ENTRYPOINT ["synelia"]
 CMD ["api"]

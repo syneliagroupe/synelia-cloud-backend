@@ -267,7 +267,15 @@ REFERENTIELS = [
 async def obtenir_conformite_plateforme(
     ctx: Contexte = Depends(exige_admin("compliance.export")),
 ) -> Any:
-    return {"referentiels": REFERENTIELS}
+    fenetres = await depot_fenetre.tous(ctx)
+    ouvertes = sum(1 for f in fenetres if f.statut in ("planifiee", "en_cours"))
+    referentiels = []
+    for ref in REFERENTIELS:
+        row = dict(ref)
+        if row["nom"] == "ISO 27001" and ouvertes:
+            row["ecarts"] = max(row["ecarts"], ouvertes)
+        referentiels.append(row)
+    return {"referentiels": referentiels}
 
 
 @router.get(

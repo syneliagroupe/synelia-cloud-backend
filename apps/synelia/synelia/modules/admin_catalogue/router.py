@@ -420,13 +420,38 @@ async def lancer_relances(
 
 @router.get("/facturation/marges", response_model=list[m.MargeBackend])
 async def lister_marges_backends(ctx: Contexte = Depends(exige_admin("catalog.edit"))) -> Any:
-    backends = [
-        ("OpenStack Compute", "vm"),
-        ("Ceph", "stockage"),
-        ("Postgres", "base"),
-        ("Kubernetes", "k8s"),
-        ("Réseau", "reseau"),
-    ]
-    return [
-        m.MargeBackend(backend=b, type=t, coutInfra=0, revenu=0, marge=0.0) for b, t in backends
-    ]
+    from synelia.modules.admin import service as admin_service
+
+    # Coût infra indicatif (FCFA / vCPU-mois lab) — le revenu catalogue n'est pas encore agrégé.
+    cout_par_vcpu = 12_000
+    revenu_par_vcpu = 18_000
+    backends = await admin_service.amacer_backends(ctx)
+    usage = await admin_service.usage_plateforme(ctx)
+    vcpu_total = max(sum(b.capacite.vcpu for b in backends), 1)
+    part_usage = usage["vcpu"] / vcpu_total
+    lignes: list[m.MargeBackend] = []
+    for b in backends:
+        part = b.capacite.vcpu / vcpu_total
+        cout = int(part * cout_par_vcpu * b.capacite.vcpu * part_usage)
+        vcpu_util = b.capacite.vcpu * (b.usage.vcpuPct / 100.0)
+        revenu = int(revenu_par_vcpu * vcpu_util * part)
+        marge = round((revenu - cout) / revenu, 3) if revenu else 0.0
+        lignes.append(
+            m.MargeBackend(
+                backend=b.code,
+                type=b.type,
+                coutInfra=cout,
+                revenu=revenu,
+                marge=marge,
+            )
+        )
+    if not lignes:
+        for label, typ in [
+            ("OpenStack Compute", "openstack"),
+            ("Stockage objet", "stockage"),
+            ("Bases managées", "base"),
+        ]:
+            lignes.append(
+                m.MargeBackend(backend=label, type=typ, coutInfra=0, revenu=0, marge=0.0)
+            )
+    return lignes
