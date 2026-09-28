@@ -773,15 +773,36 @@ async def creer_profil_vpn(
         cible_id=tunnelId,
         details={"profil": corps.nom},
     )
-    configuration = (
-        f"client\n"
-        f"dev tun\n"
-        f"proto udp\n"
-        f"remote vpn.synelia.cloud 1194\n"
-        f"auth-user-pass\n"
-        f"<ca>\n{certificat_bidon(corps.nom, corps.utilisateur)}\n</ca>\n"
+    from synelia.modules.espaces import openvpn
+
+    configuration = await openvpn.emettre_profil_openvpn(
+        ctx, tunnelId, corps.nom, corps.utilisateur
     )
     return m.VpnTunnelIdProfilsPostResponse(nom=corps.nom, configuration=configuration, expire=None)
+
+
+@router_vpn.get(
+    "/{tunnelId}/profils/{profilNom}",
+    response_model=m.VpnTunnelIdProfilsPostResponse,
+    response_model_exclude_none=True,
+)
+async def telecharger_profil_vpn(
+    tunnelId: str, profilNom: str, ctx: Contexte = Depends(exige("network.manage"))
+) -> Any:  # noqa: N803
+    t = await depot_vpn.obtenir(ctx, tunnelId)
+    profil = next((p for p in (t.profils or []) if p.nom == profilNom), None)
+    if profil is None:
+        raise erreurs.introuvable("Profil VPN", profilNom)
+    if profil.revoque:
+        raise erreurs.non_porte("Ce profil a été révoqué.", code="profil_revoque")
+    from synelia.modules.espaces import openvpn
+
+    configuration = await openvpn.emettre_profil_openvpn(
+        ctx, tunnelId, profilNom, profil.utilisateur
+    )
+    return m.VpnTunnelIdProfilsPostResponse(
+        nom=profilNom, configuration=configuration, expire=None
+    )
 
 
 def certificat_bidon(nom: str, utilisateur: str) -> str:
