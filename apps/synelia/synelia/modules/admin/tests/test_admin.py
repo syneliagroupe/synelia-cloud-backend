@@ -164,6 +164,10 @@ async def test_placements(client):
     assert r.status_code == 200, r.text
     assert r.json()[0]["percent"] == 100
 
+    r = await client.get("/v1/admin/placements")
+    assert r.status_code == 200, r.text
+    assert any(p["percent"] == 100 for p in r.json())
+
 
 async def test_marketplace_campagnes_cycle(client):
     r = await client.get("/v1/admin/marketplace/campagnes")
@@ -185,6 +189,7 @@ async def test_marketplace_campagnes_cycle(client):
 
     r = await client.post(f"/v1/admin/marketplace/campagnes/{cid}/suspension")
     assert r.status_code == 202, r.text
+    assert r.json()["type"] == "admin.suspension" and r.json()["statut"] == "done"
 
     r = await client.post(f"/v1/admin/marketplace/campagnes/{cid}/lancement")
     assert r.status_code == 202, r.text
@@ -224,6 +229,10 @@ async def test_migration_campagnes_cycle(client):
         f"/v1/admin/migration/campagnes/{cid}/rollback", params={"confirmation": "Mig ABJ→GBM"}
     )
     assert r.status_code == 202, r.text
+    assert r.json()["type"] == "admin.migration.rollback" and r.json()["statut"] == "done"
+    r = await client.get("/v1/admin/migration/campagnes")
+    mig = next(c for c in r.json()["donnees"] if c["id"] == cid)
+    assert mig["statut"] == "planifiee" and mig["migrees"] == 0
 
 
 async def test_conformite(client):
@@ -357,6 +366,10 @@ async def test_statut_services(client):
             ]
         },
     )
+    assert r.status_code == 200, r.text
+    assert r.json()[0]["nom"] == "Compute"
+
+    r = await client.get("/v1/admin/statut/services")
     assert r.status_code == 200, r.text
     assert r.json()[0]["nom"] == "Compute"
 

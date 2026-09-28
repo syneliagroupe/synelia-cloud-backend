@@ -3861,6 +3861,46 @@
       }
     },
     "/admin/placements": {
+      "get": {
+        "tags": [
+          "Super admin — infrastructure"
+        ],
+        "operationId": "listerPlacements",
+        "summary": "Lister les règles de placement",
+        "x-rbac": "capacity.manage",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Langue"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Succès.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Placement"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NonAuthentifie"
+          },
+          "403": {
+            "$ref": "#/components/responses/Interdit"
+          },
+          "429": {
+            "$ref": "#/components/responses/TropDeRequetes"
+          },
+          "500": {
+            "$ref": "#/components/responses/Serveur"
+          }
+        }
+      },
       "put": {
         "tags": [
           "Super admin — infrastructure"
@@ -4293,6 +4333,46 @@
       }
     },
     "/admin/statut/services": {
+      "get": {
+        "tags": [
+          "Super admin — exploitation"
+        ],
+        "operationId": "listerStatutServices",
+        "summary": "Lister l'état publié des services",
+        "x-rbac": "capacity.manage",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Langue"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Succès.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StatutService"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NonAuthentifie"
+          },
+          "403": {
+            "$ref": "#/components/responses/Interdit"
+          },
+          "429": {
+            "$ref": "#/components/responses/TropDeRequetes"
+          },
+          "500": {
+            "$ref": "#/components/responses/Serveur"
+          }
+        }
+      },
       "put": {
         "tags": [
           "Super admin — exploitation"
@@ -51203,7 +51283,9 @@
             "type": "string",
             "enum": [
               "mariadb",
+              "mysql",
               "postgresql",
+              "mongodb",
               "redis"
             ]
           },
@@ -53442,7 +53524,8 @@
             "enum": [
               "actif",
               "invite",
-              "suspendu"
+              "suspendu",
+              "verification_requise"
             ]
           }
         },
@@ -54073,16 +54156,6 @@
           },
           "montage": {
             "type": "string"
-          },
-          "statut": {
-            "type": "string",
-            "enum": [
-              "creation",
-              "disponible",
-              "erreur"
-            ],
-            "default": "disponible",
-            "description": "État réel du provisionnement Cinder ; 'erreur' si le job de création a échoué (voir la ressource, sans backing réel dans ce cas)."
           }
         },
         "required": [

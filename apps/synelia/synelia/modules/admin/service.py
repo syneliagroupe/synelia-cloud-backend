@@ -297,6 +297,32 @@ class ExecuteurMigration(Executeur):
         await depot_campagne_migration.definir_statut(ctx, campagne.id, "terminee")
 
 
+@executeur("admin.suspension")
+class ExecuteurSuspension(Executeur):
+    """Campagne déjà marquée `suspendue` en DB avant le job ; l'exécuteur confirme l'état
+    (évite le faux succès du `Executeur` générique sans `@executeur` enregistré)."""
+
+    async def terminer(self, ctx: Contexte, travail: Travail) -> None:
+        cid = travail.cible_id or ""
+        if travail.cible_type == "campagne_maj":
+            campagne = await depot_campagne_maj.obtenir(ctx, cid)
+            if campagne.statut != "suspendue":
+                await depot_campagne_maj.definir_statut(ctx, cid, "suspendue")
+        elif travail.cible_type == "campagne_migration":
+            campagne = await depot_campagne_migration.obtenir(ctx, cid)
+            if campagne.statut != "suspendue":
+                await depot_campagne_migration.definir_statut(ctx, cid, "suspendue")
+
+
+@executeur("admin.migration.rollback")
+class ExecuteurMigrationRollback(Executeur):
+    async def terminer(self, ctx: Contexte, travail: Travail) -> None:
+        campagne = await depot_campagne_migration.obtenir(ctx, travail.cible_id or "")
+        await depot_campagne_migration.modifier(
+            ctx, campagne.id, {"statut": "planifiee", "migrees": 0}
+        )
+
+
 @executeur("admin.tests_restauration")
 class ExecuteurTestsRestauration(Executeur):
     pass

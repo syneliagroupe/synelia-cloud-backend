@@ -3894,7 +3894,7 @@ class Utilisateur(BaseModel):
     lastLoginAt: AwareDatetime | None = None
     orgId: str | None = None
     fonction: str | None = None
-    statut: Literal["actif", "invite", "suspendu"] | None = None
+    statut: Literal["actif", "invite", "suspendu", "verification_requise"] | None = None
 
 
 class VariableEnvironnement(BaseModel):
@@ -4100,7 +4100,6 @@ class Volume(BaseModel):
     ephemere: bool
     iops: int
     montage: str | None = None
-    statut: Literal["creation", "disponible", "erreur"] = "disponible"
 
 
 class VolumeCreation(BaseModel):
