@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """List FastAPI routes from module router.py files (rough static extract)."""
+
 from __future__ import annotations
 
 import re
@@ -16,5 +17,9 @@ for path in sorted(ROOT.glob("**/router*.py")):
     mod = path.parent.name
     for m in METHOD.finditer(text):
         meth, sub = m.group(1).upper(), m.group(2)
-        full = f"{default_prefix}{sub}" if sub.startswith("/") or not sub else f"{default_prefix}/{sub}"
+        full = (
+            f"{default_prefix}{sub}"
+            if sub.startswith("/") or not sub
+            else f"{default_prefix}/{sub}"
+        )
         print(f"{mod}\t{meth}\t{full}")

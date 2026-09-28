@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Safe write/delete smoke on lab (one feature chain per universe)."""
+
 # ruff: noqa: S310
 from __future__ import annotations
 
@@ -93,8 +94,14 @@ def main() -> int:
         if isinstance(d, dict) and d.get("statut"):
             t = poll_travail(token, d["id"])
             gid = t.get("cibleId") or d.get("cible_id")
-        c2, _ = req("DELETE", f"/groupes-securite/{d.get('id', gid) if isinstance(d, dict) else gid}?confirmation=demo-probe-sg", token)
-        record("Infrastructure", "SG create→delete", c2 in (200, 204, 202), f"create={c} delete={c2}")
+        c2, _ = req(
+            "DELETE",
+            f"/groupes-securite/{d.get('id', gid) if isinstance(d, dict) else gid}?confirmation=demo-probe-sg",
+            token,
+        )
+        record(
+            "Infrastructure", "SG create→delete", c2 in (200, 204, 202), f"create={c} delete={c2}"
+        )
     else:
         record("Infrastructure", "SG create→delete", False, f"create={c} {d}")
 
@@ -120,7 +127,12 @@ def main() -> int:
             c2, _ = req("DELETE", f"/ips/{fid}?confirmation={adresse}", token)
             record("Infrastructure", "FIP create→delete", c2 in (200, 204, 202), f"delete={c2}")
         else:
-            record("Infrastructure", "FIP create→delete", t.get("statut") == "done", str(t.get("statut")))
+            record(
+                "Infrastructure",
+                "FIP create→delete",
+                t.get("statut") == "done",
+                str(t.get("statut")),
+            )
     else:
         record("Infrastructure", "FIP create→delete", False, f"create={c}")
 
@@ -140,7 +152,9 @@ def main() -> int:
         record("IA & Agents", "Agent create→delete", False, str(d)[:80])
 
     # Web DNS zone create/delete
-    c, d = req("POST", "/web/dns", token, {"domaine": "probe-demo-smoke.ci", "espaceId": "espace-demo-abj"})
+    c, d = req(
+        "POST", "/web/dns", token, {"domaine": "probe-demo-smoke.ci", "espaceId": "espace-demo-abj"}
+    )
     if c in (200, 201, 202):
         tid = d.get("id")
         t = poll_travail(token, tid) if tid else {}

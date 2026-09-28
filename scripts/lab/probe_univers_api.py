@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Probe GET /v1/* list endpoints per universe (demo prep). Usage on vm-admin:
-  API=http://127.0.0.1:4000/v1 python3 scripts/lab/probe_univers_api.py
+API=http://127.0.0.1:4000/v1 python3 scripts/lab/probe_univers_api.py
 """
 # ruff: noqa: S310, S108
 
@@ -20,7 +20,14 @@ MDP = os.environ.get("PROBE_MDP", "Synelia!2026")
 PROBES: list[tuple[str, str, str, str, str, str]] = [
     # Global
     ("Global", "Tableau de bord", "/app", "GET", "/tableau-de-bord", "synthese client"),
-    ("Global", "Supervision", "/app/observabilite", "GET", "/observabilite/alertes", "liste alertes"),
+    (
+        "Global",
+        "Supervision",
+        "/app/observabilite",
+        "GET",
+        "/observabilite/alertes",
+        "liste alertes",
+    ),
     ("Global", "Facturation", "/app/facturation", "GET", "/facturation/factures", ""),
     ("Global", "Support", "/app/support", "GET", "/support/tickets", ""),
     ("Global", "Documentation", "/app/docs", "GET", "/docs/parcours", "catalogue parcours"),
@@ -42,13 +49,41 @@ PROBES: list[tuple[str, str, str, str, str, str]] = [
     ("Infrastructure", "Bases", "/app/bases", "GET", "/bases", ""),
     ("Infrastructure", "Sauvegarde plans", "/app/sauvegarde", "GET", "/sauvegarde/plans", ""),
     ("Infrastructure", "PRA", "/app/pra", "GET", "/pra", ""),
-    ("Infrastructure", "Conformité sauvegarde", "/app/sauvegarde", "GET", "/sauvegarde/conformite", ""),
+    (
+        "Infrastructure",
+        "Conformité sauvegarde",
+        "/app/sauvegarde",
+        "GET",
+        "/sauvegarde/conformite",
+        "",
+    ),
     # Applications
-    ("Applications", "Accueil", "/app/applications", "GET", "/projets/synthese", "synthese projets"),
+    (
+        "Applications",
+        "Accueil",
+        "/app/applications",
+        "GET",
+        "/projets/synthese",
+        "synthese projets",
+    ),
     ("Applications", "Projets", "/app/applications/projets", "GET", "/projets", ""),
     ("Applications", "Déploiements", "/app/applications/deploiements", "GET", "/deploiements", ""),
-    ("Applications", "Domaines applicatifs", "/app/applications/routage", "GET", "/domaines-applicatifs", ""),
-    ("Applications", "Zone applicative", "/app/applications/routage", "GET", "/zone-applicative", ""),
+    (
+        "Applications",
+        "Domaines applicatifs",
+        "/app/applications/routage",
+        "GET",
+        "/domaines-applicatifs",
+        "",
+    ),
+    (
+        "Applications",
+        "Zone applicative",
+        "/app/applications/routage",
+        "GET",
+        "/zone-applicative",
+        "",
+    ),
     ("Applications", "Routage", "/app/applications/routage", "GET", "/routage", ""),
     ("Applications", "Modèles", "/app/applications", "GET", "/modeles", "catalogue déploiement"),
     # IA
@@ -59,7 +94,14 @@ PROBES: list[tuple[str, str, str, str, str, str]] = [
     ("IA & Agents", "Clés IA", "/app/ia/integrations", "GET", "/ia/cles", ""),
     # Web Cloud
     ("Web Cloud", "Domaines", "/app/web/domaines", "GET", "/web/domaines", ""),
-    ("Web Cloud", "Dispo domaine", "/app/web/domaines", "GET", "/web/domaines/disponibilite?nom=test-demo.ci", ""),
+    (
+        "Web Cloud",
+        "Dispo domaine",
+        "/app/web/domaines",
+        "GET",
+        "/web/domaines/disponibilite?nom=test-demo.ci",
+        "",
+    ),
     ("Web Cloud", "Hébergements", "/app/web/hebergement", "GET", "/web/hebergements", ""),
     ("Web Cloud", "Bases web", "/app/web/bases", "GET", "/web/bases", ""),
     ("Web Cloud", "Emails", "/app/web/emails", "GET", "/web/emails", ""),
@@ -82,7 +124,14 @@ PROBES: list[tuple[str, str, str, str, str, str]] = [
     ("Super admin", "Organisations", "/admin/organisations", "GET", "/organisations", ""),
     ("Super admin", "Catalogue offres", "/admin/catalogue", "GET", "/admin/catalogue/offres", ""),
     ("Super admin", "Backends", "/admin/capacite", "GET", "/admin/backends", ""),
-    ("Super admin", "Capacité agrégée", "/admin/capacite", "GET", "/admin/capacite", "vue agrégée backends"),
+    (
+        "Super admin",
+        "Capacité agrégée",
+        "/admin/capacite",
+        "GET",
+        "/admin/capacite",
+        "vue agrégée backends",
+    ),
     ("Super admin", "Jetons admin", "/admin", "GET", "/admin/jetons", ""),
     ("Super admin", "Tickets plateforme", "/admin/tickets", "GET", "/admin/tickets", ""),
     ("Super admin", "Travaux plateforme", "/admin", "GET", "/admin/travaux", ""),
@@ -91,7 +140,9 @@ PROBES: list[tuple[str, str, str, str, str, str]] = [
 ]
 
 
-def _req(method: str, path: str, token: str | None = None, body: dict | None = None) -> tuple[int, str]:
+def _req(
+    method: str, path: str, token: str | None = None, body: dict | None = None
+) -> tuple[int, str]:
     url = f"{API}{path}" if path.startswith("/") else f"{API}/{path}"
     data = json.dumps(body).encode() if body else None
     headers = {"Accept": "application/json"}
