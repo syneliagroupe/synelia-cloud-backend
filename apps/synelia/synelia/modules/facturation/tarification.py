@@ -10,51 +10,58 @@ from synelia.modules.facturation import metrologie
 
 PRIX_UNITAIRES = {
     **metrologie.PRIX,
-    "vm_heure": 0,
-    "k8s_req_heure": 15,
-    "stockage_go_mois": 1500,
-    "base_go_mois": 300,
-    "bucket_go_mois": 100,
-    "siege_mois": 5000,
+    "espace_vcpu_mois": 2100,
+    "objet_go_mois": 1.5,
+    "base_go_mois": 25,
+    "siege_mois": 3000,
     "certificat_an": 24000,
 }
 
 LITTERAUX_PERIODICITE = {"mensuelle": "Mensuel", "annuelle": "Annuel", None: "Ponctuel"}
 
-HEURES_MOIS = 730
+HEURES_MOIS = 730  # affichage `totalHoraire` seulement
 
 
 def _prix_ressource(type_: str, specification: dict[str, Any], quantite: int) -> int:
     q = max(1, quantite)
     if type_ == "vm":
-        vcpu = int(specification.get("vcpu", 1))
-        ram = int(specification.get("ramGo", 2))
-        disk = int(specification.get("diskGo", 20))
-        ht = int(
-            vcpu * metrologie.PRIX["vcpu_heure"] * HEURES_MOIS
-            + ram * metrologie.PRIX["ram_go_heure"] * HEURES_MOIS
-            + disk * PRIX_UNITAIRES["stockage_go_mois"]
+        return (
+            metrologie.mensuel(
+                int(specification.get("vcpu", 1)),
+                int(specification.get("ramGo", 2)),
+                int(specification.get("diskGo", 20)),
+            )
+            * q
         )
-        return ht * q
     if type_ == "volume":
-        return int(specification.get("tailleGo", 10) * PRIX_UNITAIRES["stockage_go_mois"]) * q
+        prix_go = metrologie.PRIX_CLASSE_GO.get(
+            specification.get("classe"), PRIX_UNITAIRES["stockage_go_mois"]
+        )
+        return round(specification.get("tailleGo", 10) * prix_go) * q
     if type_ == "espace":
         vcpu = int((specification.get("quota") or {}).get("vcpu", 4))
-        return int(vcpu * metrologie.PRIX["vcpu_heure"] * HEURES_MOIS) * q
+        return vcpu * PRIX_UNITAIRES["espace_vcpu_mois"] * q
     if type_ in ("base", "bucket"):
         go = int(specification.get("tailleGo", 10))
-        return int(go * PRIX_UNITAIRES[f"{type_}_go_mois"]) * q
+        return (
+            round(go * PRIX_UNITAIRES[f"{type_}_go_mois" if type_ == "base" else "objet_go_mois"])
+            * q
+        )
     if type_ in ("certificat", "domaine"):
         return int(PRIX_UNITAIRES.get(f"{type_}_an", 0)) * q
     if type_ == "siege":
         return int(PRIX_UNITAIRES["siege_mois"]) * q
     if type_ == "k8s":
-        return (
-            int(specification.get("requetes", 2) * PRIX_UNITAIRES["k8s_req_heure"] * HEURES_MOIS)
-            * q
-        )
-    ht = PRIX_UNITAIRES.get(f"{type_}_heure", 0) * HEURES_MOIS * q
-    return int(ht) if ht else int(PRIX_UNITAIRES.get(f"{type_}_mois", 0)) * q
+        controle = PRIX_UNITAIRES[
+            "k8s_controle_ha_mois" if specification.get("ha") else "k8s_controle_mois"
+        ]
+        workers = metrologie.mensuel(
+            int(specification.get("vcpu", 2)),
+            int(specification.get("ramGo", 4)),
+            int(specification.get("diskGo", 40)),
+        ) * int(specification.get("noeuds", 0))
+        return (controle + workers) * q
+    return int(PRIX_UNITAIRES.get(f"{type_}_mois", 0)) * q
 
 
 def _prix_renomme(type_: str) -> str:

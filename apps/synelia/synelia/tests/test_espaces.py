@@ -20,7 +20,7 @@ def _affirmer_projet_keystone(nom: str, present: bool):
 async def test_cycle_espace(client_org):
     corps = {
         "code": "prod-abj",
-        "offerId": "offre-standard",
+        "offerId": "offre-espace-pro",
         "site": "ABJ",
         "cidr": "10.10.0.0/16",
         "quota": {"vcpu": 16, "ramGo": 64, "stockageTo": 2},
@@ -51,6 +51,22 @@ async def test_cycle_espace(client_org):
         f"/v1/espaces/{eid}/quota", json={"vcpu": 8, "ramGo": 16, "stockageTo": 1}
     )
     assert r.status_code == 200 and r.json()["quota"]["vcpu"] == 8
+
+    r = await client_org.post(
+        "/v1/volumes",
+        json={"espaceId": eid, "nom": "vol-bloquant", "tailleGo": 10, "classe": "ssd"},
+    )
+    assert r.status_code == 202, r.text
+    r = await client_org.delete(f"/v1/espaces/{eid}", params={"confirmation": "prod-abj"})
+    assert r.status_code == 409 and r.json()["erreur"]["code"] == "espace_non_vide"
+    assert "volumes" in r.json()["erreur"]["message"]
+    vid = next(
+        v["id"]
+        for v in (await client_org.get("/v1/volumes")).json()["donnees"]
+        if v["nom"] == "vol-bloquant"
+    )
+    r = await client_org.delete(f"/v1/volumes/{vid}", params={"confirmation": "vol-bloquant"})
+    assert r.status_code in (200, 202, 204), r.text
 
     r = await client_org.delete(f"/v1/espaces/{eid}", params={"confirmation": "prod-abj"})
     assert r.status_code == 202

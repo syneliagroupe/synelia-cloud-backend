@@ -102,3 +102,37 @@ def test_registrar_ovh_verifier_400_com_me_indisponible(monkeypatch):
 
     monkeypatch.setattr(reg, "_requete", fake_requete)
     assert reg.verifier("test-demo.ci") is False
+
+
+def test_registrar_ovh_dns_entree_supprime_www(monkeypatch):
+    from synelia_openstack import registrar
+
+    monkeypatch.setenv(registrar.ENV_URL, "https://eu.api.ovh.com/1.0")
+    monkeypatch.setenv(registrar.ENV_APPKEY, "k")
+    monkeypatch.setenv(registrar.ENV_APPSECRET, "s")
+    monkeypatch.setenv(registrar.ENV_CONSUMERKEY, "c")
+    reg = registrar.RegistrarOvh()
+    appels: list[tuple[str, str]] = []
+
+    def fake_requete(
+        methode: str,
+        chemin: str,
+        corps=None,
+        *,
+        accepter_400: bool = False,
+    ):
+        appels.append((methode, chemin))
+        if methode == "GET" and chemin.endswith("subDomain=www"):
+            return [99] if "fieldType=A" in chemin else []
+        if methode == "GET" and "subDomain=" in chemin and "subDomain=www" not in chemin:
+            return []
+        if methode in ("POST", "PUT"):
+            return None
+        if methode == "DELETE" and chemin.endswith("/record/99"):
+            return None
+        raise AssertionError((methode, chemin, corps))
+
+    monkeypatch.setattr(reg, "_requete", fake_requete)
+    reg.configurer_enregistrements_entree("demo-h.com", "198.244.179.212", "dev01.ovh.smile.ci")
+    assert ("DELETE", "/domain/zone/demo-h.com/record/99") in appels
+    assert any(m == "POST" and chemin.endswith("/refresh") for m, chemin in appels)

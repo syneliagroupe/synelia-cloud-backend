@@ -9,7 +9,7 @@ async def _espace(client_org, code="projet-abj"):
         "/v1/espaces",
         json={
             "code": code,
-            "offerId": "offre-standard",
+            "offerId": "offre-espace-pro",
             "site": "ABJ",
             "cidr": "10.10.0.0/16",
             "quota": {"vcpu": 32, "ramGo": 64, "stockageTo": 4},

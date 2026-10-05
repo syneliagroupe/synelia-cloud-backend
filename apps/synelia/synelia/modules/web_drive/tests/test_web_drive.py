@@ -81,6 +81,13 @@ async def test_cycle_drive(client_org):
     r = await client_org.get(f"/v1/web/drive/{did}")
     assert r.json()["sieges"]["attribues"] == 1
 
+    r = await client_org.get(f"/v1/web/drive/{did}/identifiants-admin")
+    assert r.status_code == 200, r.text
+    admin = r.json()
+    assert admin["utilisateur"] == "admin"
+    assert len(admin["motDePasse"]) >= 12
+    assert admin["url"].startswith("https://drive.")
+
 
 async def test_quota_drive(client_org):
     await _creer_hebergement(client_org, "quota.ci")
@@ -108,6 +115,7 @@ async def test_erreurs_drive(client_org):
         ("patch", "/v1/web/drive/drive-inexistant", {"json": {"palier": "pro"}}),
         ("delete", "/v1/web/drive/drive-inexistant", {"params": {"confirmation": "x"}}),
         ("post", "/v1/web/drive/drive-inexistant/ouverture", {}),
+        ("get", "/v1/web/drive/drive-inexistant/identifiants-admin", {}),
         ("get", "/v1/web/drive/drive-inexistant/sieges", {}),
         ("post", "/v1/web/drive/drive-inexistant/sieges", {"json": {"userId": "u-1"}}),
     ]:

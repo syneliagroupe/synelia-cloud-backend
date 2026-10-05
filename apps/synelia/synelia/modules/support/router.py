@@ -12,20 +12,27 @@ from synelia_kernel.ids import nouvel_id
 
 from synelia.audit import journaliser
 from synelia.deps import Ctx, CtxPublic, Page, pagine
+from synelia.modules.admin.service import sla_restant_min
 from synelia.modules.support.service import ARTICLES_KB, detenteur_pieces, detenteur_tickets
 
 router = APIRouter(prefix="/support", tags=["Support client"])
 
 _SLA = {
-    "critique": {"premiereReponseMin": 15, "resolutionMin": 240},
-    "majeure": {"premiereReponseMin": 60, "resolutionMin": 720},
-    "mineure": {"premiereReponseMin": 240, "resolutionMin": 4320},
-    "question": {"premiereReponseMin": 480, "resolutionMin": 8640},
+    "critique": {"premiereReponseMin": 30, "resolutionMin": 240},
+    "majeure": {"premiereReponseMin": 120, "resolutionMin": 480},
+    "mineure": {"premiereReponseMin": 480, "resolutionMin": 2880},
+    "question": {"premiereReponseMin": 1440, "resolutionMin": 5760},
 }
 
 
+def _vue(t: m.Ticket) -> dict[str, Any]:
+    d = t.model_dump(mode="json")
+    d["slaRestantMin"] = sla_restant_min(d)
+    return d
+
+
 def _nouveau_numero() -> str:
-    return f"T-{maintenant().strftime('%Y%m')}-{nouvel_id()[:4].upper()}"
+    return f"T-{maintenant().strftime('%Y%m')}-{nouvel_id()[-4:].upper()}"
 
 
 @router.get(
@@ -87,7 +94,7 @@ async def lister_tickets(
             and (not ressourceId or ressourceId in t.ressourcesLiees)
         ),
     )
-    return pagine([t.model_dump(mode="json") for t in items], len(items), page)
+    return pagine([_vue(t) for t in items], len(items), page)
 
 
 @router.post(
@@ -132,7 +139,7 @@ async def creer_ticket(corps: m.TicketCreation, ctx: Ctx) -> Any:
 @router.get("/tickets/{ticketId}", response_model=m.Ticket, response_model_exclude_none=True)
 async def obtenir_ticket(ticketId: str, ctx: Ctx) -> Any:  # noqa: N803
     t = await detenteur_tickets.obtenir(ctx, ticketId)
-    return t.model_dump(mode="json")
+    return _vue(t)
 
 
 @router.patch("/tickets/{ticketId}", response_model=m.Ticket, response_model_exclude_none=True)
@@ -145,7 +152,7 @@ async def modifier_ticket(
         ctx, action="support.ticket.modification", cible_type="ticket", cible_id=ticketId
     )
     t = await detenteur_tickets.obtenir(ctx, ticketId)
-    return t.model_dump(mode="json")
+    return _vue(t)
 
 
 @router.post(
@@ -174,7 +181,7 @@ async def escalader_ticket(
         cible=t.numero,
     )
     tt = await detenteur_tickets.obtenir(ctx, ticketId)
-    return tt.model_dump(mode="json")
+    return _vue(tt)
 
 
 @router.post(
@@ -200,4 +207,4 @@ async def repondre_ticket(ticketId: str, corps: m.MessageTicket, ctx: Ctx) -> An
         ctx, action="support.ticket.message", cible_type="ticket", cible_id=ticketId, cible=t.numero
     )
     tt = await detenteur_tickets.obtenir(ctx, ticketId)
-    return tt.model_dump(mode="json")
+    return _vue(tt)

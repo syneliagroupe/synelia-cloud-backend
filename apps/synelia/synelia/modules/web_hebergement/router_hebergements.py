@@ -3,25 +3,32 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, status
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from synelia_contract import modeles as m
 from synelia_kernel import erreurs
 from synelia_kernel.dates import maintenant
 from synelia_kernel.ids import nouvel_id
+from synelia_openstack.compute import ComputeOpenStack
 
 from synelia.audit import journaliser
 from synelia.deps import Contexte, Page, exige, exiger_confirmation
+from synelia.modules.web_domaines.service import appliquer_dns_entree_domaine
 from synelia.modules.web_hebergement import service
 from synelia.modules.web_hebergement.service import (
+    ETAPES_REDIMENSIONNEMENT_PALIER,
     SERVICES_PARTAGES,
     VERSIONS_PHP,
+    amont,
     appliquer_comptes_fichiers,
     depot,
     depot_comptes,
     depot_domaines,
     depot_taches,
+    gabarit_nova_pour_palier,
     mesurer_espace_utilise,
+    reconcilier_metriques_serveur,
     reconcilier_statut,
+    specs_serveur_pour_palier,
 )
 from synelia.travaux import demarrer_travail
 
@@ -44,6 +51,7 @@ async def _exiger_domaine_detenu(ctx: Contexte, domaine: str) -> None:
             "hébergement.",
             {"domaine": "Domaine inconnu de votre organisation — voir /app/web/domaines."},
         )
+    await appliquer_dns_entree_domaine(ctx, nom)
 
 
 @router.get("", response_model=m.WebHebergementsGetResponse, response_model_exclude_none=True)
@@ -135,13 +143,13 @@ async def obtenir_hebergement(
     hebergementId: str, ctx: Contexte = Depends(exige("org.dashboard.view", lecture=True))
 ) -> Any:  # noqa: N803
     h = await reconcilier_statut(ctx, await depot.obtenir(ctx, hebergementId))
-    # Mesure réelle de l'espace disque uniquement sur la fiche détail : un SSH par ligne sur
-    # la liste serait trop coûteux pour un chiffre qui n'a pas besoin d'être à jour à chaque
-    # requête (cf. `mesurer_espace_utilise`).
+    # Mesure réelle de l'espace disque et relevé Nova diagnostics uniquement sur la fiche
+    # détail : un SSH / deux relevés diagnostics par ligne sur la liste serait trop coûteux.
+    h = await reconcilier_metriques_serveur(ctx, h)
     return await mesurer_espace_utilise(ctx, h)
 
 
-@router.patch("/{hebergementId}", response_model=m.Hebergement, response_model_exclude_none=True)
+@router.patch("/{hebergementId}", response_model_exclude_none=True)
 async def modifier_hebergement(
     hebergementId: str,
     corps: m.HebergementCreation,
@@ -151,7 +159,64 @@ async def modifier_hebergement(
     if corps.domaine and corps.domaine != h.domaine:
         await _exiger_domaine_detenu(ctx, corps.domaine)
         await depot.exiger_nom_libre(ctx, corps.domaine)
-    await depot.modifier(ctx, hebergementId, corps)
+    patch = corps.model_dump(mode="json", exclude_unset=True)
+    nouveau_palier = patch.get("palier")
+    redimensionner = False
+    if nouveau_palier and nouveau_palier != h.palier:
+        vcpu, ram_go, disk_go = specs_serveur_pour_palier(nouveau_palier)
+        if disk_go < h.serveur.diskGo:
+            raise erreurs.validation(
+                "Le disque d’un hébergement ne se réduit pas.",
+                champs={"palier": "Choisissez un palier avec au moins autant de stockage."},
+            )
+        serveur = h.serveur.model_copy(update={"vcpu": vcpu, "ramGo": ram_go, "diskGo": disk_go})
+        await depot.modifier(
+            ctx,
+            hebergementId,
+            {
+                **patch,
+                "serveur": serveur.model_dump(mode="json"),
+                "espaceTotalGo": float(disk_go),
+            },
+        )
+        try:
+            secrets = await depot.secrets(ctx, hebergementId)
+        except Exception:  # noqa: BLE001
+            secrets = {}
+        redimensionner = (
+            h.statut == "en_ligne"
+            and bool(secrets.get("serveur_id"))
+            and isinstance(amont(), ComputeOpenStack)
+        )
+        if redimensionner:
+            await depot.definir_statut(ctx, hebergementId, "maintenance")
+            await journaliser(
+                ctx,
+                action="hebergement.changement_palier",
+                cible_type="web_hebergement",
+                cible_id=hebergementId,
+                cible=h.domaineProvisoire,
+                details={"ancienPalier": h.palier, "nouveauPalier": nouveau_palier},
+            )
+            h_maj = await depot.obtenir(ctx, hebergementId)
+            travail = await demarrer_travail(
+                ctx,
+                "hebergement.redimensionner",
+                h_maj.domaineProvisoire,
+                cible_type="web_hebergement",
+                cible_id=hebergementId,
+                entree={
+                    "palier": nouveau_palier,
+                    "gabarit_id": gabarit_nova_pour_palier(nouveau_palier),
+                    "vcpu": vcpu,
+                    "ramGo": ram_go,
+                    "diskGo": disk_go,
+                },
+                etapes=ETAPES_REDIMENSIONNEMENT_PALIER,
+            )
+            return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=travail)
+    else:
+        await depot.modifier(ctx, hebergementId, corps)
     await journaliser(
         ctx,
         action="hebergement.modification",
@@ -199,16 +264,24 @@ async def modifier_acces_hebergement(
     hebergementId: str, corps: m.ReglagesAcces, ctx: Contexte = Depends(exige("service.admin"))
 ) -> Any:  # noqa: N803
     h = await depot.obtenir(ctx, hebergementId)
-    acces = h.acces.model_dump(exclude_none=True)
-    acces.update(corps.model_dump(exclude_none=True))
-    if corps.ssh is not None:
-        try:
+    acces = service.normaliser_acces_transfert(
+        h.acces.model_copy(update=corps.model_dump(exclude_none=True))
+    )
+    try:
+        if corps.ssh is not None:
             await service.appliquer_acces_ssh(ctx, hebergementId, corps.ssh)
-        except Exception as exc:  # noqa: BLE001 — openstacksdk et co : 424 franc, pas 500
-            if isinstance(exc, erreurs.AppError):
-                raise
-            raise erreurs.amont_indisponible("acces SSH (réseau)", str(exc)[:200]) from None
-    await depot.modifier(ctx, hebergementId, {"acces": acces})
+        if corps.sftp is not None:
+            edge = await service.appliquer_acces_sftp(ctx, hebergementId, corps.sftp)
+            acces = acces.model_copy(
+                update={"portSftp": edge.portSftp, "hoteTransfert": edge.hoteTransfert}
+            )
+        if corps.sftp is not None or corps.ftp is not None or corps.ftps is not None:
+            await appliquer_comptes_fichiers(ctx, hebergementId)
+    except Exception as exc:  # noqa: BLE001 — openstacksdk et co : 424 franc, pas 500
+        if isinstance(exc, erreurs.AppError):
+            raise
+        raise erreurs.amont_indisponible("accès fichiers (réseau)", str(exc)[:200]) from None
+    await depot.modifier(ctx, hebergementId, {"acces": acces.model_dump(mode="json")})
     await journaliser(
         ctx,
         action="hebergement.acces",
@@ -277,12 +350,18 @@ async def creer_compte_fichiers(
     corps: m.CompteFichiersCreation,
     ctx: Contexte = Depends(exige("service.admin")),
 ) -> Any:  # noqa: N803
-    await depot.obtenir(ctx, hebergementId)
+    h = await depot.obtenir(ctx, hebergementId)
+    if not h.acces.sftp:
+        raise erreurs.validation(
+            "SFTP n'est pas activé sur cet hébergement.",
+            champs={"sftp": "Activez SFTP dans les accès avant de créer un compte."},
+        )
+    protos = service.valider_protocoles_compte(list(corps.protocoles))
     compte = m.CompteFichiers(
         id=nouvel_id(),
         hebergementId=hebergementId,
         utilisateur=corps.utilisateur,
-        protocoles=corps.protocoles,
+        protocoles=protos,  # type: ignore[arg-type]
         racine=corps.racine,
         quotaGo=corps.quotaGo,
         utiliseGo=0.0,
@@ -296,6 +375,10 @@ async def creer_compte_fichiers(
     # no-op simulé, 424 franc en réel si le VPS n'est pas joignable — jamais un compte
     # annoncé « actif » sans serveur derrière.
     await appliquer_comptes_fichiers(ctx, hebergementId)
+    h = await depot.obtenir(ctx, hebergementId)
+    if h.acces.sftp and "sftp" in corps.protocoles:
+        acces = await service.appliquer_acces_sftp(ctx, hebergementId, True)
+        await depot.modifier(ctx, hebergementId, {"acces": acces.model_dump(mode="json")})
     await journaliser(
         ctx,
         action="hebergement.compte_fichiers.creation",
@@ -320,6 +403,8 @@ async def modifier_compte_fichiers(
     await depot.obtenir(ctx, hebergementId)
     compte = await depot_comptes.obtenir(ctx, compteId)
     patch = corps.model_dump(exclude_none=True)
+    if "protocoles" in patch:
+        patch["protocoles"] = service.valider_protocoles_compte(list(patch["protocoles"]))
     if "clesSshPubliques" in patch:
         patch["clesSsh"] = len(patch.pop("clesSshPubliques") or [])
         compte = compte.model_copy(update=patch)
@@ -369,9 +454,9 @@ async def supprimer_compte_fichiers(
 async def obtenir_metriques_hebergement(
     hebergementId: str, fenetre: str | None = None, ctx: Contexte = Depends(exige(None))
 ) -> Any:  # noqa: N803
-    await depot.obtenir(ctx, hebergementId)
+    h = await reconcilier_statut(ctx, await depot.obtenir(ctx, hebergementId))
     f = fenetre if fenetre in ("24h", "7j", "30j") else "24h"
-    return service.metriques(f)
+    return await service.metriques_hebergement(ctx, h, f)
 
 
 @router.put("/{hebergementId}/php", response_model=m.Hebergement, response_model_exclude_none=True)

@@ -47,7 +47,10 @@ def plan_vers_modele(corps: m.PlanPraCreation, ctx: Contexte) -> m.PlanPra:
         siteSource=corps.siteSource,
         siteRepli=corps.siteRepli,
         rpoCibleMin=corps.rpoCibleMin,
-        rpoConstateMin=_rpo_constate(replication),
+        # Aucune réplication réelle n'est mesurée : un RPO « constaté » dérivé du retard
+        # déclaré (300 s par défaut) serait inventé — « jamais mesuré » tant qu'un exercice
+        # n'en produit pas un.
+        rpoConstateMin=None,
         rtoCibleMin=corps.rtoCibleMin,
         rtoConstateMin=None,
         groupes=groupes,
@@ -57,12 +60,6 @@ def plan_vers_modele(corps: m.PlanPraCreation, ctx: Contexte) -> m.PlanPra:
         exercices=[],
         statut="jamais_teste",
     )
-
-
-def _rpo_constate(replication: m.Replication3) -> int | None:
-    if replication.retardS is None:
-        return None
-    return max(1, replication.retardS // 60)
 
 
 @executeur("dr.failover.test")

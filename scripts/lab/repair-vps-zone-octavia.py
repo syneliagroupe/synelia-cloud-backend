@@ -7,7 +7,7 @@ import asyncio
 import os
 
 OLD_LB = os.environ.get("VPS_ZONE_LB_ID", "6bcc4ab4-3f67-4b60-a9fc-62600328012d")
-FIP = os.environ.get("VPS_ZONE_LB_FIP", "192.168.20.231")
+FIP = os.environ["VPS_ZONE_LB_FIP"]
 ESPACE = os.environ.get("SYNELIA_VPS_ZONE_ESPACE_ID", "b2468d93-699a-4b40-aabc-317bd67928ae")
 LISTENER_HTTP = None  # filled after create
 

@@ -100,13 +100,9 @@ def _diagnostics_vers_valeurs(
 _DELTA_DIAGNOSTICS_S = 0.6
 
 
-async def diagnostics_instantanes(ctx: Contexte, vm: m.Vm) -> dict[str, float] | None:
-    """CPU/RAM/réseau instantanés d'une VM active, dérivés de deux relevés Nova
-    `.../diagnostics` (données réelles de l'hyperviseur) espacés de `_DELTA_DIAGNOSTICS_S`.
-    `None` en simulation ou si Nova ne répond pas (VM en train de basculer d'état, par
-    exemple) : l'appelant retombe alors sur des séries vides plutôt qu'une valeur inventée —
-    même politique que le reste du module (`journaux`, `console`)."""
-    sid = await serveur_id(ctx, vm.id)
+async def diagnostics_instantanes_pour_serveur(sid: str, vcpu: int) -> dict[str, float] | None:
+    """CPU/RAM/réseau instantanés pour un serveur Nova `ACTIVE`, via deux relevés
+    `GET /servers/{id}/diagnostics`. Réutilisé par Web Cloud (VM d'hébergement) et Kubernetes."""
     avant = await asyncio.to_thread(amont().diagnostics, sid)
     if avant is None:
         return None
@@ -114,7 +110,17 @@ async def diagnostics_instantanes(ctx: Contexte, vm: m.Vm) -> dict[str, float] |
     apres = await asyncio.to_thread(amont().diagnostics, sid)
     if apres is None:
         return None
-    return _diagnostics_vers_valeurs(avant, apres, _DELTA_DIAGNOSTICS_S, vm.vcpu)
+    return _diagnostics_vers_valeurs(avant, apres, _DELTA_DIAGNOSTICS_S, vcpu)
+
+
+async def diagnostics_instantanes(ctx: Contexte, vm: m.Vm) -> dict[str, float] | None:
+    """CPU/RAM/réseau instantanés d'une VM active, dérivés de deux relevés Nova
+    `.../diagnostics` (données réelles de l'hyperviseur) espacés de `_DELTA_DIAGNOSTICS_S`.
+    `None` en simulation ou si Nova ne répond pas (VM en train de basculer d'état, par
+    exemple) : l'appelant retombe alors sur des séries vides plutôt qu'une valeur inventée —
+    même politique que le reste du module (`journaux`, `console`)."""
+    sid = await serveur_id(ctx, vm.id)
+    return await diagnostics_instantanes_pour_serveur(sid, vm.vcpu)
 
 
 # États contrôlés à la lecture : une VM dans l'un de ces statuts **doit** avoir un serveur Nova
@@ -606,8 +612,8 @@ async def demo(session, org: Organisation, admin: Utilisateur) -> None:
         id="espace-demo-abj",
         orgId=org.id,
         code="demo-abj",
-        offerId="offre-standard",
-        offreNom="Espace Standard",
+        offerId="offre-espace-pro",
+        offreNom="Espace Pro",
         site="ABJ",
         cidr="10.20.0.0/16",
         quota=m.Quota(vcpu=8, ramGo=32, stockageTo=1),

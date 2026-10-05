@@ -82,7 +82,7 @@ class ExecuteurAppDeploy(Executeur):
         await _poser_drapeau(ctx, d.id, _CLE_LIVE, True)
         preview = None
         if d.branche and d.branche != "main":
-            preview = f"https://{d.branche}.{finale.appId}.synelia.app"
+            preview = f"https://{d.branche}.{finale.appId}.{ctx.reglages.domaine_apps_defaut}"
         await depot_deploy.modifier(
             ctx, d.id, {"statut": "live", "previewUrl": preview, "dureeS": 12}
         )

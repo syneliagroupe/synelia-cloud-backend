@@ -29,6 +29,7 @@ from typing import Any
 from synelia_kernel import erreurs
 
 ENV_CLUSTER_ID = "SYNELIA_PAAS_CLUSTER_ID"
+ENV_KUBECONFIG_PATH = "SYNELIA_PAAS_KUBECONFIG_PATH"
 ENV_OBSERVABILITE_NAMESPACE = "SYNELIA_OBSERVABILITE_NAMESPACE"
 
 _GROUPE_VMRULE = "operator.victoriametrics.com"
@@ -119,6 +120,9 @@ class K8sWorkloadSimule:
     def supprimer_deployment(self, namespace: str, nom: str) -> None:
         return None
 
+    def exposer_service(self, namespace: str, nom: str, port: int) -> str:
+        return "192.0.2.10"
+
     def appliquer_regle_alerte(
         self,
         regle_id: str,
@@ -149,7 +153,21 @@ class K8sWorkloadReel(K8sWorkloadSimule):
 
     def _kubeconfig(self, cluster_id: str) -> dict[str, Any]:
         if cluster_id not in _KUBECONFIG_CACHE:
-            _KUBECONFIG_CACHE[cluster_id] = self._construire_kubeconfig(cluster_id)
+            path = os.environ.get(ENV_KUBECONFIG_PATH)
+            if path and cluster_id == self._cluster_id():
+                try:
+                    import yaml
+
+                    with open(path, encoding="utf-8") as f:
+                        doc = yaml.safe_load(f)
+                    if isinstance(doc, dict) and doc.get("kind") == "Config":
+                        _KUBECONFIG_CACHE[cluster_id] = doc
+                    else:
+                        _KUBECONFIG_CACHE[cluster_id] = self._construire_kubeconfig(cluster_id)
+                except OSError:
+                    _KUBECONFIG_CACHE[cluster_id] = self._construire_kubeconfig(cluster_id)
+            else:
+                _KUBECONFIG_CACHE[cluster_id] = self._construire_kubeconfig(cluster_id)
         return _KUBECONFIG_CACHE[cluster_id]
 
     def _construire_kubeconfig(self, cluster_id: str) -> dict[str, Any]:
@@ -161,12 +179,15 @@ class K8sWorkloadReel(K8sWorkloadSimule):
         from cryptography.x509.oid import NameOID
 
         from synelia_openstack.erreurs import traduire
-        from synelia_openstack.fabrique import connexion
+        from synelia_openstack.fabrique import connexion_magnum
 
-        c = connexion()
+        # `/certificates` (RPC conductor + Barbican) : utiliser la même connexion que Magnum
+        # (mot de passe admin si configuré, sinon l'AC plateforme).
+        c = connexion_magnum()
         cim = c.container_infrastructure_management
+        cluster = cim.get_cluster(cluster_id)
+        stack_id = getattr(cluster, "stack_id", None)
         try:
-            cluster = cim.get_cluster(cluster_id)
             # Le certificat CA et la signature de CSR passent par une RPC magnum-api ->
             # magnum-conductor puis par Barbican : sur ce lab, ce chemin échoue par
             # intermittence (504/502 après ~60s, y compris en direct sur l'hôte, hors de tout
@@ -196,7 +217,14 @@ class K8sWorkloadReel(K8sWorkloadSimule):
                     csr=csr.public_bytes(serialization.Encoding.PEM).decode(),
                 )
             )
-        except Exception as exc:  # noqa: BLE001 — relayé en `424`, pas un `500` opaque
+        except Exception as exc:  # noqa: BLE001 — repli CAPI ou `424`
+            if stack_id:
+                from synelia_openstack.capi_kubeconfig import kubeconfig_depuis_capí
+
+                try:
+                    return kubeconfig_depuis_capí(str(stack_id))
+                except Exception:
+                    pass
             raise traduire(exc, "cluster PaaS") from None
         cle_pem = cle.private_bytes(
             encoding=serialization.Encoding.PEM,
@@ -314,11 +342,18 @@ class K8sWorkloadReel(K8sWorkloadSimule):
         ports = ports or [8080]
         ressources = None
         if cpu or ram_mo:
-            quantites = {
+            limites = {
                 **({"cpu": str(cpu)} if cpu else {}),
                 **({"memory": f"{ram_mo}Mi"} if ram_mo else {}),
             }
-            ressources = k8s_client.V1ResourceRequirements(requests=quantites, limits=quantites)
+            # Plafond = ressources du service ; réservation = 10 % du CPU et 50 % de la RAM
+            # (Burstable) : un cluster PaaS partagé ne tient pas des réservations pleines, un
+            # nginx à 1 vCPU restait `Pending` (Insufficient cpu) sur le worker du lab.
+            reservations = {
+                **({"cpu": f"{max(int(cpu * 100), 50)}m"} if cpu else {}),
+                **({"memory": f"{ram_mo // 2}Mi"} if ram_mo else {}),
+            }
+            ressources = k8s_client.V1ResourceRequirements(requests=reservations, limits=limites)
         conteneur = k8s_client.V1Container(
             name=nom,
             image=image,
@@ -384,15 +419,56 @@ class K8sWorkloadReel(K8sWorkloadSimule):
             _attendre_disparition(
                 lambda: apps.read_namespaced_deployment(nom, namespace), attente_s=90.0
             )
+        # `<nom>-ext` : Service LoadBalancer de `exposer_service` (OCCM supprime le LB Octavia
+        # et l'IP flottante à sa suppression, d'où l'attente plus longue).
+        for svc, attente in ((nom, 30.0), (f"{nom}-ext", 180.0)):
+            try:
+                core.delete_namespaced_service(svc, namespace)
+            except k8s_client.exceptions.ApiException as exc:
+                if exc.status != 404:
+                    raise erreurs.amont_indisponible("kubernetes", str(exc)) from exc
+            else:
+                _attendre_disparition(
+                    lambda svc=svc: core.read_namespaced_service(svc, namespace),
+                    attente_s=attente,
+                )
+
+    def exposer_service(self, namespace: str, nom: str, port: int) -> str:
+        """Service LoadBalancer + IP flottante (OCCM) devant le Deployment `nom` ; renvoie l'IP
+        publique du lab (joignable depuis dev01, où Apache fait le reverse proxy). Idempotent."""
+        from kubernetes import client as k8s_client
+
+        from synelia_openstack.fabrique import connexion_magnum
+
+        externe = next(connexion_magnum().network.networks(is_router_external=True))
+        ext = f"{nom}-ext"
+        service = k8s_client.V1Service(
+            metadata=k8s_client.V1ObjectMeta(
+                name=ext,
+                namespace=namespace,
+                annotations={"loadbalancer.openstack.org/floating-network-id": externe.id},
+            ),
+            spec=k8s_client.V1ServiceSpec(
+                type="LoadBalancer",
+                selector={"app": nom},
+                ports=[k8s_client.V1ServicePort(port=80, target_port=port, name="http")],
+            ),
+        )
+        core = k8s_client.CoreV1Api(self._api_client())
         try:
-            core.delete_namespaced_service(nom, namespace)
+            core.create_namespaced_service(namespace, service)
         except k8s_client.exceptions.ApiException as exc:
-            if exc.status != 404:
+            if exc.status != 409:
                 raise erreurs.amont_indisponible("kubernetes", str(exc)) from exc
-        else:
-            _attendre_disparition(
-                lambda: core.read_namespaced_service(nom, namespace), attente_s=30.0
-            )
+        debut = time.monotonic()
+        while time.monotonic() - debut < 300:
+            ingress = core.read_namespaced_service(ext, namespace).status.load_balancer.ingress
+            if ingress and ingress[0].ip:
+                return ingress[0].ip
+            time.sleep(5)
+        raise erreurs.amont_indisponible(
+            "kubernetes", f"Le load balancer de `{ext}` n'a pas reçu d'IP publique en 5 min."
+        )
 
     def _nom_vmrule(self, regle_id: str) -> str:
         import re
@@ -480,7 +556,10 @@ def construire_kubeconfig(cluster_id: str) -> dict[str, Any]:
     `SYNELIA_PAAS_CLUSTER_ID` : réutilisé par le module `kubernetes` pour exposer un vrai
     `GET /kubernetes/{id}/kubeconfig` sur un cluster provisionné par un client, avec la même
     mécanique (CSR signée par Magnum) que celle du cluster PaaS interne."""
-    return K8sWorkloadReel()._construire_kubeconfig(cluster_id)  # noqa: SLF001
+    reel = K8sWorkloadReel()
+    if cluster_id == reel._cluster_id():  # noqa: SLF001
+        return reel._kubeconfig(cluster_id)  # noqa: SLF001 — fichier lab / cache PaaS
+    return reel._construire_kubeconfig(cluster_id)  # noqa: SLF001
 
 
 _SIMULE = K8sWorkloadSimule()

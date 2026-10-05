@@ -17,3 +17,7 @@ services:
     volumes:
       - ./apps:/app/apps
       - ./packages:/app/packages
+  worker:
+    volumes:
+      - ./apps:/app/apps
+      - ./packages:/app/packages

@@ -11,7 +11,31 @@ TITULAIRE = {
 }
 
 
-async def test_disponibilite(client_org):
+async def test_parametres_entree_web(client_org):
+    r = await client_org.get("/v1/web/domaines/parametres-entree")
+    assert r.status_code == 200, r.text
+    corps = r.json()
+    assert corps["dnsEntreeA"] == "198.244.179.212"
+    assert corps["dnsEntreeWildcardCname"] == "dev01.ovh.smile.ci"
+
+
+async def test_disponibilite(client_org, monkeypatch):
+    from synelia.modules.web_domaines import service as domaines_service
+    from synelia_openstack.registrar import RegistrarSimule
+
+    appels_dns: list[str] = []
+
+    class RegistrarDnsSpy(RegistrarSimule):
+        def configurer_enregistrements_entree(
+            self, domaine: str, ip_apex: str, cname_wildcard: str, *, ttl: int = 3600
+        ) -> None:
+            appels_dns.append(domaine)
+
+        def domaine_sous_gestion(self, nom: str) -> bool:
+            return True
+
+    monkeypatch.setattr(domaines_service, "amont", RegistrarDnsSpy)
+
     r = await client_org.get("/v1/web/domaines/disponibilite", params={"nom": "monmarque.com"})
     assert r.status_code == 200, r.text
     d = r.json()
@@ -19,6 +43,18 @@ async def test_disponibilite(client_org):
 
     r = await client_org.get("/v1/web/domaines/disponibilite", params={"nom": "google.com"})
     assert r.status_code == 200 and r.json()["disponible"] is False
+
+    corps = {
+        "nom": "deja-nous-demo.com",
+        "dureeAnnees": 1,
+        "titulaire": TITULAIRE,
+    }
+    r = await client_org.post("/v1/web/domaines", json=corps)
+    assert r.status_code == 202
+    appels_dns.clear()
+    r = await client_org.get("/v1/web/domaines/disponibilite", params={"nom": "deja-nous-demo.com"})
+    assert r.status_code == 200 and r.json()["disponible"] is False
+    assert appels_dns == ["deja-nous-demo.com"]
 
 
 async def test_erreurs_domaines(client_org):
@@ -48,7 +84,23 @@ async def test_erreurs_domaines(client_org):
     assert r.status_code == 200
 
 
-async def test_commander_cycle(client_org):
+async def test_commander_cycle(client_org, monkeypatch):
+    from synelia.modules.web_domaines import service as domaines_service
+    from synelia_openstack.registrar import RegistrarSimule
+
+    appels_dns: list[tuple[str, str, str]] = []
+
+    class RegistrarDnsSpy(RegistrarSimule):
+        def configurer_enregistrements_entree(
+            self, domaine: str, ip_apex: str, cname_wildcard: str, *, ttl: int = 3600
+        ) -> None:
+            appels_dns.append((domaine, ip_apex, cname_wildcard))
+
+        def domaine_sous_gestion(self, nom: str) -> bool:
+            return True
+
+    monkeypatch.setattr(domaines_service, "amont", RegistrarDnsSpy)
+
     corps = {
         "nom": "synelia-mon-domaine.ci",
         "dureeAnnees": 1,
@@ -60,6 +112,9 @@ async def test_commander_cycle(client_org):
     assert r.status_code == 202, r.text
     travail = r.json()
     assert travail["type"] == "domaine.commander" and travail["statut"] == "done"
+    assert appels_dns == [
+        ("synelia-mon-domaine.ci", "198.244.179.212", "dev01.ovh.smile.ci"),
+    ]
 
     r = await client_org.get("/v1/web/domaines")
     assert r.status_code == 200
@@ -92,6 +147,28 @@ async def test_commander_cycle(client_org):
     r = await client_org.get(f"/v1/web/domaines/{did}")
     expiration_apres = r.json()["domaine"]["expiration"]
     assert expiration_apres[:4] == str(int(expiration_avant[:4]) + 2)
+
+
+async def test_resilier_domaine(client_org):
+    corps = {
+        "nom": "a-resilier-demo.com",
+        "dureeAnnees": 1,
+        "titulaire": TITULAIRE,
+        "renouvellementAuto": True,
+        "whoisProtege": True,
+    }
+    r = await client_org.post("/v1/web/domaines", json=corps)
+    assert r.status_code == 202, r.text
+    did = (await client_org.get("/v1/web/domaines")).json()["donnees"][-1]["id"]
+
+    r = await client_org.delete(
+        f"/v1/web/domaines/{did}", params={"confirmation": "a-resilier-demo.com"}
+    )
+    assert r.status_code == 202, r.text
+    assert r.json()["type"] == "domaine.resilier"
+
+    r = await client_org.get(f"/v1/web/domaines/{did}")
+    assert r.status_code == 404
 
 
 async def test_transfert(client_org):
@@ -133,3 +210,21 @@ async def test_travail_entree_persisted(client_org):
             f"entree should contain dureeAnnees=3, got {db_travail.entree}"
         )
         assert db_travail.entree.get("nom") == "entree-test-domain.ci"
+
+
+async def test_disponibilite_domaine_du_compte_registrar(client_org, monkeypatch):
+    from synelia.modules.web_domaines import service as domaines_service
+    from synelia_openstack.registrar import RegistrarSimule
+
+    class RegistrarCompte(RegistrarSimule):
+        def verifier(self, nom: str) -> bool:
+            return False
+
+        def domaine_du_compte(self, nom: str) -> bool:
+            return nom == "demo-du-compte.com"
+
+    monkeypatch.setattr(domaines_service, "amont", RegistrarCompte)
+    r = await client_org.get("/v1/web/domaines/disponibilite", params={"nom": "demo-du-compte.com"})
+    assert r.json()["disponible"] is True
+    r = await client_org.get("/v1/web/domaines/disponibilite", params={"nom": "google.com"})
+    assert r.json()["disponible"] is False

@@ -1,8 +1,6 @@
 """Web Cloud — hébergement, applications web et bases."""
 
-import secrets
-
-from synelia_testing import connexion_lab, corriger_amont, sur_lab_reel
+from synelia_testing import allouer_domaine_demo, connexion_lab, corriger_amont, sur_lab_reel
 
 DES = "/v1"
 
@@ -19,31 +17,8 @@ def _affirmer_serveur_nova_hebergement(h: dict):
     assert trouves, f"aucun serveur Nova {nom!r} : hébergement sans impact OpenStack"
 
 
-async def _enregistrer_domaine(client_org, nom: str) -> None:
-    """Un hébergement exige un domaine déjà enregistré et payé : on passe d'abord par
-    la commande de domaine (`POST /web/domaines`), comme un vrai client."""
-    r = await client_org.post(
-        f"{DES}/web/domaines",
-        json={
-            "nom": nom,
-            "dureeAnnees": 1,
-            "titulaire": {
-                "nom": "Synelia Test",
-                "email": "test@synelia.ci",
-                "telephone": "+22500000000",
-                "adresse": "x",
-                "ville": "Abidjan",
-                "pays": "CI",
-            },
-        },
-    )
-    assert r.status_code == 202, r.text
-
-
 async def _creer_hebergement(client_org, nom: str | None = None) -> dict:
-    if nom is None:
-        nom = f"demo-{secrets.token_hex(4)}.com"
-    await _enregistrer_domaine(client_org, nom)
+    nom = await allouer_domaine_demo(client_org, nom)
     r = await client_org.post(
         f"{DES}/web/hebergements", json={"palier": "pro", "site": "ABJ", "domaine": nom}
     )
@@ -84,16 +59,31 @@ async def test_cycle_hebergement(client_org):
     r = await client_org.patch(
         f"{DES}/web/hebergements/{hid}", json={"palier": "business", "site": "ABJ"}
     )
-    assert r.status_code == 200 and r.json()["palier"] == "business"
+    # En lab OpenStack : montée de palier → redimensionnement Nova (`202`). En tests simulés : `200`.
+    assert r.status_code in (200, 202), r.text
+    if r.status_code == 202:
+        assert r.json()["type"] == "hebergement.redimensionner"
+    r = await client_org.get(f"{DES}/web/hebergements/{hid}")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["palier"] == "business"
+    assert body["serveur"]["vcpu"] == 4 and body["serveur"]["ramGo"] == 8
+    assert body["serveur"]["diskGo"] == 160
 
     r = await client_org.put(
-        f"{DES}/web/hebergements/{hid}/acces", json={"ftp": True, "ssh": True, "portSsh": 2222}
+        f"{DES}/web/hebergements/{hid}/acces",
+        json={"sftp": True, "ssh": True, "portSsh": 22},
     )
-    assert r.status_code == 200 and r.json()["acces"]["ssh"] is True
+    assert r.status_code == 200
+    assert r.json()["acces"]["ssh"] is True
+    assert r.json()["acces"]["ftp"] is False
 
     r = await client_org.get(f"{DES}/web/hebergements/{hid}/metriques", params={"fenetre": "24h"})
     assert r.status_code == 200
-    assert len(r.json()["series"]) >= 1 and r.json()["series"][0]["points"][0]["valeur"] == 0
+    body = r.json()
+    assert len(body["series"]) == 6
+    # En simulation Nova ne renvoie pas de diagnostics : pas de points inventés.
+    assert all(len(s["points"]) == 0 for s in body["series"])
 
     r = await client_org.put(f"{DES}/web/hebergements/{hid}/php", json={"versionDefaut": "8.3"})
     assert r.status_code == 200 and r.json()["php"]["versionDefaut"] == "8.3"
@@ -116,21 +106,36 @@ async def test_cycle_hebergement(client_org):
 
 async def test_comptes_fichiers(client_org):
     hid = (await _creer_hebergement(client_org))["id"]
+    await client_org.put(
+        f"{DES}/web/hebergements/{hid}/acces",
+        json={"sftp": True, "ftp": False, "ftps": False},
+    )
     r = await client_org.post(
         f"{DES}/web/hebergements/{hid}/comptes-fichiers",
-        json={"utilisateur": "ftp-synelia", "protocoles": ["ftp", "sftp"], "racine": "/var/www"},
+        json={
+            "utilisateur": "ftp-synelia",
+            "protocoles": ["sftp"],
+            "racine": "/var/www",
+            "motDePasse": "s3cret-test",
+        },
     )
     assert r.status_code == 201, r.text
     cid = r.json()["id"]
+
+    r = await client_org.post(
+        f"{DES}/web/hebergements/{hid}/comptes-fichiers",
+        json={"utilisateur": "x", "protocoles": ["ftp"], "racine": "/var/www"},
+    )
+    assert r.status_code == 422
 
     r = await client_org.get(f"{DES}/web/hebergements/{hid}/comptes-fichiers")
     assert r.status_code == 200 and any(c["id"] == cid for c in r.json())
 
     r = await client_org.patch(
         f"{DES}/web/hebergements/{hid}/comptes-fichiers/{cid}",
-        json={"utilisateur": "ftp-synelia", "protocoles": ["ftp"], "racine": "/var/www"},
+        json={"utilisateur": "ftp-synelia", "protocoles": ["sftp"], "racine": "/var/www/sites"},
     )
-    assert r.status_code == 200 and r.json()["protocoles"] == ["ftp"]
+    assert r.status_code == 200 and r.json()["protocoles"] == ["sftp"]
 
     r = await client_org.delete(
         f"{DES}/web/hebergements/{hid}/comptes-fichiers/{cid}",
@@ -175,33 +180,17 @@ async def test_taches(client_org):
 
 async def test_attachement_domaine(client_org):
     hid = (await _creer_hebergement(client_org))["id"]
+    domaine_attache = await allouer_domaine_demo(client_org)
     r = await client_org.post(
-        f"{DES}/web/domaines",
-        json={
-            "nom": "attache-demo.com",
-            "dureeAnnees": 1,
-            "titulaire": {
-                "nom": "S",
-                "email": "a@b.ci",
-                "telephone": "+1",
-                "adresse": "x",
-                "ville": "y",
-                "pays": "CI",
-            },
-        },
-    )
-    assert r.status_code == 202, r.text
-
-    r = await client_org.post(
-        f"{DES}/web/hebergements/{hid}/attachement-domaine", json={"domaine": "attache-demo.com"}
+        f"{DES}/web/hebergements/{hid}/attachement-domaine", json={"domaine": domaine_attache}
     )
     assert r.status_code == 200, r.text
-    assert r.json()["domaine"] == "attache-demo.com"
+    assert r.json()["domaine"] == domaine_attache
 
-    other = await _creer_hebergement(client_org, "autre-demo.com")
+    other = await _creer_hebergement(client_org)
     r = await client_org.post(
         f"{DES}/web/hebergements/{other['id']}/attachement-domaine",
-        json={"domaine": "attache-demo.com"},
+        json={"domaine": domaine_attache},
     )
     assert r.status_code == 409
 
@@ -232,12 +221,13 @@ async def test_creer_hebergement_sans_zone_rejet_franc(client_org, monkeypatch):
     # varie (provisionnement partiel), et un test qui en dépend serait instable — le
     # garde-fou lui-même est ce qu'on vérifie, pas l'état du lab à un instant donné.
     from synelia.modules.web_hebergement import service as heb_service
-    from synelia_testing import enregistrer_domaine, sur_lab_reel
+    from synelia_testing import sur_lab_reel
 
     monkeypatch.setattr(heb_service, "zone_vps_secrets", lambda ctx: _vide())
-    await enregistrer_domaine(client_org, "zone-test.com")
+    domaine_zone = await allouer_domaine_demo(client_org)
     r = await client_org.post(
-        f"{DES}/web/hebergements", json={"palier": "pro", "site": "ABJ", "domaine": "zone-test.com"}
+        f"{DES}/web/hebergements",
+        json={"palier": "pro", "site": "ABJ", "domaine": domaine_zone},
     )
     assert r.status_code == 202, r.text
     travail = r.json()
@@ -264,6 +254,15 @@ async def test_sites_web(client_org):
     )
     assert r.status_code == 202, r.text
     assert r.json()["type"] == "site.installer"
+
+    doublon = await client_org.post(
+        f"{DES}/web/sites",
+        json={
+            "hebergementId": hid,
+            "site": {"hote": "blog.synelia.cloud", "type": "wordpress", "ssl": True},
+        },
+    )
+    assert doublon.status_code == 409, doublon.text
 
     r = await client_org.get(f"{DES}/web/sites")
     assert r.status_code == 200
@@ -399,6 +398,51 @@ async def test_bases(client_org):
     assert r.status_code == 204
 
 
+def test_application_pour_site_markeplace_php():
+    from synelia.modules.web_hebergement.service import application_pour_site
+
+    assert application_pour_site("php", "matomo.boutique.ci") == "matomo"
+    assert application_pour_site("php", "bookstack.intra.local") == "bookstack"
+    assert application_pour_site("php", "moodle.ecole.ci") == "moodle"
+    assert application_pour_site("php", "shop.example.com") == "php"
+    assert application_pour_site("wordpress", "blog.example.com") == "wordpress"
+
+
+def test_compose_markeplace_images():
+    from synelia.modules.web_hebergement.service import construire_site_stack
+
+    sid = "01a0000000000000000000000001"
+    compose, _, _ = construire_site_stack("matomo", "stats.demo.com", "8.3", "s3cret", sid)
+    assert "matomo:5-apache" in compose
+    compose, _, _ = construire_site_stack("grav", "cms.demo.com", "8.4", "s3cret", sid)
+    assert "linuxserver/grav" in compose
+    compose, routage, _ = construire_site_stack("moodle", "learn.demo.com", "8.3", "s3cret", sid)
+    assert "johanruizb/moodle-alpine:4.5" in compose
+    assert "8080" in routage
+    compose_bs, routage_bs, _ = construire_site_stack(
+        "bookstack", "wiki.demo.com", "8.3", "s3cret", sid
+    )
+    assert "8080" in routage_bs
+    assert "/var/www/bookstack/public/uploads" in compose_bs
+    compose_oc, _, _ = construire_site_stack("opencart", "shop.demo.com", "8.2", "s3cret", sid)
+    assert "vimagick/opencart" in compose_oc
+    compose_gr, _, _ = construire_site_stack("grav", "cms2.demo.com", "8.4", "s3cret", sid)
+    assert "linuxserver/grav" in compose_gr
+
+
+def test_protocoles_compte_sftp_seulement():
+    from synelia.modules.web_hebergement import service as heb
+    from synelia_kernel import erreurs
+
+    assert heb.valider_protocoles_compte(["sftp"]) == ["sftp"]
+    try:
+        heb.valider_protocoles_compte(["ftp"])
+    except erreurs.AppError as e:
+        assert e.statut == 422
+    else:
+        raise AssertionError("ftp aurait dû être refusé")
+
+
 async def test_comptes_fichiers_builders_ftp_sftp():
     # Provisionnement FTP/SFTP par conteneurs Docker sur le VPS (atmoz/sftp + alpine-ftp-server) :
     # builders purs — comptes déclaratifs, chroot SFTP par utilisateur, jamais de mot de
@@ -416,7 +460,7 @@ async def test_comptes_fichiers_builders_ftp_sftp():
         {
             "utilisateur": "cle-seule",
             "mot_de_passe": None,
-            "racine": "/srv/synelia/sites/abc",
+            "racine": "/srv/synelia/sites",
             "protocoles": ["sftp"],
         },
     ]
@@ -435,7 +479,8 @@ async def test_comptes_fichiers_builders_ftp_sftp():
     # Chroot SFTP par compte : montage host → home de CET utilisateur, pas l'arborescence
     # entière du VPS.
     assert "/srv/synelia/www:/home/ftp-synelia" in compose
-    assert "/srv/synelia/sites/abc:/home/cle-seule" in compose
+    assert "/srv/synelia/sites:/home/cle-seule/sites" in compose
+    assert "/srv/synelia/www:/home/cle-seule/www" in compose
     assert "2222:22" in compose
 
     cmd = heb.commande_demarrer_fichiers()
@@ -701,7 +746,7 @@ async def test_reconciliation_statut_hebergement_orphelin(client_org, monkeypatc
     # compensation habituelle), pas seulement marqué — la ligne disparaît réellement.
     from synelia.modules.web_hebergement import service as hebergement_service
 
-    h = await _creer_hebergement(client_org, "reconcile-orphan.com")
+    h = await _creer_hebergement(client_org)
     hid = h["id"]
 
     # Serveur toujours connu de Nova (simulé : ACTIVE) : la lecture ne change rien.
@@ -751,7 +796,7 @@ async def test_reconciliation_hebergement_orphelin_protege(client_org, monkeypat
     # la main. On simule la protection en protégeant tous les ids (préfixe vide).
     from synelia.modules.web_hebergement import service as hebergement_service
 
-    h = await _creer_hebergement(client_org, "reconcile-protege.com")
+    h = await _creer_hebergement(client_org)
     hid = h["id"]
 
     def _interdit(self, serveur_id):
@@ -805,3 +850,21 @@ def test_garde_hebergements_proteges():
     assert not _suppression_automatique_interdite(
         hebergement("01a08abc-0000-0000-0000-000000000000", "srv-01a08abc")
     )
+
+
+def test_wordpress_compose_force_ssl_et_traefik_https():
+    from synelia.modules.web_hebergement.service import (
+        _wordpress_config_extra,
+        construire_site_stack,
+    )
+
+    hote = "blog.exemple.ci"
+    extra = _wordpress_config_extra(hote)
+    assert "FORCE_SSL_ADMIN" in extra and "FORCE_SSL" in extra
+    assert f"https://{hote}" in extra
+    compose, routage, _ = construire_site_stack(
+        "wordpress", hote, "8.3", "secret", "01a0000000000000000000000001"
+    )
+    assert "WORDPRESS_CONFIG_EXTRA=" in compose
+    assert "$$_SERVER" in compose  # docker compose : $ literal
+    assert "X-Forwarded-Proto" in routage

@@ -5,7 +5,7 @@
 #   ./scripts/lab/verify-web-octavia.sh h-01a0ca40.cloud.dev01.ovh.smile.ci
 set -euo pipefail
 HOST="${1:-h-${HEB_ID:0:8}.cloud.dev01.ovh.smile.ci}"
-LB_FIP="${VPS_ZONE_LB_FIP:-192.168.20.231}"
+LB_FIP="${VPS_ZONE_LB_FIP:?VPS_ZONE_LB_FIP requis}"
 CTRL="${OPENSTACK_CTRL:-192.168.26.235}"
 NET_ID="${VPS_ZONE_NET_ID:-3f2feb5e-43ff-4b1f-9147-8fda08afbc0e}"
 QDHCP="qdhcp-${NET_ID}"

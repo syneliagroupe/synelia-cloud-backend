@@ -57,6 +57,34 @@ def connexion(region: str | None = None) -> Any:
     return conn
 
 
+@lru_cache
+def connexion_magnum(region: str | None = None) -> Any:
+    """OpenStack pour Magnum (create/delete cluster) — mot de passe si configuré."""
+    import openstack  # type: ignore[import-not-found]
+
+    r = reglages()
+    if r.magnum_os_username and r.magnum_os_password:
+        conn = openstack.connect(
+            load_yaml_config=False,
+            load_envvars=False,
+            auth_type="password",
+            auth_url=r.os_auth_url,
+            username=r.magnum_os_username,
+            password=r.magnum_os_password,
+            project_name=r.magnum_os_project_name,
+            user_domain_name=r.magnum_os_user_domain_name,
+            project_domain_name=r.magnum_os_project_domain_name,
+            region_name=region or r.os_region,
+            interface="internal",
+            api_timeout=_TIMEOUT_API_S,
+        )
+    else:
+        conn = connexion(region)
+    for service, url in r.os_endpoint_overrides.items():
+        conn.config.config[f"{service}_endpoint_override"] = url
+    return conn
+
+
 def connexion_avec(application_credential_id: str, secret: str, region: str | None = None) -> Any:
     """Connexion scellée au projet d'un Espace Cloud, par son *application credential*."""
     import openstack  # type: ignore[import-not-found]

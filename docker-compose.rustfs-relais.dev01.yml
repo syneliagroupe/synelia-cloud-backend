@@ -30,6 +30,8 @@ services:
       SYNELIA_VALKEY_URL: redis://valkey:6379/0
       SYNELIA_CORS_ORIGINES: '["https://app.cloud.dev01.ovh.smile.ci","http://192.168.121.138:3000","http://localhost:3000"]'
       SYNELIA_URL_PUBLIQUE: https://api.cloud.dev01.ovh.smile.ci
+      SYNELIA_DOMAINE_DNS_ENTREE_A: ${SYNELIA_DOMAINE_DNS_ENTREE_A:-198.244.179.212}
+      SYNELIA_DOMAINE_DNS_ENTREE_WILDCARD_CNAME: ${SYNELIA_DOMAINE_DNS_ENTREE_WILDCARD_CNAME:-dev01.ovh.smile.ci}
       SYNELIA_FOURNISSEUR: openstack
       SYNELIA_MINIO_URL: http://rustfs:9000
       SYNELIA_MINIO_ROOT_USER: ${SYNELIA_MINIO_ROOT_USER:?}

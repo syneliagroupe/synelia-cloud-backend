@@ -39,6 +39,19 @@ class RegistrarSimule:
     def code_auth(self, nom: str) -> dict[str, Any]:
         return {"code": jeton_opaque(12), "expire_heures": 24}
 
+    def configurer_enregistrements_entree(
+        self, domaine: str, ip_apex: str, cname_wildcard: str, *, ttl: int = 3600
+    ) -> None:
+        """No-op simulé — les tests ne touchent pas OVH DNS."""
+        return None
+
+    def domaine_sous_gestion(self, nom: str) -> bool:
+        # Simulé : pas d'API OVH, on laisse `configurer_enregistrements_entree` no-op s'exécuter.
+        return True
+
+    def domaine_du_compte(self, nom: str) -> bool:
+        return False
+
 
 class RegistrarOvh(RegistrarSimule):
     """Registrar réel via l'API OVH (signature applicative), branché seulement
@@ -66,6 +79,7 @@ class RegistrarOvh(RegistrarSimule):
         corps: dict[str, Any] | None = None,
         *,
         accepter_400: bool = False,
+        accepter_404: bool = False,
     ) -> Any:
         import json as _json
 
@@ -100,6 +114,8 @@ class RegistrarOvh(RegistrarSimule):
             raise erreurs.amont_indisponible("registrar", str(exc)) from exc
         if r.status_code >= 400:
             if accepter_400 and r.status_code == 400:
+                return None
+            if accepter_404 and r.status_code == 404:
                 return None
             raise erreurs.amont_indisponible("registrar", f"HTTP {r.status_code}: {r.text[:300]}")
         return r.json() if r.content else None
@@ -168,6 +184,61 @@ class RegistrarOvh(RegistrarSimule):
     def code_auth(self, nom: str) -> dict[str, Any]:
         self._requete("POST", f"/domain/{nom}/authInfo")
         return {"code": "envoye_par_email_ovh", "expire_heures": 24}
+
+    def domaine_sous_gestion(self, nom: str) -> bool:
+        zone = nom.strip().lower().rstrip(".")
+        return self._requete("GET", f"/domain/{zone}", accepter_404=True) is not None
+
+    def domaine_du_compte(self, nom: str) -> bool:
+        return self.domaine_sous_gestion(nom)
+
+    def configurer_enregistrements_entree(
+        self, domaine: str, ip_apex: str, cname_wildcard: str, *, ttl: int = 3600
+    ) -> None:
+        """Apex `@` → IP publique edge ; wildcard `*` → CNAME (vhost dev01).
+
+        Les domaines OVH arrivent avec un A `@` et un A/CNAME `www` (parking) : on retire `www`
+        pour éviter un conflit avec le wildcard `*`."""
+        zone = domaine.strip().lower().rstrip(".")
+        cname_cible = cname_wildcard.strip().rstrip(".") + "."
+        self._supprimer_sous_domaine_zone_ovh(zone, "www")
+        self._upsert_enregistrement_zone_ovh(zone, "A", "", ip_apex.strip(), ttl)
+        self._upsert_enregistrement_zone_ovh(zone, "CNAME", "*", cname_cible, ttl)
+        self._requete("POST", f"/domain/zone/{zone}/refresh")
+
+    def _supprimer_sous_domaine_zone_ovh(self, zone: str, sub_domain: str) -> None:
+        """Supprime tous les enregistrements OVH d'un sous-domaine (ex. `www` par défaut)."""
+        from urllib.parse import quote
+
+        for field_type in ("A", "AAAA", "CNAME", "TXT", "MX", "NS", "SRV", "CAA"):
+            chemin_liste = (
+                f"/domain/zone/{zone}/record?fieldType={quote(field_type)}"
+                f"&subDomain={quote(sub_domain, safe='')}"
+            )
+            ids = self._requete("GET", chemin_liste) or []
+            for record_id in ids:
+                self._requete("DELETE", f"/domain/zone/{zone}/record/{record_id}")
+
+    def _upsert_enregistrement_zone_ovh(
+        self, zone: str, field_type: str, sub_domain: str, target: str, ttl: int
+    ) -> None:
+        from urllib.parse import quote
+
+        chemin_liste = (
+            f"/domain/zone/{zone}/record?fieldType={quote(field_type)}"
+            f"&subDomain={quote(sub_domain, safe='')}"
+        )
+        ids = self._requete("GET", chemin_liste)
+        corps = {
+            "fieldType": field_type,
+            "subDomain": sub_domain,
+            "target": target,
+            "ttl": ttl,
+        }
+        if ids:
+            self._requete("PUT", f"/domain/zone/{zone}/record/{ids[0]}", corps)
+        else:
+            self._requete("POST", f"/domain/zone/{zone}/record", corps)
 
 
 def choisir_registrar() -> RegistrarSimule:

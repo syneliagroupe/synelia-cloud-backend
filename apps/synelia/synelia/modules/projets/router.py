@@ -7,15 +7,18 @@ from typing import Any, Literal
 from fastapi import APIRouter, Depends, Response, status
 from synelia_contract import modeles as m
 from synelia_kernel import erreurs
+from synelia_kernel.config import reglages
 from synelia_kernel.dates import maintenant
 from synelia_kernel.ids import jeton_opaque, nouvel_id
 
 from synelia.audit import journaliser
 from synelia.depot import Depot
 from synelia.deps import Contexte, Page, exige, exiger_confirmation
-from synelia.modules.facturation.metrologie import PRIX
+from synelia.modules.facturation.metrologie import mensuel
 from synelia.modules.modeles import service as modeles_service
+from synelia.modules.projets import entree_dev01
 from synelia.modules.projets import service as s
+from synelia.modules.web_hebergement.sftp_dev01 import _edge_actif
 from synelia.travaux import demarrer_travail
 
 router = APIRouter(tags=["Projets applicatifs"])
@@ -25,8 +28,6 @@ router_domaines = APIRouter(prefix="/domaines-applicatifs")
 router_zone = APIRouter(prefix="/zone-applicative")
 router_routage = APIRouter(prefix="/routage")
 
-HEURES_MOIS = 730
-JOURS_MOIS = 30
 PORT_DEFAUT = 8080
 
 
@@ -37,10 +38,7 @@ def _mot_de_passe() -> str:
 
 
 def _cout(ressources: m.Ressources) -> int:
-    cpu = int(ressources.cpu * PRIX["vcpu_heure"] * HEURES_MOIS)
-    ram = int((ressources.ramMo / 1024) * PRIX["ram_go_heure"] * HEURES_MOIS)
-    disk = int(ressources.diskGo * PRIX["stockage_to_jour"] * JOURS_MOIS)
-    return cpu + ram + disk
+    return mensuel(ressources.cpu, ressources.ramMo / 1024, ressources.diskGo)
 
 
 # ─────────────── Projets ───────────────
@@ -64,6 +62,14 @@ async def obtenir_synthese_projets(ctx: Contexte = Depends(exige(None))) -> Any:
         domainesAVerifier=a_verifier,
         coutMensuel=cout,
     )
+
+
+@router_projets.get("/services", response_model=list[m.ServiceProjet])
+async def lister_tous_services(ctx: Contexte = Depends(exige(None))) -> Any:
+    services: list[Any] = []
+    for p in await s.depot_projet.tous(ctx):
+        services += await s.depot_service.tous(ctx, parent_id=p.id)
+    return services
 
 
 @router_projets.get("", response_model=m.ProjetsGetResponse, response_model_exclude_none=True)
@@ -666,12 +672,41 @@ def _est_verifie(d: m.DomaineApplicatif) -> bool:
 
 
 def _enregistrement(hote: str) -> m.Enregistrement:
+    if _edge_actif() and reglages().domaine_dns_entree_a:
+        return m.Enregistrement(type="A", nom=hote, valeur=reglages().domaine_dns_entree_a)
     apex = hote.startswith("@" + s.ZONE) or hote == s.ZONE
     return m.Enregistrement(
         type=("A" if apex else "CNAME"),
         nom=hote,
         valeur=s.INGRESS[0].ip if apex else f"ingress.{s.ZONE}",
     )
+
+
+async def _lancer_routage(ctx: Contexte, d: m.DomaineApplicatif, svc: m.ServiceProjet) -> bool:
+    """Démarre la mise en ligne réelle (LB + vhost dev01 + certificat) quand l'entrée dev01
+    est configurée et que le service est une image sur la cible k8s ; sinon reste simulé."""
+    projet = await s.depot_projet.obtenir(ctx, svc.projetId)
+    if not (
+        d.origine == "personnalise"
+        and projet.cible == "k8s"
+        and s.image_service(svc)
+        and _edge_actif()
+    ):
+        return False
+    await demarrer_travail(
+        ctx,
+        "domaine_routage.appliquer",
+        d.hote,
+        cible_type="domaine_applicatif",
+        cible_id=d.id,
+        etapes=[
+            {"nom": "Vérifier l'enregistrement DNS", "dureeS": 5},
+            {"nom": "Exposer le service (load balancer)", "dureeS": 90},
+            {"nom": "Déclarer la route sur l'entrée", "dureeS": 5},
+            *([{"nom": "Émettre le certificat", "dureeS": 15}] if d.https else []),
+        ],
+    )
+    return True
 
 
 @router_domaines.get(
@@ -726,6 +761,7 @@ async def creer_domaine_applicatif(
     )
     await s.depot_domaine.creer(ctx, domaine, parent_id=corps.serviceId)
     await s.depot_domaine.definir_statut(ctx, domaine.id, "en_verification")
+    await _lancer_routage(ctx, domaine, svc)
     await journaliser(
         ctx,
         action="domaine.creation",
@@ -782,6 +818,7 @@ async def supprimer_domaine_applicatif(
         cible_id=domaineId,
         cible=d.hote,
     )
+    await asyncio.to_thread(entree_dev01.retirer, d.hote)
     await s.depot_domaine.supprimer(ctx, domaineId, logique=True)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -795,11 +832,22 @@ async def verifier_domaine_applicatif(
     domaineId: str, ctx: Contexte = Depends(exige("app.deploy"))
 ) -> Any:  # noqa: N803
     d = await s.depot_domaine.obtenir(ctx, domaineId)
+    svc = await Depot("projet_service", m.ServiceProjet).obtenir(ctx, d.serviceId)
+    if await _lancer_routage(ctx, d, svc):
+        await journaliser(
+            ctx,
+            action="domaine.verification",
+            cible_type="domaine_applicatif",
+            cible_id=domaineId,
+            cible=d.hote,
+        )
+        return await s.depot_domaine.obtenir(ctx, domaineId)
+    detail = "Enregistrement trouvé en simulation."
     verification = m.Verification(
         etat="ok",
         enregistrement=_enregistrement(d.hote),
         verifieLe=maintenant(),
-        detail="Enregistrement trouvé en simulation.",
+        detail=detail,
     )
     await s.depot_domaine.modifier(
         ctx, domaineId, {"verification": verification.model_dump(mode="json")}

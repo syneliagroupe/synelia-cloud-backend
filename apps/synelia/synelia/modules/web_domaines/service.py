@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import date, timedelta
 from typing import Any
 
@@ -25,7 +26,7 @@ AGREGATS = {
     "sites": ("web_site", m.SiteWeb),
 }
 
-PRIX_TLD = {".com": 9500, ".net": 8500, ".org": 8000, ".ci": 6500, ".africa": 7000}
+PRIX_TLD = {".com": 9500, ".net": 8500, ".org": 8000, ".ci": 6500, ".africa": 7000, ".tech": 21000}
 
 
 def amont() -> RegistrarSimule:
@@ -88,14 +89,31 @@ def _duree_annees(travail: Travail, defaut: int = 1) -> int:
     return int((travail.entree or {}).get("dureeAnnees") or defaut)
 
 
+async def appliquer_dns_entree_domaine(ctx: Contexte, nom: str) -> None:
+    """Zone OVH : supprime `www`, A `@`, CNAME `*` (config `SYNELIA_DOMAINE_DNS_*`). Idempotent."""
+    ip = ctx.reglages.domaine_dns_entree_a
+    cname = ctx.reglages.domaine_dns_entree_wildcard_cname
+    if not ip or not cname:
+        return
+    reg = amont()
+    if not reg.domaine_sous_gestion(nom):
+        return
+    await asyncio.to_thread(reg.configurer_enregistrements_entree, nom, ip, cname)
+
+
 @executeur("domaine.commander")
 class ExecuteurDomaineCommander(Executeur):
     async def terminer(self, ctx: Contexte, travail: Travail) -> None:
         d = await depot.obtenir(ctx, travail.cible_id or "")
         annees = _duree_annees(travail)
-        resultat = amont().commander(d.nom, annees)
+        reg = amont()
+        if reg.domaine_sous_gestion(d.nom):
+            resultat: dict[str, Any] = {}
+        else:
+            resultat = reg.commander(d.nom, annees)
         if resultat.get("code_auth"):
             await depot.definir_secrets(ctx, d.id, {"code_auth": resultat["code_auth"]})
+        await appliquer_dns_entree_domaine(ctx, d.nom)
         await depot.remplacer(
             ctx,
             d.id,
@@ -110,9 +128,14 @@ class ExecuteurDomaineTransferer(Executeur):
     async def terminer(self, ctx: Contexte, travail: Travail) -> None:
         d = await depot.obtenir(ctx, travail.cible_id or "")
         code_auth = (travail.entree or {}).get("codeAuth", "")
-        resultat = amont().transferer(d.nom, code_auth)
+        reg = amont()
+        if reg.domaine_sous_gestion(d.nom):
+            resultat: dict[str, Any] = {}
+        else:
+            resultat = reg.transferer(d.nom, code_auth)
         if resultat.get("code_auth"):
             await depot.definir_secrets(ctx, d.id, {"code_auth": resultat["code_auth"]})
+        await appliquer_dns_entree_domaine(ctx, d.nom)
         await depot.remplacer(ctx, d.id, d.model_copy(update={"provisionnement": "automatique"}))
 
 
@@ -126,3 +149,22 @@ class ExecuteurDomaineRenouveler(Executeur):
         base = d.expiration if d.expiration and d.expiration >= aujourdhui else aujourdhui
         nouvelle = base + timedelta(days=365 * max(1, annees))
         await depot.remplacer(ctx, d.id, d.model_copy(update={"expiration": nouvelle}))
+
+
+ETAPES_RESILIATION = [
+    {"nom": "Vérifier qu’aucun hébergement n’est attaché", "dureeS": 2},
+    {"nom": "Couper le renouvellement automatique", "dureeS": 3},
+    {"nom": "Retirer le nom du portefeuille", "dureeS": 2},
+]
+
+
+@executeur("domaine.resilier")
+class ExecuteurDomaineResilier(Executeur):
+    async def terminer(self, ctx: Contexte, travail: Travail) -> None:
+        did = travail.cible_id or ""
+        d = await depot.obtenir(ctx, did)
+        if d.hebergementId:
+            raise erreurs.conflit(
+                "Un hébergement est encore attaché à ce domaine. Détachez-le ou supprimez-le d’abord."
+            )
+        await depot.supprimer(ctx, did, logique=True)

@@ -137,7 +137,20 @@ async def offre_souscrite(ctx: Contexte, org_id: str) -> m.Offre | None:
     ).scalar_one_or_none()
     if org is None or not org.tenant_plan:
         return None
-    return await depot_offre.par_nom(ctx, org.tenant_plan, org_id=None)
+    plan = org.tenant_plan.lower()
+    return next((o for o in await depot_offre.tous(ctx) if o.code.lower() == plan), None)
+
+
+async def revenu_mensuel(ctx: Contexte, org_id: str) -> tuple[int, int]:
+    """(CA mensuel récurrent HT en FCFA, vCPU alloués) d'une organisation : abonnement + run-rate des ressources."""
+    from synelia.modules.organisations.service import contexte_pour
+
+    lignes = await metrologie.postes(contexte_pour(ctx, org_id))
+    offre = await offre_souscrite(ctx, org_id)
+    ca = sum(p["Calcul"] + p["Stockage"] + p["Réseau"] for p in lignes) + (
+        offre.prix if offre else 0
+    )
+    return ca, int(sum(p["vcpu"] for p in lignes))
 
 
 async def construire_facture(ctx: Contexte, org_id: str, periode: str) -> dict[str, Any]:
@@ -163,15 +176,35 @@ async def construire_facture(ctx: Contexte, org_id: str, periode: str) -> dict[s
                 "total": offre.prix,
             }
         )
-    lignes.append(
-        {
-            "libelle": f"Consommation {periode}",
-            "ref": periode,
-            "quantite": 1,
-            "pu": conso_total,
-            "total": conso_total,
-        }
-    )
+    # La consommation se détaille par famille : même découpage que la ventilation du portail.
+    parts = {"Calcul": 0, "Stockage": 0, "Réseau": 0}
+    for p in await metrologie.postes(ctx_org):
+        for famille in parts:
+            parts[famille] += p[famille]
+    base = sum(parts.values())
+    montants = {f: round(conso_total * v / base) if base else 0 for f, v in parts.items()}
+    montants["Calcul"] += conso_total - sum(montants.values())
+    for famille, montant in montants.items():
+        if montant:
+            lignes.append(
+                {
+                    "libelle": f"{famille} — consommation {periode}",
+                    "ref": periode,
+                    "quantite": 1,
+                    "pu": montant,
+                    "total": montant,
+                }
+            )
+    if not conso_total:
+        lignes.append(
+            {
+                "libelle": f"Consommation {periode}",
+                "ref": periode,
+                "quantite": 1,
+                "pu": 0,
+                "total": 0,
+            }
+        )
     sous_total = sum(ligne["total"] for ligne in lignes)
     facture_id = nouvel_id()
     facture = {
@@ -314,35 +347,9 @@ class ExecuteurCycleFacturation(Executeur):
 async def demo(session, org: Organisation, admin: Utilisateur) -> None:
     offres = [
         {
-            "id": "offre-standard",
-            "code": "standard",
-            "nom": "Espace Standard",
-            "categorie": "espace_cloud",
-            "specs": "4 vCPU · 16 Go · 500 Go",
-            "caracteristiques": ["IPv4 publique", "Sauvegarde quotidienne"],
-            "prix": 45000,
-            "populaire": True,
-            "statut": "publiee",
-            "souscriptionsActives": 3,
-            "sla": "99.9",
-            "surDevis": False,
-        },
-        {
-            "id": "offre-performance",
-            "code": "performance",
-            "nom": "Espace Performance",
-            "categorie": "espace_cloud",
-            "specs": "8 vCPU · 32 Go · 1 To",
-            "caracteristiques": ["IPv4 publique", "Sauvegarde horaire"],
-            "prix": 90000,
-            "statut": "publiee",
-            "souscriptionsActives": 1,
-            "sla": "99.95",
-        },
-        {
             "id": "offre-vm",
             "code": "vm-t2",
-            "nom": "VM t2.micro",
+            "nom": "Machine virtuelle Standard",
             "categorie": "image_vm",
             "specs": "1 vCPU · 2 Go · 20 Go",
             "caracteristiques": [],
@@ -365,7 +372,7 @@ async def demo(session, org: Organisation, admin: Utilisateur) -> None:
         "periode": "2026-08",
         "lignes": [
             {
-                "libelle": "Consommation Espace Standard",
+                "libelle": "Consommation Espace Pro",
                 "ref": "2026-08",
                 "quantite": 1,
                 "pu": 45000,

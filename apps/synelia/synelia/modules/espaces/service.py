@@ -10,7 +10,7 @@ from synelia_kernel import erreurs
 from synelia_kernel.config import reglages
 from synelia_kernel.journal import journal
 from synelia_openstack import fournisseur
-from synelia_openstack.fabrique import connexion_avec
+from synelia_openstack.fabrique import connexion, connexion_avec
 from synelia_openstack.identite import IdentiteOpenStack, IdentiteSimule
 
 from synelia.depot import Depot
@@ -18,6 +18,21 @@ from synelia.deps.contexte import Contexte
 from synelia.travaux import Executeur, demarrer_travail, executeur
 
 log = journal("espaces")
+
+
+def _epurer_vm_projet_zone_vps(projet_id: str | None) -> None:
+    """Retire les VM `vm-projet-*` laissées par les tests projets/K8s sur le tenant zone VPS.
+
+    Sans ce nettoyage, Nova renvoie souvent `No valid host was found` pour un nouvel
+    hébergement alors que le lab a encore de la marge — constaté sur dev01."""
+    if not projet_id or reglages().fournisseur != "openstack":
+        return
+    c = connexion()
+    for s in c.compute.servers(all_projects=True, project_id=projet_id):
+        if (s.name or "").startswith("vm-projet-"):
+            log.info("zone_vps.epure_vm_projet", nom=s.name, serveur_id=s.id)
+            c.compute.delete_server(s.id, ignore_missing=True)
+
 
 depot = Depot(
     "espace",
@@ -530,6 +545,8 @@ async def semer_zone_vps(session: AsyncSession) -> None:
             if not ok:
                 await _rebrancher_infra_openstack_espace(ctx, depot_plateforme, espace_id, e)
         await _assurer_lb_secrets_zone_vps(session, espace_id)
+        if zone.get("projet_id"):
+            await asyncio.to_thread(_epurer_vm_projet_zone_vps, str(zone["projet_id"]))
         return
     if not r.vps_zone_org_id:
         # Pas d'organisation admin configurée (tests, environnement sans zone VPS) : rien de
@@ -625,6 +642,11 @@ async def _provisionner_zone_vps(session: AsyncSession, espace_id: str, org_id: 
         await session.flush()
     log.info("zone_vps.provisionnee", espace_id=espace_id)
     await _assurer_lb_secrets_zone_vps(session, espace_id)
+    try:
+        zone = await depot_plateforme.secrets(_ctx_amorcage_plateforme(session), espace_id)
+        await asyncio.to_thread(_epurer_vm_projet_zone_vps, zone.get("projet_id"))
+    except Exception:  # noqa: BLE001
+        pass
     if not reglages().vps_zone_lb_id:
         log.warning("zone_vps.lb_id_non_provisionne", espace_id=espace_id)
 

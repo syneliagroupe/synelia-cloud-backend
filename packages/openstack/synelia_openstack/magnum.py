@@ -42,9 +42,9 @@ class MagnumSimule:
 
 class MagnumOpenStack(MagnumSimule):
     def _c(self):
-        from synelia_openstack.fabrique import connexion
+        from synelia_openstack.fabrique import connexion_magnum
 
-        return connexion()
+        return connexion_magnum()
 
     def _modele_tpl(self, c) -> Any:
         """Un seul modèle public existe sur ce lab (`k8s-capi`) ; on prend le premier."""

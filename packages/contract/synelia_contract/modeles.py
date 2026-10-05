@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 from typing import Annotated, Any, Literal
-from pydantic import AwareDatetime, BaseModel, EmailStr, Field, RootModel, SecretStr
+from pydantic import AnyUrl, AwareDatetime, BaseModel, EmailStr, Field, RootModel, SecretStr
 from datetime import date as date_aliased
 
 
@@ -237,7 +237,7 @@ class BaseHebergement(BaseModel):
     id: str
     hebergementId: str
     nom: str
-    moteur: Literal["mariadb", "postgresql"]
+    moteur: Literal["postgresql", "mysql", "mariadb", "mongodb", "redis"]
     version: str
     tailleMo: float
     jeuCaracteres: str
@@ -1753,6 +1753,13 @@ class Acces(BaseModel):
     ftps: bool
     ssh: bool
     portSsh: int
+    portSftp: Annotated[
+        int | None,
+        Field(description="Port public SFTP (entrée edge dev01, DNAT vers le conteneur)."),
+    ] = None
+    hoteTransfert: Annotated[
+        str | None, Field(description="Hôte à indiquer au client SFTP (souvent l'IP edge du lab).")
+    ] = None
 
 
 class Sauvegarde(BaseModel):
@@ -1824,6 +1831,7 @@ class ImageSysteme(BaseModel):
 
 
 class Impaye(BaseModel):
+    id: str | None = None
     org: str
     orgId: str | None = None
     facture: str
@@ -2523,6 +2531,19 @@ class OrganisationModification(BaseModel):
     tenantPlan: str | None = None
 
 
+class WebDriveDriveIdIdentifiantsAdminGetResponse(BaseModel):
+    """
+    Compte administrateur Nextcloud provisionné à l'activation du drive.
+    """
+
+    utilisateur: Annotated[str, Field(examples=["admin"])]
+    motDePasse: Annotated[str, Field(description="Mot de passe initial généré à l'activation.")]
+    url: Annotated[
+        AnyUrl,
+        Field(description="URL de connexion Nextcloud (écran de login, pas de SSO portail)."),
+    ]
+
+
 class OuvertureService(BaseModel):
     """
     Le portail ouvre la porte du produit ; il ne réimplémente pas son écran principal.
@@ -2977,6 +2998,13 @@ class ReglagesAcces(BaseModel):
     ftps: bool | None = None
     ssh: bool | None = None
     portSsh: int | None = None
+    portSftp: Annotated[
+        int | None,
+        Field(description="Port public SFTP (entrée edge dev01, DNAT vers le conteneur)."),
+    ] = None
+    hoteTransfert: Annotated[
+        str | None, Field(description="Hôte à indiquer au client SFTP (souvent l'IP edge du lab).")
+    ] = None
 
 
 class Limites1(BaseModel):
@@ -3315,7 +3343,7 @@ class ServeurBases(BaseModel):
     id: str
     hebergementId: str
     serveur: str
-    moteur: Literal["mariadb", "mysql", "postgresql", "mongodb", "redis"]
+    moteur: Literal["postgresql", "mysql", "mariadb", "mongodb", "redis"]
     version: str
     actif: Annotated[bool, Field(description="Un moteur non activé est proposé, pas facturé.")]
     hoteInterne: Annotated[
@@ -3894,7 +3922,7 @@ class Utilisateur(BaseModel):
     lastLoginAt: AwareDatetime | None = None
     orgId: str | None = None
     fonction: str | None = None
-    statut: Literal["actif", "invite", "suspendu", "verification_requise"] | None = None
+    statut: Literal["actif", "invite", "suspendu"] | None = None
 
 
 class VariableEnvironnement(BaseModel):
@@ -4100,6 +4128,7 @@ class Volume(BaseModel):
     ephemere: bool
     iops: int
     montage: str | None = None
+    statut: Literal["creation", "disponible", "erreur"] | None = None
 
 
 class VolumeCreation(BaseModel):

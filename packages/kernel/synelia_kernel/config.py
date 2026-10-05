@@ -55,6 +55,19 @@ class Reglages(BaseSettings):
     os_application_credential_secret: str | None = None
     os_region: str = "RegionOne"
     os_endpoint_overrides: dict[str, str] = Field(default_factory=dict)
+    # Magnum/CAPI : la création de cluster exige de poser des application credentials
+    # imbriquées — interdit quand le backend s'authentifie déjà via une AC Keystone.
+    # Quand ces champs sont renseignés, `MagnumOpenStack` utilise un mot de passe
+    # (compte de service admin ou dédié) pour create/delete cluster uniquement.
+    magnum_os_username: str | None = None
+    magnum_os_password: str | None = None
+    magnum_os_project_name: str = "admin"
+    magnum_os_user_domain_name: str = "Default"
+    magnum_os_project_domain_name: str = "Default"
+    # k3s CAPI sur ctrl1 : repli kubeconfig par cluster (`{stack_id}-kubeconfig`).
+    capi_management_ssh_host: str | None = None
+    capi_management_ssh_user: str = "root"
+    capi_management_ssh_password: str | None = None
     simulation_duree_etape_ms: int = 0
 
     # Zone VPS partagée (web_hebergement) : un unique Espace Cloud « plateforme » (org_id
@@ -70,6 +83,10 @@ class Reglages(BaseSettings):
     # LB Octavia partagé (lab) : non créé par `ExecuteurEspaceCreate`, posé à la main une fois.
     vps_zone_lb_id: str | None = None
     vps_zone_lb_listener_id: str | None = None
+    # IP flottante du LB partagé, jointe par l'edge dev01 pour les domaines clients.
+    vps_zone_lb_fip: str | None = None
+    # Coût infra indicatif (FCFA / vCPU-mois) pour la marge par socle.
+    cout_infra_vcpu_mois: int = 12000
 
     # Passerelle OpenVPN créée avec chaque Espace (`espaces.openvpn`, étape `espace.create`).
     openvpn_actif: bool = True
@@ -81,6 +98,11 @@ class Reglages(BaseSettings):
     openvpn_dev01_ssh_key_path: str | None = None
     openvpn_dev01_firewall_script: str | None = None
 
+    # Web Cloud SFTP : port TCP public sur dev01 → VM:2222 (atmoz/sftp). Réutilise la clé SSH
+    # dev01 d'OpenVPN ; peut aussi s'activer implicitement si `openvpn_dev01_firewall` est vrai.
+    web_sftp_dev01_firewall: bool = False
+    web_sftp_dev01_firewall_script: str | None = None
+
     # Audit : ancrage quotidien hors-rôle (SYNELIA_AUDIT_ANCRAGE_EMAIL), cf. `synelia.audit.ancrer`
     # et §3 de docs/PLAN-ARCHITECTURE-SUITE.md. Optionnelle : sans elle, seul le journal
     # structuré (`audit.ancrage`, logs Docker) sert d'ancrage — pas d'adresse inventée ici.
@@ -91,6 +113,14 @@ class Reglages(BaseSettings):
     seed_admin_mot_de_passe: str | None = "Synelia!2026"
     seed_organisation: str = "Synelia (démo)"
     seed_demo: bool = True
+
+    # Enregistrements DNS posés à chaque commande de domaine (zone OVH) — apex vers l'entrée
+    # publique du lab, wildcard vers le vhost edge (Octavia/Apache). Désactiver en vidant l'une
+    # des deux valeurs.
+    domaine_dns_entree_a: str | None = None
+    domaine_dns_entree_wildcard_cname: str | None = "dev01.ovh.smile.ci"
+    # Domaine par défaut des environnements et aperçus de branche (`<nom>.<domaine>`).
+    domaine_apps_defaut: str = "synelia.app"
 
     @property
     def est_sqlite(self) -> bool:

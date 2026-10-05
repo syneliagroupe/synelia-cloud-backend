@@ -51,28 +51,56 @@ METRIQUES = [
 ]
 
 
-def metriques(fenetre: str) -> dict[str, Any]:
-    from datetime import timedelta
+# Métriques dérivées de Nova `.../diagnostics` (même mapping que `GET /vms/{vmId}/metriques`).
+_DIAGNOSTICS_VERS_SERIE = {
+    "cpu": "cpu",
+    "ram": "ram",
+    "trafique": "reseau_entrant",
+}
 
+
+async def metriques_hebergement(ctx: Contexte, h: m.Hebergement, fenetre: str) -> dict[str, Any]:
+    """Séries instantanées réelles (hyperviseur Nova/libvirt), pas un historique fabriqué.
+    Stockage, requêtes HTTP et bases ne sont pas exposés par l'API diagnostics : séries
+    présentes mais points vides plutôt que des zéros mensongers."""
     from synelia_kernel.dates import iso
 
-    nb_points = {"24h": 24, "7j": 7, "30j": 30}[fenetre]
-    pas = {"24h": timedelta(hours=1), "7j": timedelta(days=1), "30j": timedelta(days=1)}
-    origine = maintenant() - pas[fenetre] * (nb_points - 1)
-    series = [
-        m.Serie(
-            metrique=metrique,
-            unite=unite,
-            fenetre=fenetre,  # type: ignore[arg-type]
-            points=[
-                m.PointSerie(ts=origine + pas[fenetre] * i, valeur=0.0) for i in range(nb_points)
-            ],
+    from synelia.modules.vms.service import diagnostics_instantanes_pour_serveur
+
+    valeurs: dict[str, float] | None = None
+    if h.statut == "en_ligne" and isinstance(amont(), ComputeOpenStack):
+        try:
+            secrets = await depot.secrets(ctx, h.id)
+        except Exception:  # noqa: BLE001
+            secrets = {}
+        sid = secrets.get("serveur_id")
+        if sid:
+            statut_nova = await asyncio.to_thread(amont().statut_serveur, str(sid))
+            if statut_nova.upper() == "ACTIVE":
+                valeurs = await diagnostics_instantanes_pour_serveur(str(sid), h.serveur.vcpu)
+
+    ts = maintenant()
+    series: list[m.Serie] = []
+    tuiles: list[m.Tuile] = []
+    for metrique, unite, libelle in METRIQUES:
+        cle_diag = _DIAGNOSTICS_VERS_SERIE.get(metrique)
+        points: list[m.PointSerie] = []
+        if valeurs and cle_diag and cle_diag in valeurs:
+            points = [m.PointSerie(ts=ts, valeur=valeurs[cle_diag])]
+            tuiles.append(
+                m.Tuile(cle=metrique, libelle=libelle, valeur=valeurs[cle_diag], unite=unite)
+            )
+        series.append(
+            m.Serie(
+                metrique=metrique,
+                unite=unite,
+                fenetre=fenetre,  # type: ignore[arg-type]
+                points=points,
+            )
         )
-        for metrique, unite, _libelle in METRIQUES
-    ]
     return {
-        "tuiles": [],
-        "series": [s for s in series],
+        "tuiles": tuiles or None,
+        "series": series,
         "liens": m.LiensSortie(
             centreon=f"https://monitoring.synelia.cloud/{iso(maintenant())}",
         ),
@@ -202,6 +230,30 @@ _GABARIT_SIMULE_PAR_PALIER = {
     "business": "g1.large",
     "enterprise": "g1.xlarge",
 }
+
+# Specs commerciales du serveur d'hébergement (contrat + facturation). Le disque Nova réel
+# peut être inférieur tant que le lab n'expose pas de flavors plus grands — voir
+# `gabarit_nova_pour_palier`.
+SPECS_PALIER_HEBERGEMENT: dict[str, tuple[int, int, int]] = {
+    "starter": (1, 2, 40),
+    "pro": (2, 4, 80),
+    "business": (4, 8, 160),
+    "enterprise": (8, 16, 320),
+}
+
+
+def specs_serveur_pour_palier(palier: str) -> tuple[int, int, int]:
+    return SPECS_PALIER_HEBERGEMENT.get((palier or "").lower(), (2, 4, 80))
+
+
+def gabarit_nova_pour_palier(palier: str) -> str:
+    """Flavor Nova le plus proche du palier : vCPU/RAM minimum, disque racine maximal."""
+    vcpu, ram_go, _disk_commercial = specs_serveur_pour_palier(palier)
+    candidats = [g for g in amont().gabarits() if g["vcpu"] >= vcpu and g["ramGo"] >= ram_go]
+    if candidats:
+        meilleur = max(candidats, key=lambda g: (g["diskGo"], g["vcpu"], g["ramGo"]))
+        return str(meilleur["id"])
+    return gabarit_pour_palier(palier)
 
 
 def gabarit_pour_palier(palier: str) -> str:
@@ -765,20 +817,51 @@ async def _acces_vps(ctx: Contexte, hebergement_id: str) -> tuple[str, str]:
     return ip, cle_privee
 
 
+def _ssh_encore_indisponible(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return any(
+        x in msg
+        for x in (
+            "connection refused",
+            "timed out",
+            "timeout",
+            "not connected",
+            "no route to host",
+            "authentication failed",
+            "error reading ssh protocol banner",
+            "connection reset",
+            "eof",
+            "no such file",
+            "cannot connect to the docker daemon",
+            "is the docker daemon running",
+            "unable to connect to port",
+        )
+    )
+
+
 async def executer_commande_vps(ctx: Contexte, hebergement_id: str, commande: str) -> None:
     """Exécute une commande shell brute sur le VPS (rotation redis, maintenance…) —
     même discipline que `executer_sql_bases` : no-op simulé, 424 franc en réel."""
     if not isinstance(amont_ssh(), SshReel):
         return
     ip, cle_privee = await _acces_vps(ctx, hebergement_id)
-    try:
-        await asyncio.to_thread(amont_ssh().executer, ip, cle_privee, commande)
-    except Exception as exc:  # noqa: BLE001 — paramiko et co : 424 franc, pas 500
-        from synelia_kernel import erreurs as _e
+    dernier: Exception | None = None
+    for tentative in range(24):
+        try:
+            await asyncio.to_thread(amont_ssh().executer, ip, cle_privee, commande)
+            return
+        except Exception as exc:  # noqa: BLE001 — paramiko et co : 424 franc, pas 500
+            from synelia_kernel import erreurs as _e
 
-        if isinstance(exc, _e.AppError):
-            raise
-        raise erreurs.amont_indisponible("VPS (SSH)", str(exc)[:200]) from None
+            if isinstance(exc, _e.AppError):
+                raise
+            dernier = exc
+            if tentative < 23 and _ssh_encore_indisponible(exc):
+                await asyncio.sleep(10)
+                continue
+            break
+    assert dernier is not None
+    raise erreurs.amont_indisponible("VPS (SSH)", str(dernier)[:200]) from None
 
 
 # ── Export / import réels des bases ─────────────────────────────────────────
@@ -971,6 +1054,32 @@ def ip_privee(hebergement_id: str) -> str:
 # compose les monte) ; les builders ci-dessous sont purs et testés hors infra.
 
 _PROTO_FICHIERS = ("ftp", "sftp", "ftps")
+_PROTO_FICHIERS_ACTIFS = ("sftp",)  # FTP/FTPS désactivés produit — SFTP seulement
+_PORT_SFTP_VM = 2222
+
+
+def valider_protocoles_compte(protocoles: list[str]) -> list[str]:
+    """N'accepte que SFTP ; rejette FTP/FTPS tant que le produit ne les rouvre pas."""
+    if not protocoles:
+        raise erreurs.validation(
+            "Au moins un protocole est requis.",
+            champs={"protocoles": "Obligatoire."},
+        )
+    interdits = [p for p in protocoles if p not in _PROTO_FICHIERS_ACTIFS]
+    if interdits:
+        raise erreurs.validation(
+            "Seul SFTP est disponible pour le transfert de fichiers.",
+            champs={"protocoles": f"Non pris en charge : {', '.join(interdits)}."},
+        )
+    return list(protocoles)
+
+
+def normaliser_acces_transfert(acces: m.Acces) -> m.Acces:
+    """FTP/FTPS toujours fermés côté produit (champs conservés pour compatibilité contrat)."""
+    return acces.model_copy(update={"ftp": False, "ftps": False})
+
+
+_RACINE_SITES = f"{_RACINE_DOCKER}/sites"
 
 
 def _racine_compte(racine: str | None) -> str:
@@ -981,7 +1090,18 @@ def _racine_compte(racine: str | None) -> str:
         return racine.rstrip("/")
     if racine and not racine.startswith("/"):
         return f"{_RACINE_DOCKER}/{racine.strip('/')}"
-    return f"{_RACINE_DOCKER}/www"
+    return _RACINE_SITES
+
+
+def _volumes_sftp_compte(compte: dict[str, Any]) -> str:
+    """Montages SFTP : racine `sites` → accès à tous les sites installés + dossier `www` initial."""
+    u = _utilisateur_sur(compte["utilisateur"])
+    racine = _racine_compte(compte.get("racine"))
+    if racine in (_RACINE_SITES, f"{_RACINE_SITES}/"):
+        return (
+            f"      - {_RACINE_SITES}:/home/{u}/sites\n      - {_RACINE_DOCKER}/www:/home/{u}/www"
+        )
+    return f"      - {racine}:/home/{u}"
 
 
 def _utilisateur_sur(utilisateur: str) -> str:
@@ -1032,10 +1152,7 @@ def _compose_fichiers(comptes: list[dict[str, Any]]) -> str:
     figurent pas (retirer un compte = régénérer sans lui puis `up -d`)."""
     sftp = [c for c in comptes if "sftp" in (c.get("protocoles") or [])]
     ftp = [c for c in comptes if {"ftp", "ftps"} & set(c.get("protocoles") or [])]
-    volumes_sftp = "\n".join(
-        f"      - {_racine_compte(c.get('racine'))}:/home/{_utilisateur_sur(c['utilisateur'])}"
-        for c in sftp
-    )
+    volumes_sftp = "\n".join(_volumes_sftp_compte(c) for c in sftp)
     services = ""
     if sftp:
         services += f"""  sftp:
@@ -1084,10 +1201,24 @@ def commande_demarrer_fichiers() -> str:
     )
 
 
+def _filtrer_comptes_selon_acces(
+    comptes: list[dict[str, Any]], acces: m.Acces
+) -> list[dict[str, Any]]:
+    """Ne provisionne que les protocoles réellement ouverts sur l'hébergement."""
+    out: list[dict[str, Any]] = []
+    for c in comptes:
+        protos = [p for p in (c.get("protocoles") or []) if p in _PROTO_FICHIERS]
+        protos = [p for p in protos if p == "sftp" and acces.sftp]
+        if protos:
+            out.append({**c, "protocoles": protos})
+    return out
+
+
 async def appliquer_comptes_fichiers(ctx: Contexte, hebergement_id: str) -> None:
     """Régénère et applique les comptes FTP/SFTP du VPS depuis la base (appelé après
     toute création/modification/suppression de compte). `SshSimule` : no-op documenté ;
     `SshReel` sans accès : échec franc (424) — jamais un compte annoncé sans serveur."""
+    h = await depot.obtenir(ctx, hebergement_id)
     comptes = []
     for c in await depot_comptes.tous(ctx, parent_id=hebergement_id):
         try:
@@ -1102,6 +1233,7 @@ async def appliquer_comptes_fichiers(ctx: Contexte, hebergement_id: str) -> None
                 "protocoles": c.protocoles,
             }
         )
+    comptes = _filtrer_comptes_selon_acces(comptes, h.acces)
     if not isinstance(amont_ssh(), SshReel):
         return
     ip, cle_privee = await _acces_vps(ctx, hebergement_id)
@@ -1110,6 +1242,16 @@ async def appliquer_comptes_fichiers(ctx: Contexte, hebergement_id: str) -> None
         await asyncio.to_thread(ssh.ecrire_fichier, ip, cle_privee, chemin, contenu)
     try:
         await asyncio.to_thread(ssh.executer, ip, cle_privee, commande_demarrer_fichiers())
+        await asyncio.to_thread(
+            ssh.executer,
+            ip,
+            cle_privee,
+            # Un Drive Nextcloud tourne en www-data (33) : lui rendre son `www` casse l'écriture de config.
+            f"find {_RACINE_SITES} -path '*/www' -type d -exec sh -c "
+            f'\'grep -q nextcloud "$(dirname "$1")/docker-compose.yml" 2>/dev/null '
+            f'|| chown -R 1000:1000 "$1"\' _ {{}} \\; '
+            f"2>/dev/null; chown -R 1000:1000 {_RACINE_DOCKER}/www 2>/dev/null || true",
+        )
     except Exception as exc:  # noqa: BLE001 — paramiko et co : 424 franc, pas 500
         from synelia_kernel import erreurs as _e
 
@@ -1140,6 +1282,61 @@ async def appliquer_acces_ssh(ctx: Contexte, hebergement_id: str, ssh_actif: boo
         await asyncio.to_thread(n.assurer_regle_ssh, sid)
     else:
         await asyncio.to_thread(n.retirer_regle_ssh, sid)
+
+
+async def appliquer_acces_sftp(ctx: Contexte, hebergement_id: str, sftp_actif: bool) -> m.Acces:
+    """SFTP : conteneur `atmoz/sftp` sur la VM (port 2222) + entrée edge dev01 (port TCP
+    public aléatoire → FIP:2222), même mécanique que OpenVPN sur dev01."""
+    from synelia.modules.web_hebergement import sftp_dev01
+
+    h = await depot.obtenir(ctx, hebergement_id)
+    acces = h.acces
+    try:
+        secrets = await depot.secrets(ctx, hebergement_id)
+    except Exception:  # noqa: BLE001
+        secrets = {}
+    dest = secrets.get("ssh_ip") or (h.serveur.ip if h.serveur.ip else None)
+    sid = secrets.get("serveur_id")
+    n = amont_network()
+
+    if sftp_actif:
+        if sid:
+            await asyncio.to_thread(n.assurer_regle_port, str(sid), _PORT_SFTP_VM)
+        port_existant = acces.portSftp or secrets.get("sftp_edge_port")
+        host = acces.hoteTransfert or secrets.get("sftp_edge_host")
+        if dest and not port_existant:
+            host, port = await asyncio.to_thread(sftp_dev01.exposer_sftp, str(dest))
+            await depot.definir_secrets(
+                ctx,
+                hebergement_id,
+                {
+                    "sftp_edge_port": str(port),
+                    "sftp_edge_host": host,
+                    "sftp_edge_dest": str(dest),
+                },
+            )
+            port_existant = port
+        elif dest and port_existant and not host:
+            host = sftp_dev01.hote_public_transfert()
+        acces = acces.model_copy(
+            update={
+                "portSftp": int(port_existant) if port_existant else None,
+                "hoteTransfert": host,
+            }
+        )
+    else:
+        port = secrets.get("sftp_edge_port")
+        if port and dest:
+            await asyncio.to_thread(sftp_dev01.retirer_sftp, int(port), str(dest))
+        if sid:
+            await asyncio.to_thread(n.retirer_regle_port, str(sid), _PORT_SFTP_VM)
+        await depot.definir_secrets(
+            ctx,
+            hebergement_id,
+            {"sftp_edge_port": "", "sftp_edge_host": "", "sftp_edge_dest": ""},
+        )
+        acces = acces.model_copy(update={"portSftp": None, "hoteTransfert": None})
+    return acces
 
 
 PREFIXE_POLICY_DOMAINE_ATTACHE = "lb_policy_id_domaine_"
@@ -1243,6 +1440,34 @@ async def reconcilier_statut(ctx: Contexte, h: m.Hebergement) -> m.Hebergement:
         # réellement (pas d'hyperviseur, pas d'IP) : c'est un orphelin confirmé.
         return await _traiter_orphelin(ctx, h)
     return h
+
+
+async def reconcilier_metriques_serveur(ctx: Contexte, h: m.Hebergement) -> m.Hebergement:
+    """Met à jour `serveur.chargeCpuPct` / `ramUtiliseePct` depuis Nova diagnostics (fiche
+    détail uniquement — deux relevés espacés par VM, trop coûteux sur la liste)."""
+    if h.statut != "en_ligne" or not isinstance(amont(), ComputeOpenStack):
+        return h
+    try:
+        secrets = await depot.secrets(ctx, h.id)
+    except Exception:  # noqa: BLE001
+        return h
+    sid = secrets.get("serveur_id")
+    if not sid:
+        return h
+    statut_nova = await asyncio.to_thread(amont().statut_serveur, str(sid))
+    if statut_nova.upper() != "ACTIVE":
+        return h
+    from synelia.modules.vms.service import diagnostics_instantanes_pour_serveur
+
+    valeurs = await diagnostics_instantanes_pour_serveur(str(sid), h.serveur.vcpu)
+    if not valeurs:
+        return h
+    cpu = round(valeurs["cpu"], 1)
+    ram = round(valeurs["ram"], 1)
+    if cpu == h.serveur.chargeCpuPct and ram == h.serveur.ramUtiliseePct:
+        return h
+    serveur = h.serveur.model_copy(update={"chargeCpuPct": cpu, "ramUtiliseePct": ram})
+    return await depot.modifier(ctx, h.id, {"serveur": serveur.model_dump(mode="json")})
 
 
 async def mesurer_espace_utilise(ctx: Contexte, h: m.Hebergement) -> m.Hebergement:
@@ -1405,11 +1630,9 @@ def construire_hebergement(ctx: Contexte, corps: m.HebergementCreation) -> m.Heb
         palier=corps.palier,
         serveur=m.Serveur(
             nom=f"srv-{hid[:8]}",
-            vcpu={"starter": 1, "pro": 2, "business": 4, "enterprise": 8}.get(corps.palier, 2),
-            ramGo={"starter": 2, "pro": 4, "business": 8, "enterprise": 16}.get(corps.palier, 4),
-            diskGo={"starter": 40, "pro": 80, "business": 160, "enterprise": 320}.get(
-                corps.palier, 80
-            ),
+            vcpu=specs_serveur_pour_palier(corps.palier)[0],
+            ramGo=specs_serveur_pour_palier(corps.palier)[1],
+            diskGo=specs_serveur_pour_palier(corps.palier)[2],
             ip="",
             site=corps.site,
             os="Ubuntu 24.04 LTS",
@@ -1426,11 +1649,9 @@ def construire_hebergement(ctx: Contexte, corps: m.HebergementCreation) -> m.Heb
             ],
             limites=m.Limites(memoryLimitMo=256, uploadMaxMo=64, maxExecutionS=30, opcache=True),
         ),
-        acces=m.Acces(ftp=True, sftp=True, ftps=False, ssh=False, portSsh=22),
+        acces=m.Acces(ftp=False, sftp=True, ftps=False, ssh=False, portSsh=22),
         espaceUtiliseGo=0.0,
-        espaceTotalGo=float(
-            {"starter": 40, "pro": 80, "business": 160, "enterprise": 320}.get(corps.palier, 80)
-        ),
+        espaceTotalGo=float(specs_serveur_pour_palier(corps.palier)[2]),
         sauvegarde=m.Sauvegarde(
             frequence="quotidienne",
             heure="02:00",
@@ -1518,7 +1739,18 @@ def _version_defaut(type_: str) -> str | None:
 # catalogue de `/app/web/applications` nomme déjà ses hôtes `ghost.<domaine>`, `dolibarr.
 # <domaine>`… Une installation « PHP générique » depuis le formulaire libre (hôte quelconque)
 # retombe sur `php`, ce qui est le bon défaut.
-_APPLICATIONS_PHP = {"ghost", "dolibarr"}
+_APPLICATIONS_PHP = {
+    "ghost",
+    "dolibarr",
+    "matomo",
+    "bookstack",
+    "moodle",
+    "opencart",
+    "grav",
+}
+_APPS_HTTPS_ENTREE = frozenset(
+    {"wordpress", "matomo", "bookstack", "moodle", "opencart", "grav", "dolibarr"}
+)
 
 
 def application_pour_site(site_type: str, hote: str) -> str:
@@ -1536,6 +1768,71 @@ def _slug_site(site_id: str) -> str:
     corrigé ici en premier, réutilisé depuis par `projets.service` pour le même besoin sur
     une VM de projet en cible `vm`)."""
     return slug_court(site_id)
+
+
+def _bookstack_app_key(secret: str) -> str:
+    import base64
+    import hashlib
+
+    return "base64:" + base64.b64encode(hashlib.sha256(secret.encode()).digest()[:32]).decode()
+
+
+def _wordpress_config_extra(hote: str) -> str:
+    """PHP injecté dans `wp-config.php` (env `WORDPRESS_CONFIG_EXTRA` de l'image officielle).
+
+    Le TLS public se termine sur dev01 ; Traefik et Apache ne voient que du HTTP en amont :
+    sans `WP_HOME`/`WP_SITEURL` en https et sans `FORCE_SSL*`, WordPress émet des URLs
+    http:// → mixed content bloqué par le navigateur."""
+    url = f"https://{hote}"
+    return (
+        "define('FORCE_SSL_ADMIN', true);"
+        "define('FORCE_SSL', true);"
+        f"define('WP_HOME', '{url}');"
+        f"define('WP_SITEURL', '{url}');"
+        "if (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) "
+        "&& $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') { "
+        "$_SERVER['HTTPS']='on'; $_SERVER['SERVER_PORT']=443; }"
+    )
+
+
+def _traefik_routage_site(app_svc: str, hote: str, port: int, *, https_entree: bool = False) -> str:
+    """Route Traefik fichier (`traefik-dynamic/site-*.yml`) vers le conteneur applicatif."""
+    if https_entree:
+        mw = f"mw-{app_svc}-https"
+        return f"""http:
+  middlewares:
+    {mw}:
+      headers:
+        customRequestHeaders:
+          X-Forwarded-Proto: "https"
+          X-Forwarded-Port: "443"
+  routers:
+    {app_svc}:
+      rule: "Host(`{hote}`)"
+      entryPoints:
+        - web
+      middlewares:
+        - {mw}
+      service: {app_svc}
+  services:
+    {app_svc}:
+      loadBalancer:
+        servers:
+          - url: "http://{app_svc}:{port}"
+"""
+    return f"""http:
+  routers:
+    {app_svc}:
+      rule: "Host(`{hote}`)"
+      entryPoints:
+        - web
+      service: {app_svc}
+  services:
+    {app_svc}:
+      loadBalancer:
+        servers:
+          - url: "http://{app_svc}:{port}"
+"""
 
 
 def construire_site_stack(
@@ -1577,6 +1874,7 @@ def construire_site_stack(
       - WORDPRESS_DB_NAME=wordpress
       - WORDPRESS_DB_USER=wordpress
       - WORDPRESS_DB_PASSWORD={mot_de_passe}
+      - WORDPRESS_CONFIG_EXTRA={_wordpress_config_extra(hote).replace("$", "$$")}
     volumes:
       - {racine}/www:/var/www/html
     networks:
@@ -1671,6 +1969,145 @@ def construire_site_stack(
     networks:
       - synelia
 """
+    elif application == "matomo":
+        url = f"https://{hote}"
+        services = f"""  {db_svc}:
+    image: mariadb:11
+    restart: unless-stopped
+    environment:
+      - MARIADB_ROOT_PASSWORD={mot_de_passe}
+      - MARIADB_DATABASE=matomo
+      - MARIADB_USER=matomo
+      - MARIADB_PASSWORD={mot_de_passe}
+    volumes:
+      - {racine}/db:/var/lib/mysql
+    networks:
+      - synelia
+
+  {app_svc}:
+    image: matomo:5-apache
+    restart: unless-stopped
+    depends_on:
+      - {db_svc}
+    environment:
+      - MATOMO_DATABASE_ADAPTER=mysql
+      - MATOMO_DATABASE_TABLES_PREFIX=matomo_
+      - MATOMO_DATABASE_HOST={db_svc}
+      - MATOMO_DATABASE_USERNAME=matomo
+      - MATOMO_DATABASE_PASSWORD={mot_de_passe}
+      - MATOMO_DATABASE_DBNAME=matomo
+      - MATOMO_TRUSTED_HOSTS[]={hote}
+    volumes:
+      - {racine}/www:/var/www/html
+    networks:
+      - synelia
+"""
+    elif application == "bookstack":
+        port = 8080
+        url = f"https://{hote}"
+        app_key = _bookstack_app_key(mot_de_passe)
+        services = f"""  {db_svc}:
+    image: mariadb:11
+    restart: unless-stopped
+    environment:
+      - MARIADB_ROOT_PASSWORD={mot_de_passe}
+      - MARIADB_DATABASE=bookstack
+      - MARIADB_USER=bookstack
+      - MARIADB_PASSWORD={mot_de_passe}
+    volumes:
+      - {racine}/db:/var/lib/mysql
+    networks:
+      - synelia
+
+  {app_svc}:
+    image: solidnerd/bookstack:latest
+    restart: unless-stopped
+    depends_on:
+      - {db_svc}
+    environment:
+      - APP_URL={url}
+      - APP_KEY={app_key}
+      - DB_HOST={db_svc}
+      - DB_DATABASE=bookstack
+      - DB_USERNAME=bookstack
+      - DB_PASSWORD={mot_de_passe}
+    volumes:
+      - {racine}/uploads:/var/www/bookstack/public/uploads
+      - {racine}/storage:/var/www/bookstack/storage/uploads
+    networks:
+      - synelia
+"""
+    elif application == "moodle":
+        port = 8080
+        services = f"""  {db_svc}:
+    image: mariadb:11
+    restart: unless-stopped
+    environment:
+      - MARIADB_ROOT_PASSWORD={mot_de_passe}
+      - MARIADB_DATABASE=bitnami_moodle
+      - MARIADB_USER=bn_moodle
+      - MARIADB_PASSWORD={mot_de_passe}
+    volumes:
+      - {racine}/db:/var/lib/mysql
+    networks:
+      - synelia
+
+  {app_svc}:
+    image: ghcr.io/johanruizb/moodle-alpine:4.5
+    restart: unless-stopped
+    depends_on:
+      - {db_svc}
+    environment:
+      - MOODLE_DATABASE_HOST={db_svc}
+      - MOODLE_DATABASE_PORT_NUMBER=3306
+      - MOODLE_DATABASE_USER=bn_moodle
+      - MOODLE_DATABASE_NAME=bitnami_moodle
+      - MOODLE_DATABASE_PASSWORD={mot_de_passe}
+      - MOODLE_USERNAME=admin
+      - MOODLE_PASSWORD={mot_de_passe}
+      - MOODLE_EMAIL=admin@{hote}
+      - MOODLE_SITE_NAME=Moodle
+    volumes:
+      - {racine}/www:/bitnami/moodle
+      - {racine}/moodledata:/bitnami/moodledata
+    networks:
+      - synelia
+"""
+    elif application == "opencart":
+        services = f"""  {db_svc}:
+    image: mariadb:11
+    restart: unless-stopped
+    environment:
+      - MARIADB_ROOT_PASSWORD={mot_de_passe}
+      - MARIADB_DATABASE=opencart
+      - MARIADB_USER=opencart
+      - MARIADB_PASSWORD={mot_de_passe}
+    volumes:
+      - {racine}/db:/var/lib/mysql
+    networks:
+      - synelia
+
+  {app_svc}:
+    image: vimagick/opencart:latest
+    restart: unless-stopped
+    depends_on:
+      - {db_svc}
+    networks:
+      - synelia
+"""
+    elif application == "grav":
+        services = f"""  {app_svc}:
+    image: lscr.io/linuxserver/grav:latest
+    restart: unless-stopped
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=UTC
+    volumes:
+      - {racine}/config:/config
+    networks:
+      - synelia
+"""
     elif application == "nextcloud":
         services = f"""  {db_svc}:
     image: mariadb:11
@@ -1698,7 +2135,7 @@ def construire_site_stack(
       - NEXTCLOUD_ADMIN_USER=admin
       - NEXTCLOUD_ADMIN_PASSWORD={mot_de_passe}
       - NEXTCLOUD_TRUSTED_DOMAINS={hote}
-      - OVERWRITEPROTOCOL=http
+      - OVERWRITEPROTOCOL=https
     volumes:
       - {racine}/www:/var/www/html
     networks:
@@ -1732,19 +2169,9 @@ def construire_site_stack(
     compose = (
         f"services:\n{services}\nnetworks:\n  synelia:\n    external: true\n    name: synelia\n"
     )
-    routage = f"""http:
-  routers:
-    {app_svc}:
-      rule: "Host(`{hote}`)"
-      entryPoints:
-        - web
-      service: {app_svc}
-  services:
-    {app_svc}:
-      loadBalancer:
-        servers:
-          - url: "http://{app_svc}:{port}"
-"""
+    routage = _traefik_routage_site(
+        app_svc, hote, port, https_entree=(application in _APPS_HTTPS_ENTREE)
+    )
     return compose, routage, fichiers
 
 
@@ -1879,6 +2306,8 @@ class ExecuteurHebergementCreer(Executeur):
             # Sans TCP/80 sur le SG du membre, l'amphore Octavia (ou un curl depuis le tenant)
             # ne joint jamais Traefik — cf. `NetworkOpenStack._assurer_regle_ingress_tcp`.
             await asyncio.to_thread(amont_network().assurer_regle_port, srv["id"], 80)
+            # SFTP (conteneur `atmoz/sftp`, port hôte 2222) — ouvert par défaut (`acces.sftp`).
+            await asyncio.to_thread(amont_network().assurer_regle_port, srv["id"], _PORT_SFTP_VM)
             c["ssh_fip_id"] = fip.get("id")
             c["ssh_ip"] = ip_gestion or fip.get("adresse")
             travail.contexte = c
@@ -1932,10 +2361,12 @@ class ExecuteurHebergementCreer(Executeur):
     async def terminer(self, ctx: Contexte, travail: Travail) -> None:
         h = await depot.obtenir(ctx, travail.cible_id or "")
         ip = travail.contexte.get("ip_privee") or ip_privee(h.id)
-        serveur = h.serveur.model_copy(
-            update={"ip": ip, "statut": "en_ligne", "chargeCpuPct": 12.0}
-        )
-        await depot.modifier(ctx, h.id, {"serveur": serveur.model_dump(mode="json")})
+        serveur = h.serveur.model_copy(update={"ip": ip, "statut": "en_ligne"})
+        patch: dict[str, Any] = {"serveur": serveur.model_dump(mode="json")}
+        if h.acces.sftp:
+            acces = await appliquer_acces_sftp(ctx, h.id, True)
+            patch["acces"] = acces.model_dump(mode="json")
+        await depot.modifier(ctx, h.id, patch)
         base = await depot_bases.creer(
             ctx, construire_serveur_bases(ctx, travail.cible_id or ""), parent_id=travail.cible_id
         )
@@ -2023,6 +2454,47 @@ class ExecuteurHebergementSupprimer(Executeur):
         await depot.supprimer(ctx, travail.cible_id or "", logique=True)
 
 
+ETAPES_REDIMENSIONNEMENT_PALIER = [
+    {"nom": "Appliquer le nouveau gabarit sur l’hyperviseur", "dureeS": 90},
+    {"nom": "Étendre le système de fichiers", "dureeS": 20},
+    {"nom": "Contrôler les services", "dureeS": 15},
+]
+
+
+@executeur("hebergement.redimensionner")
+class ExecuteurHebergementRedimensionner(Executeur):
+    """Montée de palier Web Cloud : redimensionne la VM Nova de zone VPS et étend la partition racine."""
+
+    async def etape(self, ctx: Contexte, travail: Travail, index: int, nom: str) -> str | None:
+        entree = travail.entree or {}
+        gabarit_id = entree.get("gabarit_id")
+        if index == 0:
+            if not gabarit_id:
+                raise erreurs.validation(
+                    "Gabarit cible manquant pour le redimensionnement.",
+                    champs={"gabarit_id": "requis"},
+                )
+            sid = await serveur_id(ctx, travail.cible_id or "", travail)
+            await asyncio.to_thread(amont().redimensionner, sid, str(gabarit_id))
+            return f"Gabarit Nova {gabarit_id}"
+        if index == 1 and isinstance(amont_ssh(), SshReel):
+            h = await depot.obtenir(ctx, travail.cible_id or "")
+            zone = await zone_vps_secrets(ctx)
+            cle = zone.get("ssh_prive")
+            ip = await ip_gestion_hebergement(ctx, h)
+            if cle and ip:
+                cmd = (
+                    "growpart /dev/vda 3 2>/dev/null || true; "
+                    "resize2fs /dev/vda3 2>/dev/null || true"
+                )
+                await asyncio.to_thread(amont_ssh().executer, ip, cle, cmd)
+            return "Partition racine étendue"
+        return None
+
+    async def terminer(self, ctx: Contexte, travail: Travail) -> None:
+        await depot.definir_statut(ctx, travail.cible_id or "", "en_ligne")
+
+
 @executeur("hebergement.redemarrer")
 class ExecuteurHebergementRedemarrer(Executeur):
     async def etape(self, ctx: Contexte, travail: Travail, index: int, nom: str) -> str | None:
@@ -2101,6 +2573,12 @@ class ExecuteurSiteInstaller(Executeur):
             await asyncio.to_thread(
                 ssh.executer, ip, cle_privee, f"cd {racine} && docker compose up -d"
             )
+            await asyncio.to_thread(
+                ssh.executer,
+                ip,
+                cle_privee,
+                f"chown -R 1000:1000 {racine}/www 2>/dev/null || true",
+            )
             await depot_sites.definir_secrets(
                 ctx, site.id, {"application": application, "mot_de_passe": mdp}
             )
@@ -2127,7 +2605,11 @@ class ExecuteurSiteInstaller(Executeur):
         return None
 
     async def terminer(self, ctx: Contexte, travail: Travail) -> None:
-        await depot_sites.definir_statut(ctx, travail.cible_id or "", "en_ligne")
+        from synelia.modules.projets import entree_dev01
+
+        site = await depot_sites.obtenir(ctx, travail.cible_id or "")
+        await asyncio.to_thread(entree_dev01.publier_site_web, site.hote)
+        await depot_sites.definir_statut(ctx, site.id, "en_ligne")
 
     async def compenser(self, ctx: Contexte, travail: Travail, index_echoue: int) -> None:
         site = await depot_sites.obtenir(ctx, travail.cible_id or "")
@@ -2182,6 +2664,9 @@ class ExecuteurSiteSupprimer(Executeur):
                 f"cd {racine} && docker compose down -v; rm -rf {racine} "
                 f"{_RACINE_DOCKER}/traefik-dynamic/site-{site.id}.yml",
             )
+        from synelia.modules.projets import entree_dev01
+
+        await asyncio.to_thread(entree_dev01.retirer, site.hote)
         await depot_sites.supprimer(ctx, site.id, logique=True)
 
 

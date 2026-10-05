@@ -14,25 +14,24 @@ from synelia_kernel.ids import nouvel_id, slug_court
 from synelia.audit import journaliser
 from synelia.depot import Depot
 from synelia.deps import CtxPublic, Page, pagine
+from synelia.modules.admin.router import SITES_PHYSIQUES
+from synelia.modules.admin.service import amacer_backends, statut_services_effectif
+from synelia.modules.facturation.tarification import PRIX_UNITAIRES
 from synelia.modules.public.service import (
-    COUVERTURE,
-    DATACENTERS,
     ETUDES_CAS,
     HYPOTHESES,
     PAGES_LEGALES,
-    PRIX_UNITAIRES,
     SLA_ENGAGEMENTS,
-    SOUVERAINETE,
     catalogues,
     familles_tarifs,
     fiche_catalogue,
+    souverainete,
 )
 
 router = APIRouter(prefix="/public", tags=["Vitrine publique"])
 
 detenteur_contact = Depot("lead", m.Lead, plateforme=True)
 detenteur_offres = Depot("offre", m.Offre, plateforme=True)
-detenteur_statut = Depot("statut_service", m.StatutService, plateforme=True)
 detenteur_incidents = Depot("incident", m.Incident, plateforme=True)
 
 ACCUSES = {
@@ -127,12 +126,33 @@ async def envoyer_demande_contact(corps: m.DemandeContact, ctx: CtxPublic) -> An
     "/couverture", response_model=m.PublicCouvertureGetResponse, response_model_exclude_none=True
 )
 async def obtenir_couverture(ctx: CtxPublic, ville: str | None = None) -> Any:
-    return [c for c in COUVERTURE if (not ville or c["ville"] == ville)]
+    # Aucune mesure de latence ni de fiabilité par ville n'est collectée : liste vide plutôt qu'inventée.
+    return []
 
 
 @router.get("/datacenters", response_model=list[m.Datacenter], response_model_exclude_none=True)
 async def lister_datacenters(ctx: CtxPublic) -> Any:
-    return DATACENTERS
+    return SITES_PHYSIQUES
+
+
+@router.get("/capacite")
+async def capacite_par_site(ctx: CtxPublic) -> Any:
+    """Capacité installée et charge moyenne par site, agrégées depuis les socles du back-office."""
+    par_site: dict[str, list[Any]] = {}
+    for b in await amacer_backends(ctx):
+        par_site.setdefault(b.site, []).append(b)
+    return [
+        {
+            "site": site,
+            "vcpu": sum(b.capacite.vcpu for b in bs),
+            "ramGo": sum(b.capacite.ramGo for b in bs),
+            "stockageTo": round(sum(b.capacite.stockageTo for b in bs), 2),
+            "chargePct": round(sum(b.usage.vcpuPct for b in bs) / len(bs)),
+            "hotes": sum(b.hosts for b in bs),
+            "socles": sorted({b.type for b in bs}),
+        }
+        for site, bs in par_site.items()
+    ]
 
 
 @router.post(
@@ -199,80 +219,12 @@ async def lister_etudes_cas(page: Page, ctx: CtxPublic, secteur: str | None = No
     return pagine(data, len(data), page)
 
 
-_OFFRES_FALLBACK = [
-    {
-        "id": "offre-espace-standard",
-        "code": "espace-standard",
-        "nom": "Espace Cloud Standard",
-        "categorie": "espace_cloud",
-        "specs": "16 vCPU, 64 Go RAM, 2 To",
-        "caracteristiques": ["16 vCPU", "64 Go RAM", "2 To stockage", "Réseau privé"],
-        "prix": 150000,
-        "populaire": True,
-        "statut": "publiee",
-        "souscriptionsActives": 0,
-        "sla": "99,95 %",
-    },
-    {
-        "id": "offre-k8s",
-        "code": "k8s-standard",
-        "nom": "Kubernetes managé",
-        "categorie": "k8s",
-        "specs": "3 nœuds, 6 vCPU, 12 Go",
-        "caracteristiques": ["3 nœuds", "Autoscaling", "Ingress managé"],
-        "prix": 95000,
-        "populaire": False,
-        "statut": "publiee",
-        "souscriptionsActives": 0,
-        "sla": "99,9 %",
-    },
-    {
-        "id": "offre-web",
-        "code": "web-standard",
-        "nom": "Hébergement web managé",
-        "categorie": "web",
-        "specs": "1 site, 10 Go",
-        "caracteristiques": ["1 site", "10 Go", "SSL inclus"],
-        "prix": 12000,
-        "populaire": False,
-        "statut": "publiee",
-        "souscriptionsActives": 0,
-        "sla": "99,9 %",
-    },
-    {
-        "id": "offre-stack",
-        "code": "stack-dev",
-        "nom": "Dev Stack",
-        "categorie": "stack",
-        "specs": "Git + CI/CD",
-        "caracteristiques": ["Git", "CI/CD", "Registre"],
-        "prix": 40000,
-        "populaire": False,
-        "statut": "publiee",
-        "souscriptionsActives": 0,
-        "sla": "99,9 %",
-    },
-    {
-        "id": "offre-image",
-        "code": "image-ubuntu",
-        "nom": "Image Ubuntu 24.04",
-        "categorie": "image_vm",
-        "specs": "Image système",
-        "caracteristiques": ["Linux", "Sécurisée"],
-        "prix": 0,
-        "populaire": False,
-        "statut": "publiee",
-        "souscriptionsActives": 0,
-    },
-]
-
-
 @router.get("/offres", response_model=m.PublicOffresGetResponse, response_model_exclude_none=True)
 async def lister_offres_publiques(
     page: Page, ctx: CtxPublic, categorie: str | None = None, populaire: bool | None = None
 ) -> Any:
     dossiers = await detenteur_offres.tous(ctx, statut="publiee")
-    data = [o.model_dump(mode="json") for o in dossiers] or _OFFRES_FALLBACK
+    data = [o.model_dump(mode="json") for o in dossiers]
     data = [
         o
         for o in data
@@ -287,10 +239,8 @@ async def obtenir_fiche_produit(slug: str, ctx: CtxPublic) -> Any:
     offres = await detenteur_offres.tous(ctx, statut="publiee")
     found = next((x for x in offres if slug in (x.code, x.id)), None)
     if found is None:
-        found = next((x for x in _OFFRES_FALLBACK if x["code"] == slug), None)
-    if found is None:
         raise erreurs.introuvable("Offre", slug)
-    d = found if isinstance(found, dict) else found.model_dump(mode="json")
+    d = found.model_dump(mode="json")
     return {
         "slug": slug,
         "nom": d["nom"],
@@ -327,48 +277,33 @@ async def _estimer(corps: m.PublicSimulateurPostRequest) -> m.EstimationCout:
     vcpu = corps.vcpu or 0
     ram = corps.ramGo or 0
     stock = corps.stockageGo or 0
-    if vcpu:
-        ht = vcpu * PRIX_UNITAIRES["vcpu_heure"]
-        lignes.append(
-            {
-                "libelle": f"{vcpu} vCPU",
-                "quantite": vcpu,
-                "unite": "heure",
-                "prixUnitaire": PRIX_UNITAIRES["vcpu_heure"],
-                "total": ht,
-            }
-        )
-    if ram:
-        ht = ram * PRIX_UNITAIRES["ram_go_heure"]
-        lignes.append(
-            {
-                "libelle": f"{ram} Go RAM",
-                "quantite": ram,
-                "unite": "heure",
-                "prixUnitaire": PRIX_UNITAIRES["ram_go_heure"],
-                "total": ht,
-            }
-        )
-    if stock:
-        ht = arrondi_fcfa(stock / 1024 * PRIX_UNITAIRES["stockage_to_jour"])
-        lignes.append(
-            {
-                "libelle": f"{stock} Go stockage",
-                "quantite": round(stock / 1024, 2),
-                "unite": "to/jour",
-                "prixUnitaire": PRIX_UNITAIRES["stockage_to_jour"],
-                "total": ht,
-            }
-        )
-    vcpu_mois = vcpu * 24 * 30 * PRIX_UNITAIRES["vcpu_heure"]
-    ram_mois = ram * 24 * 30 * PRIX_UNITAIRES["ram_go_heure"]
-    stock_mois = arrondi_fcfa(stock / 1024 * PRIX_UNITAIRES["stockage_to_jour"] * 30)
-    total_ht = vcpu_mois + ram_mois + stock_mois
-    total_ttc = ttc(total_ht)
+    pu = PRIX_UNITAIRES
+    for libelle, qte, unite, prix, total in (
+        (f"{vcpu} vCPU", vcpu, "mois", pu["vcpu_mois"], vcpu * pu["vcpu_mois"]),
+        (f"{ram} Go RAM", ram, "mois", pu["ram_go_mois"], ram * pu["ram_go_mois"]),
+        (
+            f"{stock} Go stockage",
+            stock / 100,
+            "100 Go · mois",
+            round(pu["stockage_go_mois"] * 100),
+            stock * pu["stockage_go_mois"],
+        ),
+    ):
+        if qte:
+            lignes.append(
+                {
+                    "libelle": libelle,
+                    "quantite": qte,
+                    "unite": unite,
+                    "prixUnitaire": prix,
+                    "total": arrondi_fcfa(total),
+                }
+            )
+    total_ht = sum(ligne["total"] for ligne in lignes)
     return m.EstimationCout(
         lignes=lignes,
-        totalMensuel=total_ttc,
-        totalHoraire=vcpu * PRIX_UNITAIRES["vcpu_heure"] + ram * PRIX_UNITAIRES["ram_go_heure"],
+        totalMensuel=ttc(total_ht),
+        totalHoraire=round(total_ht / 730, 2),
         devise="XOF",
         engagement="aucun",
         avertissements=["Hors trafic sortant (egress) et licences tierces.", "TVA 18 % incluse."],
@@ -387,46 +322,17 @@ async def obtenir_sla_public(ctx: CtxPublic) -> Any:
 
 @router.get("/souverainete", response_model=m.Souverainete, response_model_exclude_none=True)
 async def obtenir_souverainete(ctx: CtxPublic) -> Any:
-    return SOUVERAINETE
+    return souverainete(SITES_PHYSIQUES, await amacer_backends(ctx))
 
 
 @router.get("/statut", response_model=m.PublicStatutGetResponse, response_model_exclude_none=True)
 async def obtenir_statut_public(ctx: CtxPublic) -> Any:
-    services_ress = await detenteur_statut.tous(ctx)
-    if services_ress:
-        services = [s.model_dump(mode="json") for s in services_ress]
-    else:
-        services = [
-            {
-                "nom": "Compute (VMs)",
-                "categorie": "compute",
-                "etats": {"ABJ": "operationnel", "GBM": "operationnel"},
-                "uptime90j": 99.98,
-            },
-            {
-                "nom": "Stockage",
-                "categorie": "storage",
-                "etats": {"ABJ": "operationnel", "GBM": "operationnel"},
-                "uptime90j": 99.99,
-            },
-            {
-                "nom": "Réseau",
-                "categorie": "network",
-                "etats": {"ABJ": "operationnel", "GBM": "operationnel"},
-                "uptime90j": 99.95,
-            },
-            {
-                "nom": "Services managés",
-                "categorie": "manages",
-                "etats": {"ABJ": "operationnel", "GBM": "operationnel"},
-                "uptime90j": 99.92,
-            },
-        ]
+    services = await statut_services_effectif(ctx)
     incidents = [i.model_dump(mode="json") for i in await detenteur_incidents.tous(ctx)]
     return {
         "services": services,
         "incidents": incidents,
-        "disponibiliteGlobale90j": 99.96,
+        "disponibiliteGlobale90j": round(sum(s["uptime90j"] for s in services) / len(services), 2),
         "derniereMaj": maintenant().isoformat(),
     }
 
@@ -441,8 +347,15 @@ async def obtenir_incident_public(incidentId: str, ctx: CtxPublic) -> Any:  # no
 
 @router.get("/tarifs", response_model=m.PublicTarifsGetResponse, response_model_exclude_none=True)
 async def obtenir_tarifs(ctx: CtxPublic) -> Any:
+    par_categorie: dict[str, dict[str, Any]] = {}
+    for o in sorted(await detenteur_offres.tous(ctx, statut="publiee"), key=lambda o: o.prix):
+        fam = par_categorie.setdefault(
+            o.categorie,
+            {"code": o.categorie, "nom": o.categorie, "description": None, "offres": []},
+        )
+        fam["offres"].append(o.model_dump(mode="json"))
     return {
-        "familles": familles_tarifs(),
+        "familles": [*par_categorie.values(), *familles_tarifs()],
         "tarifsUnitaires": {**PRIX_UNITAIRES, "tvaPct": 18},
         "hypotheses": HYPOTHESES,
     }

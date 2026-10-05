@@ -154,6 +154,39 @@ async def modifier_drive(
     return await depot.obtenir(ctx, driveId)
 
 
+@router.get(
+    "/{driveId}/identifiants-admin",
+    response_model=m.WebDriveDriveIdIdentifiantsAdminGetResponse,
+    response_model_exclude_none=True,
+)
+async def obtenir_identifiants_admin_drive(
+    driveId: str, ctx: Contexte = Depends(exige("service.admin"))
+) -> Any:  # noqa: N803
+    drive = await depot.obtenir(ctx, driveId)
+    if not drive.actif:
+        raise erreurs.conflit(
+            "Le drive n'est pas actif : les identifiants admin Nextcloud ne sont disponibles "
+            "qu'après une activation réussie.",
+            code="drive_inactif",
+        )
+    secrets = await depot.secrets(ctx, driveId)
+    mot_de_passe = secrets.get("admin_mdp")
+    if not mot_de_passe:
+        raise erreurs.introuvable("Identifiants admin Nextcloud", driveId)
+    await journaliser(
+        ctx,
+        action="web.drive.identifiants_admin.consultation",
+        cible_type="web_drive",
+        cible_id=drive.id,
+        cible=drive.domaine,
+    )
+    return m.WebDriveDriveIdIdentifiantsAdminGetResponse(
+        utilisateur=secrets.get("admin_utilisateur") or "admin",
+        motDePasse=mot_de_passe,
+        url=f"https://{drive.hote}/",
+    )
+
+
 @router.post(
     "/{driveId}/ouverture",
     response_model=m.OuvertureService,

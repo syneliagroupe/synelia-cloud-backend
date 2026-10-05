@@ -6,7 +6,9 @@ from datetime import date
 from typing import Any
 
 from fastapi import APIRouter, Depends, Response, status
+from sqlalchemy import func, select
 from synelia_contract import modeles as m
+from synelia_db.modeles import Organisation
 from synelia_kernel import erreurs
 from synelia_kernel.dates import maintenant
 from synelia_kernel.ids import nouvel_id
@@ -48,6 +50,16 @@ depot_cycle = Depot(
 )
 
 
+async def _souscriptions(ctx: Contexte) -> dict[str, int]:
+    """Organisations actives par code d'offre (`Organisation.tenant_plan`), casse ignorée."""
+    q = (
+        select(func.lower(Organisation.tenant_plan), func.count())
+        .where(Organisation.statut == "active", Organisation.tenant_plan.is_not(None))
+        .group_by(func.lower(Organisation.tenant_plan))
+    )
+    return {code: n for code, n in (await ctx.session.execute(q)).all()}
+
+
 @router.get(
     "/catalogue/familles",
     response_model=m.AdminCatalogueFamillesGetResponse,
@@ -55,6 +67,7 @@ depot_cycle = Depot(
 )
 async def lister_familles_catalogue(ctx: Contexte = Depends(exige_admin("catalog.edit"))) -> Any:
     offres = await depot_offre.tous(ctx)
+    souscrits = await _souscriptions(ctx)
     familles: dict[str, dict[str, Any]] = {}
     libelles = {
         "espace_cloud": "Espace Cloud",
@@ -70,7 +83,7 @@ async def lister_familles_catalogue(ctx: Contexte = Depends(exige_admin("catalog
         f["offres"] += 1
         if o.statut == "publiee":
             f["publiees"] += 1
-        f["souscriptionsActives"] += o.souscriptionsActives
+        f["souscriptionsActives"] += souscrits.get(o.code.lower(), 0)
     return [
         m.AdminCatalogueFamillesGetResponseItem(
             code=c,
@@ -94,7 +107,7 @@ async def lister_offres(
     statut: str | None = None,
     ctx: Contexte = Depends(exige_admin("catalog.edit")),
 ) -> Any:
-    return await depot_offre.lister(
+    res = await depot_offre.lister(
         ctx,
         page,
         filtre=lambda o: (
@@ -102,6 +115,10 @@ async def lister_offres(
         ),
         tri_defaut="prix",
     )
+    souscrits = await _souscriptions(ctx)
+    for o in res["donnees"]:
+        o.souscriptionsActives = souscrits.get(o.code.lower(), 0)
+    return res
 
 
 @router.post(
@@ -166,7 +183,7 @@ async def supprimer_offre(
             "Seul un brouillon jamais souscrit se supprime.",
             code="offre_publiee",
         )
-    if offre.souscriptionsActives > 0:
+    if (await _souscriptions(ctx)).get(offre.code.lower(), 0) > 0:
         raise erreurs.conflit(
             "Cette offre a des souscriptions actives, elle ne peut être supprimée.",
             code="offre_souscrite",
@@ -189,7 +206,7 @@ async def publier_offre(
     ctx: Contexte = Depends(exige_admin("catalog.edit")),
 ) -> Any:  # noqa: N803
     offre = await depot_offre.obtenir(ctx, offreId, org_id=None)
-    if offre.souscriptionsActives > 0 and corps.statut == "depreciee":
+    if corps.statut == "depreciee" and (await _souscriptions(ctx)).get(offre.code.lower(), 0) > 0:
         raise erreurs.conflit("Cette offre a des souscriptions actives.", code="offre_souscrite")
     await depot_offre.definir_statut(ctx, offreId, corps.statut, org_id=None)
     await journaliser(
@@ -365,6 +382,7 @@ async def lister_impayes(
     depot_f = Depot("facture", m.Facture, plateforme=True)
     aujourdhui = date.today()
     impayes = []
+    noms: dict[str, str] = {}
     for f in await depot_f.tous(ctx):
         if orgId and f.orgId != orgId:
             continue
@@ -373,9 +391,13 @@ async def lister_impayes(
         retard = (aujourdhui - f.echeance).days
         if retard < 0 or (retardMinJours is not None and retard < retardMinJours):
             continue
+        if f.orgId not in noms:
+            o = await ctx.session.get(Organisation, f.orgId)
+            noms[f.orgId] = o.nom if o else f.orgId
         impayes.append(
             m.Impaye(
-                org=f.orgId,
+                id=f.numero,
+                org=noms[f.orgId],
                 orgId=f.orgId,
                 facture=f.numero,
                 montant=f.total,
@@ -421,20 +443,22 @@ async def lancer_relances(
 @router.get("/facturation/marges", response_model=list[m.MargeBackend])
 async def lister_marges_backends(ctx: Contexte = Depends(exige_admin("catalog.edit"))) -> Any:
     from synelia.modules.admin import service as admin_service
+    from synelia.modules.facturation.service import revenu_mensuel
 
-    # Coût infra indicatif (FCFA / vCPU-mois lab) — le revenu catalogue n'est pas encore agrégé.
-    cout_par_vcpu = 12_000
-    revenu_par_vcpu = 18_000
+    cout_par_vcpu = ctx.reglages.cout_infra_vcpu_mois
     backends = await admin_service.amacer_backends(ctx)
     usage = await admin_service.usage_plateforme(ctx)
     vcpu_total = max(sum(b.capacite.vcpu for b in backends), 1)
     part_usage = usage["vcpu"] / vcpu_total
+    ids = (await ctx.session.execute(select(Organisation.id))).scalars()
+    ca_plateforme = sum([(await revenu_mensuel(ctx, i))[0] for i in ids])
+    vcpu_utilises = sum(b.capacite.vcpu * b.usage.vcpuPct / 100.0 for b in backends)
     lignes: list[m.MargeBackend] = []
     for b in backends:
         part = b.capacite.vcpu / vcpu_total
         cout = int(part * cout_par_vcpu * b.capacite.vcpu * part_usage)
         vcpu_util = b.capacite.vcpu * (b.usage.vcpuPct / 100.0)
-        revenu = int(revenu_par_vcpu * vcpu_util * part)
+        revenu = int(ca_plateforme * vcpu_util / vcpu_utilises) if vcpu_utilises else 0
         marge = round((revenu - cout) / revenu, 3) if revenu else 0.0
         lignes.append(
             m.MargeBackend(
@@ -451,7 +475,5 @@ async def lister_marges_backends(ctx: Contexte = Depends(exige_admin("catalog.ed
             ("Stockage objet", "stockage"),
             ("Bases managées", "base"),
         ]:
-            lignes.append(
-                m.MargeBackend(backend=label, type=typ, coutInfra=0, revenu=0, marge=0.0)
-            )
+            lignes.append(m.MargeBackend(backend=label, type=typ, coutInfra=0, revenu=0, marge=0.0))
     return lignes

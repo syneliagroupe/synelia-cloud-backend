@@ -3861,46 +3861,6 @@
       }
     },
     "/admin/placements": {
-      "get": {
-        "tags": [
-          "Super admin — infrastructure"
-        ],
-        "operationId": "listerPlacements",
-        "summary": "Lister les règles de placement",
-        "x-rbac": "capacity.manage",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Langue"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Succès.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/Placement"
-                  }
-                }
-              }
-            }
-          },
-          "401": {
-            "$ref": "#/components/responses/NonAuthentifie"
-          },
-          "403": {
-            "$ref": "#/components/responses/Interdit"
-          },
-          "429": {
-            "$ref": "#/components/responses/TropDeRequetes"
-          },
-          "500": {
-            "$ref": "#/components/responses/Serveur"
-          }
-        }
-      },
       "put": {
         "tags": [
           "Super admin — infrastructure"
@@ -4333,46 +4293,6 @@
       }
     },
     "/admin/statut/services": {
-      "get": {
-        "tags": [
-          "Super admin — exploitation"
-        ],
-        "operationId": "listerStatutServices",
-        "summary": "Lister l'état publié des services",
-        "x-rbac": "capacity.manage",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/Langue"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Succès.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/StatutService"
-                  }
-                }
-              }
-            }
-          },
-          "401": {
-            "$ref": "#/components/responses/NonAuthentifie"
-          },
-          "403": {
-            "$ref": "#/components/responses/Interdit"
-          },
-          "429": {
-            "$ref": "#/components/responses/TropDeRequetes"
-          },
-          "500": {
-            "$ref": "#/components/responses/Serveur"
-          }
-        }
-      },
       "put": {
         "tags": [
           "Super admin — exploitation"
@@ -34501,6 +34421,68 @@
         }
       }
     },
+    "/web/drive/{driveId}/identifiants-admin": {
+      "get": {
+        "tags": [
+          "Web Cloud — drive"
+        ],
+        "operationId": "obtenirIdentifiantsAdminDrive",
+        "summary": "Identifiants administrateur Nextcloud",
+        "description": "Compte admin posé à l'activation du drive (instance Nextcloud sur le VPS d'hébergement). Réservé aux administrateurs du service.",
+        "x-rbac": "service.admin",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Organisation"
+          },
+          {
+            "$ref": "#/components/parameters/Langue"
+          },
+          {
+            "name": "driveId",
+            "in": "path",
+            "required": true,
+            "description": "Identifiant du drive.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "drive-dba-africa"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Succès.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebDriveDriveIdIdentifiantsAdminGetResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Invalide"
+          },
+          "401": {
+            "$ref": "#/components/responses/NonAuthentifie"
+          },
+          "403": {
+            "$ref": "#/components/responses/Interdit"
+          },
+          "404": {
+            "$ref": "#/components/responses/Introuvable"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflit"
+          },
+          "429": {
+            "$ref": "#/components/responses/TropDeRequetes"
+          },
+          "500": {
+            "$ref": "#/components/responses/Serveur"
+          }
+        }
+      }
+    },
     "/web/drive/{driveId}/sieges": {
       "get": {
         "tags": [
@@ -46381,6 +46363,15 @@
               "portSsh": {
                 "type": "integer",
                 "format": "int32"
+              },
+              "portSftp": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Port public SFTP (entrée edge dev01, DNAT vers le conteneur)."
+              },
+              "hoteTransfert": {
+                "type": "string",
+                "description": "Hôte à indiquer au client SFTP (souvent l'IP edge du lab)."
               }
             },
             "required": [
@@ -48957,6 +48948,30 @@
           }
         }
       },
+      "WebDriveDriveIdIdentifiantsAdminGetResponse": {
+        "type": "object",
+        "description": "Compte administrateur Nextcloud provisionné à l'activation du drive.",
+        "properties": {
+          "utilisateur": {
+            "type": "string",
+            "example": "admin"
+          },
+          "motDePasse": {
+            "type": "string",
+            "description": "Mot de passe initial généré à l'activation."
+          },
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "description": "URL de connexion Nextcloud (écran de login, pas de SSO portail)."
+          }
+        },
+        "required": [
+          "utilisateur",
+          "motDePasse",
+          "url"
+        ]
+      },
       "OuvertureService": {
         "type": "object",
         "description": "Le portail ouvre la porte du produit ; il ne réimplémente pas son écran principal.",
@@ -50348,6 +50363,15 @@
           "portSsh": {
             "type": "integer",
             "format": "int32"
+          },
+          "portSftp": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Port public SFTP (entrée edge dev01, DNAT vers le conteneur)."
+          },
+          "hoteTransfert": {
+            "type": "string",
+            "description": "Hôte à indiquer au client SFTP (souvent l'IP edge du lab)."
           }
         }
       },
@@ -51283,9 +51307,7 @@
             "type": "string",
             "enum": [
               "mariadb",
-              "mysql",
               "postgresql",
-              "mongodb",
               "redis"
             ]
           },
@@ -53524,8 +53546,7 @@
             "enum": [
               "actif",
               "invite",
-              "suspendu",
-              "verification_requise"
+              "suspendu"
             ]
           }
         },

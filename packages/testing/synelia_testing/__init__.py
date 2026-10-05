@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 import shutil
 import tempfile
 import warnings
@@ -203,6 +204,15 @@ def configurer_env() -> str:
     # injoignable → `POST /web/smtp/test` remonte en 424. Les tests API restent simulés ici.
     os.environ.pop("SYNELIA_RELAIS_SMTP_HOTE", None)
     os.environ.pop("SYNELIA_RELAIS_SMTP_PORT", None)
+    # Lab réel : garder le registrar OVH pour les tests hébergement (`demo*` déjà en compte).
+    if os.environ.get("SYNELIA_FOURNISSEUR") != "openstack":
+        for cle in (
+            "SYNELIA_REGISTRAR_URL",
+            "SYNELIA_OVH_APPKEY",
+            "SYNELIA_OVH_APPSECRET",
+            "SYNELIA_OVH_CONSUMERKEY",
+        ):
+            os.environ.pop(cle, None)
     os.environ.setdefault("SYNELIA_SEED_DEMO", "true")
     return d
 
@@ -263,26 +273,83 @@ async def forcer_code_verification(email: str, code: str = CODE_VERIFICATION_TES
         await s.commit()
 
 
-async def enregistrer_domaine(client, nom: str) -> None:
-    """Commande un domaine pour l'organisation du client (202). Un hébergement exige
-    désormais un domaine déjà enregistré et payé — les tests passent donc par la vraie
-    commande de domaine avant de créer un hébergement."""
+TITULAIRE_DOMAINE_TEST = {
+    "nom": "Synelia Test",
+    "email": "test@synelia.ci",
+    "telephone": "+22500000000",
+    "adresse": "x",
+    "ville": "Abidjan",
+    "pays": "CI",
+}
+
+# Domaines déjà sur le compte registrar OVH du lab — pas de nouvel achat, seulement
+# rattachement org + DNS d'entrée (`domaine.commander` saute l'achat si `domaine_sous_gestion`).
+DOMAINES_DEMO_OVH: tuple[str, ...] = (
+    "demo-0619db8a.com",
+    "demo-28d14e3a.com",
+    "demo-2ad211fe.com",
+    "demo-662bb99f.com",
+    "demo-8e3de521.com",
+    "demo-a45c7794.com",
+    "demo-da0c57b7.com",
+    "demo-dc1b4b5b.com",
+    "demo-f659cf83.com",
+    "demo-h.com",
+)
+
+_alloue_domaine_demo = 0
+
+
+async def assurer_domaine_pour_hebergement(client, nom: str) -> None:
+    """Enregistre le domaine dans l'org du client (202) sans racheter un nom déjà chez OVH."""
+    r = await client.get("/v1/web/domaines")
+    assert r.status_code == 200, r.text
+    if any(d.get("nom") == nom for d in r.json().get("donnees") or []):
+        return
     r = await client.post(
         "/v1/web/domaines",
-        json={
-            "nom": nom,
-            "dureeAnnees": 1,
-            "titulaire": {
-                "nom": "Synelia Test",
-                "email": "test@synelia.ci",
-                "telephone": "+22500000000",
-                "adresse": "x",
-                "ville": "Abidjan",
-                "pays": "CI",
-            },
-        },
+        json={"nom": nom, "dureeAnnees": 1, "titulaire": TITULAIRE_DOMAINE_TEST},
     )
     assert r.status_code == 202, r.text
+    travail = r.json()
+    assert travail.get("statut") == "done", travail
+
+
+async def allouer_domaine_demo(client, nom: str | None = None) -> str:
+    """Choisit un domaine `demo*` du pool lab ou enregistre `nom` s'il est fourni."""
+    global _alloue_domaine_demo
+    if nom:
+        if _sur_lab_reel() and not nom.startswith("demo"):
+            raise AssertionError(
+                f"sur lab réel, utiliser un domaine du pool OVH demo* — reçu {nom!r}"
+            )
+        await assurer_domaine_pour_hebergement(client, nom)
+        return nom
+    if not _sur_lab_reel():
+        nom = f"demo-simule-{secrets.token_hex(4)}.test"
+        await assurer_domaine_pour_hebergement(client, nom)
+        return nom
+    r_dom = await client.get("/v1/web/domaines")
+    r_heb = await client.get("/v1/web/hebergements")
+    assert r_dom.status_code == 200 and r_heb.status_code == 200
+    deja_org = {d["nom"] for d in r_dom.json().get("donnees") or []}
+    avec_heb = {h.get("domaine") for h in r_heb.json().get("donnees") or [] if h.get("domaine")}
+    for candidat in DOMAINES_DEMO_OVH:
+        if candidat not in avec_heb:
+            await assurer_domaine_pour_hebergement(client, candidat)
+            return candidat
+    candidat = DOMAINES_DEMO_OVH[_alloue_domaine_demo % len(DOMAINES_DEMO_OVH)]
+    _alloue_domaine_demo += 1
+    await assurer_domaine_pour_hebergement(client, candidat)
+    return candidat
+
+
+async def enregistrer_domaine(client, nom: str) -> None:
+    """Alias : sur lab réel, préférer un nom `demo*` déjà chez OVH."""
+    if _sur_lab_reel() and nom.startswith("demo") and nom.endswith(".com"):
+        await assurer_domaine_pour_hebergement(client, nom)
+        return
+    await assurer_domaine_pour_hebergement(client, nom)
 
 
 async def inscrire_et_verifier(

@@ -289,7 +289,9 @@ async def conformite(ctx: Contexte) -> list[dict[str, Any]]:
         destinations = {p.destination for p in pts_plan} | {d.type for d in plan.destinations}
         copies = len(pts_plan)
         supports = len(destinations)
-        hors_site = any(d in {"autre_site", "immuable"} for d in destinations)
+        # Une copie « immuable » vit sur la même plateforme : seul « autre_site » compte
+        # comme hors site (et la plateforme n'a qu'un site réel).
+        hors_site = "autre_site" in destinations
         if plan.dernierResultat == "echec":
             protection = "echec"
         elif (copies >= 3 or plan.mode == "complete") and supports >= 2 and hors_site:

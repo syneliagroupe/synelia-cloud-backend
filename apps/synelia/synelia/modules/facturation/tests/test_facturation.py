@@ -12,7 +12,7 @@ async def _espace(client) -> str:
         "/v1/espaces",
         json={
             "code": "demo-abj",
-            "offerId": "offre-standard",
+            "offerId": "offre-espace-pro",
             "site": "ABJ",
             "cidr": "10.10.0.0/16",
             "quota": {"vcpu": 16, "ramGo": 64, "stockageTo": 2},
@@ -110,7 +110,7 @@ async def test_offre_souscrite_dans_la_facture(client):
     assert len(factures) == 1, r.text
     lignes = factures[0]["lignes"]
     assert any(ligne["libelle"].startswith("Abonnement Espace Pro") for ligne in lignes)
-    assert any(ligne["libelle"].startswith("Consommation") for ligne in lignes)
+    assert any("consommation" in ligne["libelle"].lower() for ligne in lignes)
     assert factures[0]["sousTotal"] == sum(ligne["total"] for ligne in lignes)
 
 
@@ -366,3 +366,18 @@ async def test_ventilation_par_espace_affiche_le_code_pas_luuid(client):
     labels = [ligne["label"] for ligne in r.json()["lignes"]]
     assert "demo-abj" in labels, labels
     assert espace_id not in labels, labels
+
+
+async def test_ventilation_egale_prevision_mensuelle(client):
+    """Une seule grille : la ventilation (par axe) et la projection de fin de mois racontent
+    le même montant mensuel, à l'arrondi journalier près."""
+    await _espace(client)
+    mois = date.today().strftime("%Y-%m")
+    prevision = (await client.get(f"/v1/facturation/consommation?periode={mois}")).json()[
+        "prevision"
+    ]
+    assert prevision > 0
+    for axe in ("espace", "famille", "application", "site"):
+        r = await client.get(f"/v1/facturation/ventilation?axe={axe}")
+        assert r.status_code == 200, r.text
+        assert abs(r.json()["total"] - prevision) <= 31, axe

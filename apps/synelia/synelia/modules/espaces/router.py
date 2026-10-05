@@ -121,10 +121,48 @@ async def supprimer_espace(
 ) -> Any:  # noqa: N803
     e = await depot.obtenir(ctx, espaceId)
     exiger_confirmation(e.code, confirmation)
-    if await Depot("vm", m.Vm).compter(ctx, parent_id=espaceId) or any(
-        v.espaceId == espaceId for v in await Depot("vm", m.Vm).tous(ctx)
-    ):
-        raise erreurs.conflit("L'espace contient encore des machines.", code="espace_non_vide")
+    from synelia.modules.kubernetes.service import depot_cluster
+    from synelia.modules.projets.service import depot_projet
+
+    restant = [
+        libelle
+        for libelle, n in (
+            (
+                "machines",
+                len(await Depot("vm", m.Vm).tous(ctx, filtre=lambda x: x.espaceId == espaceId)),
+            ),
+            (
+                "volumes",
+                len(
+                    await Depot("volume", m.Volume).tous(
+                        ctx, filtre=lambda x: x.espaceId == espaceId
+                    )
+                ),
+            ),
+            (
+                "load balancers",
+                len(
+                    await Depot("load_balancer", m.LoadBalancer).tous(
+                        ctx, filtre=lambda x: x.espaceId == espaceId
+                    )
+                ),
+            ),
+            (
+                "clusters Kubernetes",
+                len(await depot_cluster.tous(ctx, filtre=lambda x: x.espaceId == espaceId)),
+            ),
+            (
+                "projets applicatifs",
+                len(await depot_projet.tous(ctx, filtre=lambda x: x.espaceId == espaceId)),
+            ),
+        )
+        if n
+    ]
+    if restant:
+        raise erreurs.conflit(
+            f"L'espace contient encore : {', '.join(restant)}. Supprimez-les d'abord.",
+            code="espace_non_vide",
+        )
     await journaliser(
         ctx, action="espace.suppression", cible_type="espace", cible_id=espaceId, cible=e.code
     )

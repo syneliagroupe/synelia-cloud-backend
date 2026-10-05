@@ -141,6 +141,9 @@ class NetworkSimule:
     def assurer_regle_port(self, serveur_id: str, port: int) -> None:
         return None
 
+    def retirer_regle_port(self, serveur_id: str, port: int) -> None:
+        return None
+
     # ── Lectures d'état réel (reconcile-on-read) ──────────────────────────
     # `None` = amont inconnu (simulation : rien à interroger) — l'appelant garde
     # alors la ligne DB telle quelle. Sur l'amont réel, `None` = ressource perdue
@@ -542,6 +545,23 @@ class NetworkOpenStack(NetworkSimule):
         pool ciblé — sinon le trafic de l'amphore Octavia vers ce membre est bloqué par le
         groupe `default` (voir `_assurer_regle_ingress_tcp`)."""
         self._assurer_regle_ingress_tcp(serveur_id, port)
+
+    def retirer_regle_port(self, serveur_id: str, port_num: int) -> None:
+        """Retire une règle ingress TCP/`port_num` (miroir de `retirer_regle_ssh`)."""
+        c = self._c()
+        port = next(iter(c.network.ports(device_id=serveur_id)), None)
+        if port is None or not port.security_group_ids:
+            return
+        for sg_id in port.security_group_ids:
+            sg = c.network.get_security_group(sg_id)
+            for r in sg.security_group_rules or []:
+                if (
+                    r.get("protocol") == "tcp"
+                    and r.get("port_range_min") == port_num
+                    and r.get("port_range_max") == port_num
+                    and r.get("direction") == "ingress"
+                ):
+                    c.network.delete_security_group_rule(r["id"], ignore_missing=True)
 
     def creer_groupe(
         self, nom: str, description: str | None = None, projet_id: str | None = None

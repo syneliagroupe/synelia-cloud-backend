@@ -246,36 +246,63 @@ async def lister_espaces_plateforme(ctx: Contexte = Depends(exige_admin("capacit
     return [m.EspaceCloud.model_validate(r.donnees) for r in lignes if r.org_id is None]
 
 
+# ── IA ───────────────────────────────────────────────────────────────────────
+@router.get("/ia")
+async def synthese_ia_plateforme(ctx: Contexte = Depends(exige_admin("capacity.manage"))) -> Any:
+    """Agrégats IA réels, toutes organisations. Aucun journal d'usage par modèle n'existe : les
+    jetons viennent des compteurs des clés IA (`jetonsConsommes`)."""
+    orgs = {o.id: o.nom for o in (await ctx.session.execute(select(Organisation))).scalars()}
+    par_org: dict[str, dict[str, Any]] = {}
+
+    def ligne(org_id: str | None) -> dict[str, Any]:
+        return par_org.setdefault(
+            org_id or "",
+            {
+                "org": orgs.get(org_id or "", "Plateforme"),
+                "agents": 0,
+                "publies": 0,
+                "flux": 0,
+                "cles": 0,
+                "jetons": 0,
+            },
+        )
+
+    par_modele: dict[str, int] = {}
+    for r in await service.lignes_type(ctx, "agent_ia"):
+        ligne(r.org_id)["agents"] += 1
+        ligne(r.org_id)["publies"] += r.donnees.get("statut") == "publie"
+        par_modele[r.donnees.get("modele", "")] = par_modele.get(r.donnees.get("modele", ""), 0) + 1
+    for r in await service.lignes_type(ctx, "flux_ia"):
+        ligne(r.org_id)["flux"] += 1
+    for r in await service.lignes_type(ctx, "cle_ia"):
+        ligne(r.org_id)["cles"] += 1
+        ligne(r.org_id)["jetons"] += int(r.donnees.get("jetonsConsommes") or 0)
+    modeles = [
+        {
+            "slug": r.donnees.get("slug"),
+            "nom": r.donnees.get("nom"),
+            "hebergement": r.donnees.get("hebergement"),
+            "agents": par_modele.get(r.donnees.get("slug"), 0),
+        }
+        for r in await service.lignes_type(ctx, "modele_ia")
+    ]
+    return {
+        "jetons": sum(o["jetons"] for o in par_org.values()),
+        "organisations": sorted(par_org.values(), key=lambda o: -o["agents"]),
+        "modeles": sorted(modeles, key=lambda x: -x["agents"]),
+    }
+
+
 # ── conformité ───────────────────────────────────────────────────────────────
-REFERENTIELS = [
-    {"nom": "ISO 27001", "statut": "partiel", "ecarts": 2},
-    {"nom": "SOC 2 Type II", "statut": "conforme", "ecarts": 0},
-    {
-        "nom": "Réglement général sur la protection des données (RGPD)",
-        "statut": "partiel",
-        "ecarts": 1,
-    },
-    {"nom": "HDS", "statut": "non_conforme", "ecarts": 3},
-    {"nom": "SWIFT CSP", "statut": "conforme", "ecarts": 0},
-    {"nom": "PCI DSS", "statut": "partiel", "ecarts": 4},
-]
-
-
 @router.get(
     "/conformite", response_model=m.AdminConformiteGetResponse, response_model_exclude_none=True
 )
 async def obtenir_conformite_plateforme(
     ctx: Contexte = Depends(exige_admin("compliance.export")),
 ) -> Any:
-    fenetres = await depot_fenetre.tous(ctx)
-    ouvertes = sum(1 for f in fenetres if f.statut in ("planifiee", "en_cours"))
-    referentiels = []
-    for ref in REFERENTIELS:
-        row = dict(ref)
-        if row["nom"] == "ISO 27001" and ouvertes:
-            row["ecarts"] = max(row["ecarts"], ouvertes)
-        referentiels.append(row)
-    return {"referentiels": referentiels}
+    # Aucune évaluation de référentiel (ISO 27001, SOC 2…) n'est réalisée : liste vide plutôt
+    # que des scores inventés.
+    return {"referentiels": []}
 
 
 @router.get(
@@ -758,14 +785,14 @@ async def _instance_parc(ctx: Contexte, r: Ressource, orgs: dict[str, str]) -> d
         "orgId": r.org_id or "",
         "orgNom": orgs.get(r.org_id) if r.org_id else None,
         "catalogSlug": d.get("catalogSlug"),
-        "serviceNom": d.get("serviceNom"),
+        "serviceNom": d.get("serviceNom") or d.get("nom"),
         "mode": d.get("mode", "mutualise"),
         "site": d.get("site", "ABJ"),
         "version": d.get("version", "1.0.0"),
-        "sieges": d.get("sieges") or "0/0",
+        "sieges": d.get("sieges") or f"{d.get('siegesUtilises', 0)}/{d.get('siegesSouscrits', 0)}",
         "sante": d.get("sante", "ok"),
         "derniereSauvegarde": d.get("derniereSauvegarde"),
-        "derniereMaj": d.get("derniereMaj"),
+        "derniereMaj": d.get("derniereMaj") or str(d.get("createdAt") or "")[:10] or None,
     }
 
 
@@ -1013,7 +1040,15 @@ async def lister_espaces_organisation(
     org = await ctx.session.get(Organisation, orgId)
     if org is None:
         raise erreurs.introuvable("Organisation", orgId)
-    return await depot_espace.tous(ctx, org_id=orgId)
+    # `usage` lit les VM/volumes de `ctx.org_id` : sans ce contexte, l'usage affiché serait toujours 0.
+    from synelia.modules.espaces.service import usage as usage_espace
+    from synelia.modules.organisations.service import contexte_pour
+
+    ctx_org = contexte_pour(ctx, orgId)
+    return [
+        e.model_copy(update={"usage": m.Quota(**await usage_espace(ctx_org, e.id))})
+        for e in await depot_espace.tous(ctx, org_id=orgId)
+    ]
 
 
 @router.get(
@@ -1217,7 +1252,7 @@ async def mettre_a_jour_incident(
     "/statut/services", response_model=list[m.StatutService], response_model_exclude_none=True
 )
 async def lister_statut_services(ctx: Contexte = Depends(exige_admin("capacity.manage"))) -> Any:
-    return await depot_statut_service.tous(ctx)
+    return await service.statut_services_effectif(ctx)
 
 
 @router.put(
@@ -1266,6 +1301,12 @@ async def obtenir_tableau_de_bord_plateforme(
     )
     espaces = len(await service.lignes_type(ctx, "espace"))
     projets = len(await service.lignes_type(ctx, "projet"))
+    from synelia.modules.facturation.service import revenu_mensuel
+
+    ids_actives = (
+        await ctx.session.execute(select(Organisation.id).where(Organisation.statut == "active"))
+    ).scalars()
+    ca_mensuel = sum([(await revenu_mensuel(ctx, i))[0] for i in ids_actives])
     jobs_echec = int(
         (
             await ctx.session.execute(
@@ -1288,15 +1329,42 @@ async def obtenir_tableau_de_bord_plateforme(
         "accesRefuses24h": await service.acces_refuses_24h(ctx),
         "jobsEnEchec": jobs_echec,
         "ticketsSlaRisque": await service.tickets_sla_risque(ctx),
-        # `caMensuel` reste à 0 : la facturation (module `facturation`) n'agrège pas encore
-        # de revenu récurrent plateforme calculé — hors périmètre de ce module.
-        "caMensuel": 0,
+        "caMensuel": ca_mensuel,
     }
+
+
+@router.get("/facturation/ventilation")
+async def ventilation_revenu_plateforme(
+    ctx: Contexte = Depends(exige_admin("invoice.view")),
+) -> Any:
+    from synelia.modules.facturation import metrologie
+    from synelia.modules.facturation.service import offre_souscrite
+    from synelia.modules.organisations.service import contexte_pour
+
+    ids = (
+        (await ctx.session.execute(select(Organisation.id).where(Organisation.statut == "active")))
+        .scalars()
+        .all()
+    )
+    familles = {"Abonnements": 0, "Calcul": 0, "Stockage": 0, "Réseau": 0}
+    for i in ids:
+        for p in await metrologie.postes(contexte_pour(ctx, i)):
+            for f in ("Calcul", "Stockage", "Réseau"):
+                familles[f] += p[f]
+        offre = await offre_souscrite(ctx, i)
+        familles["Abonnements"] += offre.prix if offre else 0
+    total = sum(familles.values())
+    return [
+        {"famille": f, "montant": v, "pct": round(100 * v / total, 1)}
+        for f, v in sorted(familles.items(), key=lambda x: -x[1])
+        if v
+    ]
 
 
 # ── tickets ──────────────────────────────────────────────────────────────────
 def _ticket(r: Ressource) -> m.Ticket:
-    return m.Ticket.model_validate(r.donnees)
+    t = m.Ticket.model_validate(r.donnees)
+    return t.model_copy(update={"slaRestantMin": service.sla_restant_min(r.donnees)})
 
 
 async def _charger_ticket(ctx: Contexte, ticketId: str) -> tuple[Ressource, m.Ticket]:  # noqa: N803

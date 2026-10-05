@@ -89,6 +89,11 @@ async def test_cycle_ticket(client_org):
     r = await client_org.post(f"/v1/support/tickets/{tid}/escalade", json={"motif": "Encore"})
     assert r.status_code == 409
 
+    r = await client_org.post(
+        f"/v1/support/tickets/{tid}/messages", json={"contenu": "Réglé.", "cloture": True}
+    )
+    assert r.json()["statut"] == "resolu" and "slaRestantMin" not in r.json()
+
 
 async def test_verification_sans_auth_interdite(client_org):
     # `/support/tickets` liste les tickets d'une organisation : sans jeton, l'API doit

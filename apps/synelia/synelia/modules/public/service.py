@@ -353,85 +353,46 @@ PAGES_LEGALES = {
     },
 }
 
-SOUVERAINETE = {
-    "niveaux": [
-        {
-            "niveau": "Données",
-            "titre": "Les données restent en Côte d'Ivoire",
-            "description": "Hébergement exclusif à Abidjan (tier III) et Grand-Bassam (en construction), sous juridiction ivoirienne.",
-            "atteint": True,
-        },
-        {
-            "niveau": "Logiciels",
-            "titre": "Socle open source",
-            "description": "OpenStack, Nextcloud, Odoo, WordPress : le code reste auditable et reproductible.",
-            "atteint": True,
-        },
-        {
-            "niveau": "Compétences",
-            "titre": "Équipes locales",
-            "description": "Ingénierie, support et maintenance assurés par des équipes basées à Abidjan.",
-            "atteint": True,
-        },
-    ],
-    "trajectoireSortie": [
-        {
-            "backend": "Microsoft 365",
-            "part": "10%",
-            "cible": "Office suite open source",
-            "avancement": 20.0,
-        },
-        {
-            "backend": "Google Workspace",
-            "part": "8%",
-            "cible": "Nextcloud + Collabora",
-            "avancement": 30.0,
-        },
-        {"backend": "Salesforce", "part": "5%", "cible": "CRM open source", "avancement": 15.0},
-    ],
-    "hebergementDonnees": "Côte d'Ivoire (Abidjan et Grand-Bassam)",
-    "juridiction": "Côte d'Ivoire — Loi n°2013-450 (données à caractère personnel)",
-    "sousTraitants": [{"nom": "ARTCI", "role": "Autorité de régulation", "pays": "Côte d'Ivoire"}],
-}
 
-DATACENTERS = [
-    {
-        "code": "ABJ-01",
-        "nom": "Abidjan Tier III",
-        "ville": "Abidjan",
-        "site": "ABJ",
-        "operateur": "Synelia Cloud",
-        "certifications": ["Tier III", "ISO 27001"],
-        "energie": "Double alimentation, onduleurs + groupes",
-        "redondance": "N+1",
-        "capacite": "1,2 MW",
-        "latencesMs": [
-            {"vers": "Abidjan", "ms": 5},
-            {"vers": "Paris", "ms": 78},
-            {"vers": "Lagos", "ms": 45},
+def souverainete(sites: list[dict[str, Any]], backends: list[Any]) -> dict[str, Any]:
+    """Page souveraineté dérivée du back-office : sites physiques et socles réellement déclarés."""
+    villes = " et ".join(s["ville"] for s in sites) or "la Côte d'Ivoire"
+    capacite = sum(b.capacite.vcpu for b in backends) or 1
+    return {
+        "niveaux": [
+            {
+                "niveau": "Données",
+                "titre": "Les données restent en Côte d'Ivoire",
+                "description": f"Hébergement à {villes}, sous juridiction ivoirienne.",
+                "atteint": all(b.souverain for b in backends),
+            },
+            {
+                "niveau": "Logiciels",
+                "titre": "Socle open source",
+                "description": "OpenStack, Nextcloud, Odoo, WordPress : le code reste auditable et reproductible.",
+                "atteint": True,
+            },
+            {
+                "niveau": "Compétences",
+                "titre": "Équipes locales",
+                "description": "Ingénierie, support et maintenance assurés par des équipes basées à Abidjan.",
+                "atteint": True,
+            },
         ],
-    },
-    {
-        "code": "GBM-01",
-        "nom": "Grand-Bassam Tier IV",
-        "ville": "Grand-Bassam",
-        "site": "GBM",
-        "operateur": "Synelia Cloud",
-        "certifications": ["Tier IV"],
-        "energie": "Triple alimentation",
-        "redondance": "2N+1",
-        "capacite": "2 MW",
-        "latencesMs": [{"vers": "Abidjan", "ms": 20}, {"vers": "Paris", "ms": 70}],
-    },
-]
+        "trajectoireSortie": [
+            {
+                "backend": b.code,
+                "part": f"{round(100 * b.capacite.vcpu / capacite)}%",
+                "cible": "Socle souverain open source",
+                "avancement": 0.0,
+            }
+            for b in backends
+            if not b.souverain
+        ],
+        "hebergementDonnees": f"Côte d'Ivoire ({villes})",
+        "juridiction": "Côte d'Ivoire — Loi n°2013-450 (données à caractère personnel)",
+    }
 
-COUVERTURE = [
-    {"site": "ABJ", "ville": "Abidjan", "latenceMs": 5.0, "fiabilitePct": 99.98},
-    {"site": "ABJ", "ville": "Yamoussoukro", "latenceMs": 12.0, "fiabilitePct": 99.95},
-    {"site": "ABJ", "ville": "Bouaké", "latenceMs": 18.0, "fiabilitePct": 99.9},
-    {"site": "GBM", "ville": "Grand-Bassam", "latenceMs": 3.0, "fiabilitePct": 99.99},
-    {"site": "GBM", "ville": "Abidjan", "latenceMs": 20.0, "fiabilitePct": 99.9},
-]
 
 ETUDES_CAS = [
     {
@@ -506,16 +467,9 @@ SLA_ENGAGEMENTS = [
     },
 ]
 
-PRIX_UNITAIRES = {
-    "vcpu_heure": 25,
-    "ram_go_heure": 12,
-    "stockage_to_jour": 1500,
-    "ip_publique_jour": 300,
-}
-
 HYPOTHESES = [
     "Base HT, hors TVA (18 %).",
-    "Les prix vCPU/RAM sont horaires ; le stockage est facturé à la journée.",
+    "Tous les prix unitaires sont mensuels ; la consommation est proratisée au jour (30 j).",
     "Les gabarits sont facturés au mois calendaire, proratisés au premier du mois.",
 ]
 
@@ -558,6 +512,8 @@ def familles_tarifs() -> list[dict[str, Any]]:
     par_famille: dict[str, dict[str, Any]] = {}
     for g in GABARITS:
         f = g["famille"]
+        if f == "gpu":  # aucune carte GPU sur cette plateforme
+            continue
         fam = par_famille.setdefault(f, {"code": f, "nom": f, "description": None, "offres": []})
         fam["offres"].append(
             {

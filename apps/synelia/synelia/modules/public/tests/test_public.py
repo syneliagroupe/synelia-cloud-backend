@@ -58,7 +58,7 @@ async def test_datacenters(client_org):
     r = await client_org.get("/v1/public/datacenters", headers=PUB)
     assert r.status_code == 200
     codes = {d["code"] for d in r.json()}
-    assert "ABJ-01" in codes and "GBM-01" in codes
+    assert codes == {"ABJ"}
 
 
 async def test_disponibilite_domaine(client_org):
@@ -83,7 +83,7 @@ async def test_offres(client_org):
 
 
 async def test_offres_slug(client_org):
-    r = await client_org.get("/v1/public/offres/espace-standard", headers=PUB)
+    r = await client_org.get("/v1/public/offres/espace-pro", headers=PUB)
     assert r.status_code == 200, r.text
     assert r.json()["categorie"] == "espace_cloud"
     r = await client_org.get("/v1/public/offres/inconnu", headers=PUB)
@@ -143,4 +143,4 @@ async def test_tarifs(client_org):
     r = await client_org.get("/v1/public/tarifs", headers=PUB)
     assert r.status_code == 200
     assert len(r.json()["familles"]) >= 1
-    assert "vcpu_heure" in r.json()["tarifsUnitaires"]
+    assert "vcpu_mois" in r.json()["tarifsUnitaires"]

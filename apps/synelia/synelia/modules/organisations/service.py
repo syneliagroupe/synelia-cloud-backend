@@ -49,7 +49,12 @@ async def nb_utilisateurs(ctx: Contexte, org_id: str) -> int:
 
 
 async def vers_contrat(ctx: Contexte, o: Organisation) -> dict[str, Any]:
+    from synelia.modules.facturation.service import revenu_mensuel
+
+    ca, vcpu = await revenu_mensuel(ctx, o.id)
     return {
+        "caMensuel": ca,
+        "consommationVcpu": vcpu,
         "id": o.id,
         "nom": o.nom,
         "pays": o.pays or "CI",
@@ -88,6 +93,7 @@ async def impayes(ctx: Contexte, org_id: str) -> list[m.Impaye]:
             continue
         out.append(
             m.Impaye(
+                id=f.numero,
                 org=f.orgId,
                 orgId=f.orgId,
                 facture=f.numero,

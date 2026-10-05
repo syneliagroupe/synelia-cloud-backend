@@ -350,7 +350,7 @@ async def creer_environnement(
 ) -> Any:
     app_id = corps.appId
     parent_id = app_id
-    domaine_defaut = f"{corps.nom}.synelia.app"
+    domaine_defaut = f"{corps.nom}.{ctx.reglages.domaine_apps_defaut}"
     if app_id:
         app = await depot_app.obtenir(ctx, app_id)
         domaine_defaut = f"{corps.nom}.{app.domainePrincipal}"

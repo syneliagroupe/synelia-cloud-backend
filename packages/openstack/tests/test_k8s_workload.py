@@ -28,10 +28,8 @@ def test_certificat_manquant_devient_un_424_pas_un_500(monkeypatch):
             HttpException(f"No ClusterCertificate found for {cluster_id}")
         ),
     )
-    monkeypatch.setattr(
-        "synelia_openstack.fabrique.connexion",
-        lambda: SimpleNamespace(container_infrastructure_management=cim),
-    )
+    conn = SimpleNamespace(container_infrastructure_management=cim)
+    monkeypatch.setattr("synelia_openstack.fabrique.connexion_magnum", lambda: conn)
     monkeypatch.setattr("synelia_openstack.k8s_workload.time.sleep", lambda _: None)
 
     with pytest.raises(AppError) as exc_info:

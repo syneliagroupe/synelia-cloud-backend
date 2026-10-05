@@ -44,6 +44,11 @@ async def installer_site_web(
     corps: m.WebSitesPostRequest, ctx: Contexte = Depends(exige("service.admin"))
 ) -> Any:
     hebergement = await depot.obtenir(ctx, corps.hebergementId)
+    pris = await depot_sites.tous(
+        ctx, filtre=lambda s: s.hote == corps.site.hote and s.statut != "suspendu"
+    )
+    if pris:
+        raise erreurs.conflit(f"« {corps.site.hote} » porte déjà une application.")
     site = construire_site(
         ctx, corps.hebergementId, corps.site, preprod=bool(corps.site.preproduction)
     )

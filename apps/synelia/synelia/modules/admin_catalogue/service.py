@@ -17,6 +17,8 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from synelia_db.modeles import Ressource
 
+from synelia.modules.facturation.metrologie import mensuel
+
 CATALOGUE_REEL: list[dict[str, Any]] = [
     {
         "id": "offre-espace-starter",
@@ -62,7 +64,7 @@ CATALOGUE_REEL: list[dict[str, Any]] = [
         "categorie": "web",
         "specs": "1 vCPU · 2 Go · 40 Go — PHP, MariaDB",
         "caracteristiques": ["FTP/SFTP", "Sauvegarde quotidienne"],
-        "prix": 8000,
+        "prix": mensuel(1, 2, 40),
         "statut": "publiee",
         "souscriptionsActives": 0,
     },
@@ -73,7 +75,7 @@ CATALOGUE_REEL: list[dict[str, Any]] = [
         "categorie": "web",
         "specs": "2 vCPU · 4 Go · 80 Go — PHP, MariaDB",
         "caracteristiques": ["FTP/SFTP", "Sauvegarde quotidienne", "SSL gratuit"],
-        "prix": 18000,
+        "prix": mensuel(2, 4, 80),
         "populaire": True,
         "statut": "publiee",
         "souscriptionsActives": 0,
@@ -85,7 +87,7 @@ CATALOGUE_REEL: list[dict[str, Any]] = [
         "categorie": "web",
         "specs": "4 vCPU · 8 Go · 160 Go — PHP, MariaDB",
         "caracteristiques": ["FTP/SFTP", "Sauvegarde horaire", "SSL gratuit"],
-        "prix": 35000,
+        "prix": mensuel(4, 8, 160),
         "statut": "publiee",
         "souscriptionsActives": 0,
     },

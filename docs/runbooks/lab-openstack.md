@@ -115,6 +115,22 @@ Ready, LB ACTIVE/ONLINE → `openstack coe cluster show capi-fix-verify` = **CRE
 `SYNELIA_OS_APPLICATION_CREDENTIAL_ID/SECRET` (créer avec `openstack application credential create synelia`),
 `uv sync --extra openstack`. Depuis un poste distant : tunnel SSH + `SYNELIA_OS_ENDPOINT_OVERRIDES='{"compute":"http://127.0.0.1:8774/v2.1"}'`.
 
+**Magnum / multi-clusters (2026-09-28)** : les clients créent **autant de clusters qu'ils veulent**
+via `POST /v1/kubernetes` (une ressource `ClusterK8s` → un cluster Magnum, `magnum_cluster_id`
+en secret). Une AC Keystone ne peut pas appeler Magnum create (403 « nested application
+credentials ») : le backend utilise `SYNELIA_MAGNUM_OS_USERNAME` / `SYNELIA_MAGNUM_OS_PASSWORD`
+(compte `admin` Kolla). Kubeconfig admin par cluster : CSR Magnum si `/certificates` répond, sinon
+repli SSH ctrl1 (`SYNELIA_CAPI_MANAGEMENT_SSH_*`, secret `{stack_id}-kubeconfig` dans
+`magnum-system`). **`SYNELIA_PAAS_CLUSTER_ID`** reste **optionnel** et distinct : cible unique
+du module `k8s_workload` (projets en cible `k8s`, observabilité PaaS), pas la liste des clusters
+clients. Provisioning manuel : `tools/lab/provision-paas-cluster.sh` puis
+`./tools/paas-bootstrap.sh` si ce cluster sert aussi de PaaS partagé.
+
+Fichier lab `SYNELIA_PAAS_KUBECONFIG_PATH` (monté en `:ro` dans `docker-compose.override.yml`) :
+doit être lisible par l'utilisateur `synelia` (uid 1001) du conteneur API/worker — ex.
+`chmod 644 /run/synelia/paas.kubeconfig` sur l'hôte. Sans ça, le backend retombe sur Magnum
+`/certificates` (souvent cassé sur ce lab) au lieu du kubeconfig bootstrap.
+
 Depuis dev01 lui-même (pas besoin de tunnel) : `192.168.26.0/24` est directement routé — `ping`/`curl`/
 `openstack` (CLI, `~/.config/synelia/admin-openrc.sh`) fonctionnent tels quels vers ctrl1 et les VIP
 internes kolla (`192.168.26.234`), sans SSH ni tunnel.
@@ -194,6 +210,41 @@ La commande affiche les `SYNELIA_VPS_ZONE_*` à recopier dans `.env`. Sur Octavi
 arrêter `octavia_worker` / `octavia_housekeeping` sur ctrl1 (`192.168.26.235`) le temps de la
 création du LB, puis reprendre les workers (cf. § Octavia ci-dessous).
 
+### Tout NOUVEAU load balancer passe en `ERROR` (Kubernetes, hébergement, LB client) — quota SG du projet `service`
+
+Symptôme (2026-09-30) : les LB existants restent `ACTIVE`, mais chaque création (kubeapi d'un cluster
+Magnum, LB client, LB d'hébergement) finit `ERROR`/`OFFLINE`. Dans
+`/var/log/kolla/octavia/octavia-worker.log` sur ctrl1 : `ConflictException: 409 … Quota exceeded for
+resources: ['security_group']` (`update_vip_sg`). Octavia crée un groupe de sécurité `lb-<id>` par LB
+dans le projet `service`, dont le quota Neutron par défaut est **10**, et les `lb-*` de LB détruits en
+`ERROR` n'étaient jamais purgés.
+
+Correctif appliqué : quota `security_groups=100` / `security_group_rules=1000` sur le projet `service`
+(`connexion_magnum().network.update_quota(<id projet service>, …)`), puis suppression des `lb-*` sans LB
+vivant ni port. Vérifié : un LB neuf passe `ACTIVE/ONLINE` en ~45 s. À surveiller :
+`GET /v2.0/quotas/<service>/details` → `security_groups.used`.
+
+## Domaine applicatif public (projet k8s → nom `demo-*` → dev01) — 2026-09-30
+
+Chaîne vérifiée de bout en bout par le portail (fiche du service → onglet Domaines → « Brancher mon
+domaine ») : le DNS du domaine pointe sur dev01 (`domaine_dns_entree_a`, A ou CNAME), le job
+`domaine_routage.appliquer` (`projets/service.py`) fait : (1) vérif DNS, (2) `K8sWorkloadReel.exposer_service`
+→ Service `svc-<id>-ext` de type LoadBalancer (OCCM crée LB Octavia + IP flottante, ~1-2 min), (3) vhost
+Apache `/etc/httpd/conf.d/app-domaine-<hote>.conf` proxifiant vers l'IP flottante (`projets/entree_dev01.py`),
+(4) `certbot --webroot` + vhost `-le-ssl` + redirection 308 HTTP→HTTPS. Suppression du domaine, du service ou
+du projet : vhost, certificat, Service `-ext` (donc LB + FIP) retirés.
+
+Prérequis côté hôte/compose (le code est cuit dans l'image) :
+- `docker-compose.override.yml` monte `./apps` et `./packages` (ro) sur `api`/`worker` → `docker restart`
+  suffit pour charger un changement de code ; sinon `docker compose up -d api worker`.
+- Clé SSH d'entrée : `/root/.ssh/synelia_edge` (propriétaire uid 1001, 0600), publique dans
+  `authorized_keys` de root@dev01, montée en `/run/dev01/id_rsa`. Kubeconfig PaaS monté en
+  `/run/synelia/paas.kubeconfig`.
+- Un Pod doit pouvoir se planifier : les services PaaS posent des `requests` réduits (cpu ≈ limit/10,
+  mémoire limit/2), sinon « Insufficient cpu » sur le worker de 2 vCPU.
+- Dans le wizard projet en mode API, aucun cluster dédié n'est créé : le projet est un namespace du cluster PaaS.
+- `demo-28d14e3a.com` a déjà un wildcard vers le LB d'hébergement : utiliser un autre `demo-*` (ex. `demo-0619db8a.com`).
+
 ### Octavia `vps-zone-lb` bloqué en `PENDING_UPDATE` / pools 409 immutable
 
 Symptôme : `hebergement.creer` échoue à l'étape pool L7 avec « Load Balancer … is immutable ».
@@ -227,6 +278,19 @@ cd synelia-cloud-backend
 # mot de passe ctrl1 : runbook § accès SSH (hors dépôt)
 ./scripts/lab/verify-web-octavia.sh h-01a0ca40.cloud.dev01.ovh.smile.ci
 ```
+
+**Domaine client (`demo-*.com`, DNS A → `198.244.179.212`)** : Octavia connaît le vrai
+`Host()` (ex. `demo-28d14e3a.com`), mais Apache sur dev01 ne proxyait que
+`*.cloud.dev01.ovh.smile.ci` (`/etc/httpd/conf.d/vps-wildcard.conf` → FIP Octavia, souvent
+`192.168.20.224`). Sans vhost dédié, le trafic public tombe sur le vhost SSL par défaut → **503**.
+Depuis vm-admin :
+
+```bash
+DEMO_DOMAIN=demo-28d14e3a.com VPS_ZONE_LB_FIP=192.168.20.224 \
+  ./scripts/dev01/install-vps-web-entree-domaine.sh
+```
+
+(`provision-demo-web-stack.py` appelle ce script en fin de parcours sauf `SKIP_DEV01_APACHE=1`.)
 
 **Membre de pool injoignable (503 / ERROR / timeout vers la VM)** : le groupe de sécurité du
 serveur d'hébergement n'autorise souvent que le SSH (22). Ouvrir le **80/TCP** sur la VM :
@@ -389,6 +453,12 @@ dev01, `127.0.0.1:8443 → 443`, cf. `zimbra/docker-compose.yml`) :
 - Recharger Apache : `sudo kill -USR1 $(cat /run/httpd/httpd.pid)` (`systemctl reload httpd`
   échoue sur dev01, cf. § console).
 
+**Pièges (lab 2026-10-01)** : (1) nommer les fichiers `aa-webmail.cloud.dev01.ovh.smile.ci*.conf` — `vps-wildcard.conf`
+(`ServerAlias *.cloud.dev01…`) se charge avant `webmail*` et capte sinon l'hôte (ACME 404 / 503) ; (2) Zimbra n'écoute que
+sur `127.0.0.1:8443` de vm-admin et firewalld refuse dev01 : publier via Docker, sans toucher à firewalld —
+`docker run -d --restart=always --name webmail-fwd --network synelia-cloud-backend_default -p 192.168.26.240:8443:8443 alpine/socat TCP-LISTEN:8443,fork,reuseaddr TCP:zimbra-all:443`,
+et le vhost proxie vers `https://192.168.26.240:8443`.
+
 **Vérification** : `curl -ksI https://webmail.cloud.dev01.ovh.smile.ci/ | head -3` doit répondre
 depuis Internet (login Zimbra), puis `POST /v1/web/emails/{id}/ouverture` doit rendre un lien
 `https://webmail.cloud.dev01.ovh.smile.ci/service/preauth?authtoken=…` qui connecte sans mot de
@@ -443,3 +513,19 @@ déposé/relu dans le stockage objet en mémoire (le flux export→import reste 
 **À valider en lab** (VPS non routable depuis le poste de test) : créer une base, y écrire une
 ligne via `docker compose exec`, exporter, supprimer la base, importer l'archive, vérifier la
 ligne restaurée — pour chacun des 4 moteurs concernés.
+
+## Dépannage de démo (2026-10-01)
+
+- **Load balancer Octavia bloqué** (`PENDING_UPDATE`/`ERROR`, jobs d'hébergement ou de projet qui
+  n'avancent plus) : `CTRL1_ROOT_PASSWORD=… scripts/fix-octavia-lb.sh`, puis relancer le job.
+- **Domaine par défaut des environnements/aperçus** : `SYNELIA_DOMAINE_APPS_DEFAUT` (défaut
+  `synelia.app`). Le poser sur un domaine demo* dont la zone OVH pointe vers dev01.
+- **Création d'hébergement Web** : vérifiée de bout en bout (fiche d'un domaine → « Attacher un
+  hébergement » → job `hebergement.creer` `done`). Un échec « validation error for ServeurBases »
+  signale un contrat `moteur` plus étroit que les cinq moteurs posés par cloud-init.
+- **Supprimer un Espace Cloud** exige qu'il soit vide (`409 espace_non_vide`).
+- **Tout le réseau flottant `192.168.20.0/24` injoignable depuis dev01 (503 public, `ping 192.168.20.9`
+  KO, API qui ne joint plus le cluster PaaS)** : sur l'hyperviseur dev01, le vNIC externe de ctrl1
+  (`virsh domiflist openstack-lab_ctrl1` → source `smile320`, ex. `vnet992`) peut n'être plus
+  rattaché au pont. `bridge link | grep vnet992` vide → `ip link set vnet992 master smile320`,
+  attendre ~30 s (STP listening → forwarding).

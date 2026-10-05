@@ -186,6 +186,9 @@ class ComputeSimule:
     def statut_serveur(self, serveur_id: str, identifiants: dict[str, Any] | None = None) -> str:
         return "ACTIVE"
 
+    def ip_privee_serveur(self, serveur_id: str, identifiants: dict[str, Any] | None = None) -> str | None:
+        return f"10.0.0.{hash(serveur_id) % 250 + 2}"
+
     def console(self, serveur_id: str) -> str:
         return f"https://console.synelia.cloud/novnc/{serveur_id}?token={nouvel_id()}"
 
@@ -326,6 +329,14 @@ class ComputeOpenStack(ComputeSimule):
             # application pour la retrouver. On la supprime nous-mêmes, avec la même
             # connexion que celle qui l'a créée (le bon projet OpenStack, ex. Espace Cloud
             # scellé par application credential), avant de relayer l'erreur d'origine.
+            detail = str(exc)
+            try:
+                failed = c.compute.get_server(s.id)
+                fault = getattr(failed, "fault", None) or {}
+                if isinstance(fault, dict) and fault.get("message"):
+                    detail = f"{detail} — {fault['message']}"
+            except Exception:  # noqa: BLE001
+                pass
             try:
                 c.compute.delete_server(s.id, ignore_missing=True)
                 c.compute.wait_for_delete(c.compute.get_server(s.id), wait=120)
@@ -335,7 +346,7 @@ class ComputeOpenStack(ComputeSimule):
 
             if isinstance(exc, _e.AppError):
                 raise
-            raise traduire(exc, "Machine virtuelle") from None
+            raise traduire(Exception(detail), "Machine virtuelle") from None
         ip = next(
             (
                 a["addr"]
@@ -534,6 +545,21 @@ class ComputeOpenStack(ComputeSimule):
         c = self._connexion_pour(identifiants)
         srv = c.compute.find_server(serveur_id, ignore_missing=True)
         return str(srv.status) if srv else "absente"
+
+    def ip_privee_serveur(self, serveur_id: str, identifiants: dict[str, Any] | None = None) -> str | None:
+        c = self._connexion_pour(identifiants)
+        srv = c.compute.find_server(serveur_id, ignore_missing=True)
+        if not srv:
+            return None
+        return next(
+            (
+                a["addr"]
+                for nets in (srv.addresses or {}).values()
+                for a in nets
+                if a.get("version") == 4
+            ),
+            None,
+        )
 
     # Vhost Apache public sur dev01, reverse-proxy TLS (Let's Encrypt) vers le
     # nova-novncproxy interne du lab (VIP kolla 192.168.26.234:6080, une seule instance pour

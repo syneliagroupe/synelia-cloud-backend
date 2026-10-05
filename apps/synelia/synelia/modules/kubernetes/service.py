@@ -145,19 +145,13 @@ def _mapper_statut_magnum(statut_amont: str) -> str | None:
     return None
 
 
-# Fenêtre bornée de sondage Magnum, tentée juste avant la dernière étape du catalogue
-# `k8s.create` (« Publier le kubeconfig », cf. workflows.json) : `POST /kubernetes` répondait
-# `done`/toutes étapes `ok` en ~1 s sans jamais interroger Magnum, y compris quand la création
-# amont échoue vite (ex. le 403 Keystone d'imbrication d'Application Credential — limitation de
-# plateforme déjà connue, cf. `_mapper_statut_magnum`) : un appelant qui ne regarde que le
-# travail concluait à tort au succès, la vérité (`degraded`) n'apparaissant qu'à une lecture
-# ultérieure du cluster (`reconcilier_statut`). Bornée à quelques dizaines de secondes — même
-# motif que `stockage.service._attendre_in_use` — pour capter cet échec structurel rapide sans
-# bloquer la requête HTTP sur les plusieurs minutes que prend un provisioning réel réussi
-# (celui-ci reste alors `provisioning`, `reconcilier_statut` prenant le relais à chaque lecture
-# suivante, comme avant ce correctif).
-_DELAI_CREATION_MAX_S = 45.0
-_DELAI_CREATION_SONDE_S = 3.0
+# Fenêtre de sondage Magnum de la dernière étape de `k8s.create` : un échec structurel (403
+# Keystone, quota) se voit en quelques secondes, mais un provisioning réussi prend ~6 min sur
+# ce lab. Avec 45 s, le travail restait `running` à vie (PauseHumaine) alors que le cluster
+# était déjà actif ; le travail s'exécute dans le worker (pas dans la requête HTTP), il peut
+# donc attendre la vraie issue — au-delà de 20 min seulement, il se met en pause.
+_DELAI_CREATION_MAX_S = 1200.0
+_DELAI_CREATION_SONDE_S = 10.0
 
 
 async def _attendre_issue_creation(mid: str) -> str:

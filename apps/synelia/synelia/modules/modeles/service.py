@@ -7,7 +7,7 @@ from synelia_kernel import argent
 
 from synelia.depot import Depot
 from synelia.deps.contexte import Contexte
-from synelia.modules.facturation.metrologie import PRIX
+from synelia.modules.facturation.metrologie import PRIX, mensuel
 
 depot = Depot(
     "modele_applicatif",
@@ -20,7 +20,6 @@ depot = Depot(
 )
 
 HEURES_MOIS = 730
-JOURS_MOIS = 30
 
 SEMENCES: list[m.ModeleApplicatif] = [
     m.ModeleApplicatif(
@@ -263,38 +262,38 @@ async def obtenir(ctx: Contexte, slug: str) -> m.ModeleApplicatif:
 
 def _ht(cpu: float, ram_go: float, disk_go: float, sieges: int) -> tuple[list[m.Ligne], int, float]:
     lignes: list[m.Ligne] = []
-    cpu_mensuel = int(cpu * PRIX["vcpu_heure"] * HEURES_MOIS)
+    cpu_mensuel = mensuel(cpu, 0)
     lignes.append(
         m.Ligne(
             libelle="Processeur",
             quantite=cpu,
             unite="vCPU",
-            prixUnitaire=int(PRIX["vcpu_heure"] * HEURES_MOIS),
+            prixUnitaire=PRIX["vcpu_mois"],
             total=cpu_mensuel,
         )
     )
-    ram_mensuel = int(ram_go * PRIX["ram_go_heure"] * HEURES_MOIS)
+    ram_mensuel = mensuel(0, ram_go)
     lignes.append(
         m.Ligne(
             libelle="Mémoire vive",
             quantite=round(ram_go, 1),
             unite="Go",
-            prixUnitaire=int(PRIX["ram_go_heure"] * HEURES_MOIS),
+            prixUnitaire=PRIX["ram_go_mois"],
             total=ram_mensuel,
         )
     )
-    disk_mensuel = int(disk_go * PRIX["stockage_to_jour"] * JOURS_MOIS)
+    disk_mensuel = mensuel(0, 0, disk_go)
     lignes.append(
         m.Ligne(
             libelle="Stockage",
-            quantite=round(disk_go, 1),
-            unite="Go",
-            prixUnitaire=int(PRIX["stockage_to_jour"] * JOURS_MOIS),
+            quantite=round(disk_go / 100, 2),
+            unite="100 Go",
+            prixUnitaire=round(PRIX["stockage_go_mois"] * 100),
             total=disk_mensuel,
         )
     )
     total_ht = cpu_mensuel + ram_mensuel + disk_mensuel
-    total_horaire = cpu * PRIX["vcpu_heure"] + ram_go * PRIX["ram_go_heure"]
+    total_horaire = (cpu * PRIX["vcpu_mois"] + ram_go * PRIX["ram_go_mois"]) / HEURES_MOIS
     if sieges and sieges > 0:
         siege_prix = 7500
         siege_total = siege_prix * sieges

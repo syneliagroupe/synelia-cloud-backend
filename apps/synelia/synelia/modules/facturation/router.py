@@ -495,51 +495,21 @@ async def obtenir_ventilation(
     periode: str | None = None,
     ctx: Contexte = Depends(exige("invoice.view", lecture=True)),
 ) -> Any:
-    vms = await Depot("vm", m.Vm).tous(ctx)
+    codes_espace = {e.id: e.code for e in await Depot("espace", m.EspaceCloud).tous(ctx)}
     lignes: dict[str, int] = {}
-
-    def ajouter(label: str, montant: int) -> None:
-        lignes[label] = lignes.get(label, 0) + montant
-
-    if axe == "famille":
-        # `Famille` = catégorie de coût (Calcul/Stockage/Réseau), pas le champ `famille`
-        # d'un gabarit VM (generique/calcul/memoire/gpu/economique) : le contrat documente
-        # les deux sous le même mot mais ce showback répond à « où part la dépense »,
-        # même découpage que la métrologie (`metrologie.consommation`).
-        for v in vms:
-            ajouter(
-                "Calcul",
-                tarification._prix_ressource(
-                    "vm", {"vcpu": v.vcpu, "ramGo": v.ramGo, "diskGo": 0}, 1
-                ),
-            )
-            ajouter("Stockage", tarification._prix_ressource("volume", {"tailleGo": v.diskGo}, 1))
-        volumes = await Depot("volume", m.Volume).tous(ctx)
-        for vol in volumes:
-            ajouter(
-                "Stockage", tarification._prix_ressource("volume", {"tailleGo": vol.tailleGo}, 1)
-            )
-        lbs = await Depot("load_balancer", m.LoadBalancer).tous(ctx)
-        ajouter("Réseau", metrologie.PRIX["lb_jour"] * 30 * len(lbs))
-        ips_publiques = sum(1 for v in vms for ip in v.ips if ip.type == "publique")
-        ajouter("Réseau", metrologie.PRIX["ip_publique_jour"] * 30 * ips_publiques)
-    else:
-        # `v.espaceId` seul est un identifiant technique (UUID) : sans résolution, la
-        # répartition interne « Par Espace Cloud » affichait cet UUID brut à la place du
-        # code lisible de l'Espace (constaté en direct via `/facturation/ventilation?axe=
-        # espace`) — même bug que si `application` était resté sur `applicationId` seul.
-        codes_espace = {e.id: e.code for e in await Depot("espace", m.EspaceCloud).tous(ctx)}
-        for v in vms:
-            if axe == "application":
-                label = v.applicationNom or v.applicationId or "Général"
-            elif axe == "site":
-                label = v.site or "Général"
-            else:
-                label = codes_espace.get(v.espaceId, v.espaceId) or "Général"
-            prix = tarification._prix_ressource(
-                "vm", {"vcpu": v.vcpu, "ramGo": v.ramGo, "diskGo": v.diskGo}, 1
-            )
-            ajouter(label, prix)
+    for p in await metrologie.postes(ctx):
+        if axe == "famille":
+            for famille in ("Calcul", "Stockage", "Réseau"):
+                lignes[famille] = lignes.get(famille, 0) + p[famille]
+            continue
+        if axe == "application":
+            label = p["application"]
+        elif axe == "site":
+            label = p["site"]
+        else:
+            label = codes_espace.get(p["espace"], p["espace"]) or p["application"]
+        label = label or "Général"
+        lignes[label] = lignes.get(label, 0) + p["Calcul"] + p["Stockage"] + p["Réseau"]
 
     total = sum(lignes.values())
     if not lignes:

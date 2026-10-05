@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import time
+from datetime import timedelta
 from typing import Any
 
 from synelia_contract import modeles as m
 from synelia_db.modeles import Travail
 from synelia_kernel import erreurs
+from synelia_kernel.dates import maintenant
 from synelia_kernel.ids import slug_court
 from synelia_openstack import fournisseur
 from synelia_openstack.compute import ComputeOpenStack, ComputeSimule
@@ -19,6 +21,7 @@ from synelia_openstack.ssh import SshReel, SshSimule
 
 from synelia.depot import Depot
 from synelia.deps.contexte import Contexte
+from synelia.modules.projets import entree_dev01
 from synelia.modules.web_hebergement import service as web_heb
 from synelia.travaux import Executeur, executeur
 
@@ -80,7 +83,7 @@ INGRESS = [
 # rendant multi-VM, sans réécrire cette partie.
 
 RACINE_DOCKER_VM_PROJET = "/srv/synelia"
-GABARIT_PALIER_VM_PROJET = "pro"  # 2 vCPU / 4 Go — taille unique pour l'instant, cf. ci-dessus
+GABARIT_PALIER_VM_PROJET = "starter"  # 1 vCPU / 2 Go — tient sur le lab quand le parc est saturé
 
 
 def amont_compute() -> ComputeSimule:
@@ -214,6 +217,92 @@ networks:
     return compose, routage
 
 
+async def _defaire_vm_projet_partielle(
+    ctx: Contexte, projet: m.Projet, secrets: dict[str, Any], zone: dict[str, Any]
+) -> None:
+    """Retire une VM de projet invalide (ERROR/absente) et efface les secrets pour reprovisionner."""
+    fip_id = secrets.get("vm_ssh_fip_id")
+    if fip_id:
+        await asyncio.to_thread(amont_identite().supprimer_ip_flottante, fip_id)
+    sid = secrets.get("vm_serveur_id")
+    if sid and (await asyncio.to_thread(amont_compute().statut_serveur, sid, zone)) != "absente":
+        await asyncio.to_thread(amont_compute().supprimer_serveur, sid)
+    n = amont_network()
+    pool_id = secrets.get("vm_lb_pool_id")
+    membre_id = secrets.get("vm_lb_membre_id")
+    if pool_id and membre_id:
+        await asyncio.to_thread(
+            n.supprimer_membre, pool_id, membre_id, loadbalancer_id=zone.get("lb_id")
+        )
+    if pool_id:
+        await asyncio.to_thread(n.supprimer_pool, pool_id, loadbalancer_id=zone.get("lb_id"))
+    await depot_projet.definir_secrets(
+        ctx,
+        projet.id,
+        {
+            "vm_serveur_id": "",
+            "vm_ip_privee": "",
+            "vm_ssh_fip_id": "",
+            "vm_ssh_ip": "",
+            "vm_lb_pool_id": "",
+            "vm_lb_membre_id": "",
+        },
+    )
+
+
+async def _completer_secrets_ssh_vm_projet(
+    ctx: Contexte,
+    projet: m.Projet,
+    secrets: dict[str, Any],
+    zone: dict[str, Any],
+) -> dict[str, Any]:
+    """Rattrape les projets créés avant le câblage FIP SSH / pool LB (secrets partiels)."""
+    cle = await web_heb.assurer_cle_ssh_zone(ctx)
+    serveur_id = secrets["vm_serveur_id"]
+    ip_privee = secrets.get("vm_ip_privee") or await asyncio.to_thread(
+        amont_compute().ip_privee_serveur, serveur_id, zone
+    )
+    if not ip_privee:
+        raise erreurs.amont_indisponible(
+            "projet (VM)",
+            "La VM du projet existe côté Nova mais sans adresse IPv4 privée — impossible de "
+            "la raccorder au load balancer partagé.",
+        )
+    maj: dict[str, Any] = {"vm_ip_privee": ip_privee}
+    if not secrets.get("vm_ssh_ip"):
+        fip = await asyncio.to_thread(amont_identite().creer_ip_flottante, zone.get("projet_id"))
+        ip_gestion = await asyncio.to_thread(
+            amont_identite().associer_ip_flottante, fip.get("id"), serveur_id
+        )
+        await asyncio.to_thread(amont_network().assurer_regle_ssh, serveur_id)
+        maj["vm_ssh_fip_id"] = fip.get("id") or ""
+        maj["vm_ssh_ip"] = ip_gestion or fip.get("adresse") or ""
+    n = amont_network()
+    if not secrets.get("vm_lb_pool_id"):
+        pool = await asyncio.to_thread(
+            n.creer_pool,
+            loadbalancer_id=zone.get("lb_id"),
+            nom=f"pool-projet-{slug_court(projet.id)}",
+        )
+        membre = await asyncio.to_thread(
+            n.ajouter_membre,
+            pool_id=pool["id"],
+            adresse=ip_privee,
+            port=80,
+            subnet_id=zone.get("sous_reseau_id"),
+            loadbalancer_id=zone.get("lb_id"),
+        )
+        maj["vm_lb_pool_id"] = pool["id"]
+        maj["vm_lb_membre_id"] = membre["id"]
+    await depot_projet.definir_secrets(ctx, projet.id, maj)
+    secrets_maj = {**secrets, **maj}
+    if maj.get("vm_ssh_ip") and cle.get("ssh_prive"):
+        await asyncio.to_thread(
+            _attendre_ssh_pret, amont_ssh(), secrets_maj["vm_ssh_ip"], cle.get("ssh_prive") or ""
+        )
+    return secrets_maj
+
+
 async def _assurer_vm_projet(ctx: Contexte, projet: m.Projet) -> dict[str, Any]:
     """Provisionne, au premier service réellement exécutable d'un projet en cible `vm`, la VM
     Nova dédiée à ce projet — idempotent (relit toujours les secrets du projet avant de
@@ -226,9 +315,20 @@ async def _assurer_vm_projet(ctx: Contexte, projet: m.Projet) -> dict[str, Any]:
     VM vide.
     """
     secrets = await depot_projet.secrets(ctx, projet.id)
-    if secrets.get("vm_serveur_id"):
-        return secrets
     zone = await web_heb.zone_vps_secrets(ctx)
+    if secrets.get("vm_serveur_id") and zone.get("projet_id"):
+        statut = await asyncio.to_thread(
+            amont_compute().statut_serveur, secrets["vm_serveur_id"], zone
+        )
+        if statut in ("ERROR", "absente"):
+            await _defaire_vm_projet_partielle(ctx, projet, secrets, zone)
+            secrets = {}
+        elif not secrets.get("vm_ssh_ip") or not secrets.get("vm_lb_pool_id"):
+            return await _completer_secrets_ssh_vm_projet(ctx, projet, secrets, zone)
+        else:
+            return secrets
+    elif secrets.get("vm_serveur_id"):
+        return secrets
     cle = await web_heb.assurer_cle_ssh_zone(ctx)
     # `creer_serveur` (comme les autres appels `amont_*()` de cette fonction) est un appel
     # openstacksdk/SSH synchrone/bloquant : exécuté tel quel dans la coroutine, il bloquerait
@@ -360,9 +460,8 @@ async def _installer_service_vm(
         if isinstance(ssh, SshReel):
             raise erreurs.amont_indisponible(
                 "projet (SSH)",
-                "Aucune IP de gestion SSH backend disponible pour la VM de ce projet : soit "
-                "la zone VPS n'est pas encore initialisée, soit cette VM a été créée avant le "
-                "câblage SSH/IP flottante (non rattrapable a posteriori).",
+                "Aucune IP de gestion SSH backend disponible pour la VM de ce projet : la zone "
+                "VPS n'est pas initialisée ou les secrets du projet sont incomplets.",
             )
         # Simulation : `SshSimule` n'ouvre aucune connexion réelle, peu importe la valeur —
         # rester instantané et sans réseau, comme le reste de la plateforme en mode simulé
@@ -484,13 +583,16 @@ async def _supprimer_service_vm(ctx: Contexte, service: m.ServiceProjet, projet:
     ip = secrets_projet.get("vm_ssh_ip")
     if cle_privee and ip and secrets_projet.get("vm_serveur_id"):
         racine = dossier_service_vm(service.id)
-        await asyncio.to_thread(
-            amont_ssh().executer,
-            ip,
-            cle_privee,
-            f"cd {racine} && docker compose down -v; rm -rf {racine} "
-            f"{RACINE_DOCKER_VM_PROJET}/traefik-dynamic/service-{service.id}.yml",
-        )
+        try:
+            await asyncio.to_thread(
+                amont_ssh().executer,
+                ip,
+                cle_privee,
+                f"cd {racine} && docker compose down -v; rm -rf {racine} "
+                f"{RACINE_DOCKER_VM_PROJET}/traefik-dynamic/service-{service.id}.yml",
+            )
+        except Exception:  # noqa: BLE001 — VM injoignable : on purge quand même la fiche service
+            pass
 
 
 async def _supprimer_vm_projet(ctx: Contexte, projet: m.Projet) -> None:
@@ -678,6 +780,88 @@ async def _appliquer_service_k8s(ctx: Contexte, service: m.ServiceProjet, projet
     return True
 
 
+async def _retirer_entrees(ctx: Contexte, filtre: Any) -> None:
+    """Retire du edge dev01 le vhost des domaines visés (no-op hors dev01)."""
+    for d in await depot_domaine.tous(ctx):
+        if filtre(d):
+            await asyncio.to_thread(entree_dev01.retirer, d.hote)
+
+
+@executeur("domaine_routage.appliquer")
+class ExecuteurDomaineRoutage(Executeur):
+    """Met un domaine applicatif en ligne pour de vrai : DNS → IP flottante du service
+    (LoadBalancer Kubernetes) → vhost Apache dev01 → certificat Let's Encrypt."""
+
+    def __init__(self) -> None:
+        self._ip: str | None = None
+
+    async def _contexte(
+        self, ctx: Contexte, travail: Travail
+    ) -> tuple[m.DomaineApplicatif, m.ServiceProjet, m.Projet]:
+        d = await depot_domaine.obtenir(ctx, travail.cible_id or "")
+        service = await depot_service.obtenir(ctx, d.serviceId)
+        projet = await depot_projet.obtenir(ctx, service.projetId)
+        return d, service, projet
+
+    async def _ip_service(
+        self, d: m.DomaineApplicatif, service: m.ServiceProjet, projet: m.Projet
+    ) -> str:
+        if self._ip is None:
+            self._ip = await asyncio.to_thread(
+                k8s().exposer_service,
+                namespace_projet(projet),
+                nom_k8s_service(service),
+                d.portConteneur or service.portConteneur or PORT_DEFAUT_SERVICE,
+            )
+        return self._ip
+
+    async def etape(self, ctx: Contexte, travail: Travail, index: int, nom: str) -> str | None:
+        d, service, projet = await self._contexte(ctx, travail)
+        try:
+            if index == 0:
+                await asyncio.to_thread(entree_dev01.verifier_dns, d.hote)
+            elif index == 1:
+                return await self._ip_service(d, service, projet)
+            elif index == 2:
+                await asyncio.to_thread(
+                    entree_dev01.publier, d.hote, await self._ip_service(d, service, projet)
+                )
+            elif index == 3 and d.https:
+                await asyncio.to_thread(
+                    entree_dev01.emettre_certificat,
+                    d.hote,
+                    await self._ip_service(d, service, projet),
+                )
+        except Exception as exc:
+            if index == 0 and d.verification:
+                echec = d.verification.model_copy(
+                    update={
+                        "etat": "echec",
+                        "verifieLe": maintenant(),
+                        "detail": getattr(exc, "message", None) or str(exc),
+                    }
+                )
+                await depot_domaine.modifier(
+                    ctx, d.id, {"verification": echec.model_dump(mode="json")}
+                )
+            raise
+        return None
+
+    async def terminer(self, ctx: Contexte, travail: Travail) -> None:
+        d, _, _ = await self._contexte(ctx, travail)
+        assert d.verification  # posée à la création du domaine
+        verification = d.verification.model_copy(
+            update={"etat": "ok", "verifieLe": maintenant(), "detail": None}
+        )
+        changements: dict[str, Any] = {"verification": verification.model_dump(mode="json")}
+        if d.https:
+            changements["certificat"] = m.Certificat1(
+                etat="actif", emetteur="Let's Encrypt", expire=maintenant() + timedelta(days=90)
+            ).model_dump(mode="json")
+        await depot_domaine.modifier(ctx, d.id, changements)
+        await depot_domaine.definir_statut(ctx, d.id, "verifie")
+
+
 @executeur("projet_service.create")
 class ExecuteurServiceCreate(Executeur):
     """Sert aussi « démarrage » et « redémarrage » (même type de travail, cf. router)."""
@@ -730,6 +914,7 @@ class ExecuteurServiceDelete(Executeur):
         if projet.cible == "vm":
             await _supprimer_service_vm(ctx, service, projet)
         else:
+            await _retirer_entrees(ctx, lambda d: d.serviceId == service.id)
             await asyncio.to_thread(
                 k8s().supprimer_deployment, namespace_projet(projet), nom_k8s_service(service)
             )
@@ -743,6 +928,8 @@ class ExecuteurProjetDelete(Executeur):
         if projet.cible == "vm":
             await _supprimer_vm_projet(ctx, projet)
         else:
+            ids = {s.id for s in await depot_service.tous(ctx) if s.projetId == projet.id}
+            await _retirer_entrees(ctx, lambda d: d.serviceId in ids)
             await asyncio.to_thread(k8s().supprimer_namespace, namespace_projet(projet))
         await depot_projet.supprimer(ctx, travail.cible_id or "", logique=True)
 

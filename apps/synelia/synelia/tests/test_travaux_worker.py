@@ -16,7 +16,7 @@ async def test_worker_reclame_execute_avec_le_principal_reel(client, monkeypatch
 
     corps = {
         "code": "worker-abj",
-        "offerId": "offre-standard",
+        "offerId": "offre-espace-pro",
         "site": "ABJ",
         "cidr": "10.30.0.0/16",
         "quota": {"vcpu": 16, "ramGo": 64, "stockageTo": 2},

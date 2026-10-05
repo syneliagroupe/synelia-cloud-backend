@@ -23,7 +23,7 @@ async def _espace(client_org) -> str:
         "/v1/espaces",
         json={
             "code": "demo-abj",
-            "offerId": "offre-standard",
+            "offerId": "offre-espace-pro",
             "site": "ABJ",
             "cidr": "10.10.0.0/16",
             "quota": {"vcpu": 16, "ramGo": 64, "stockageTo": 2},

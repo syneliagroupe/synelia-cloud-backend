@@ -238,7 +238,7 @@ async def test_migration_campagnes_cycle(client):
 async def test_conformite(client):
     r = await client.get("/v1/admin/conformite")
     assert r.status_code == 200, r.text
-    assert len(r.json()["referentiels"]) >= 1
+    assert r.json()["referentiels"] == []
 
 
 async def test_fenetres_patching_cycle(client):

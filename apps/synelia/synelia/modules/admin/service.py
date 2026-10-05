@@ -204,6 +204,48 @@ async def sante_integrations(ctx: Contexte) -> list[dict[str, Any]]:
     ]
 
 
+_SERVICES_PLATEFORME = (
+    ("Compute (VMs)", "compute"),
+    ("Stockage", "storage"),
+    ("Réseau", "network"),
+    ("Services managés", "manages"),
+)
+
+
+async def statut_services_effectif(ctx: Contexte) -> list[dict[str, Any]]:
+    """États publiés : la liste saisie par l'opérateur si elle existe, sinon dérivée du réel —
+    OpenStack joignable (tous ces services en dépendent) et incidents ouverts/passés sur 90 j.
+    Seul ABJ est adossé au lab : pas de colonne GBM inventée."""
+    saisis = await depot_statut_service.tous(ctx)
+    if saisis:
+        return [s.model_dump(mode="json") for s in saisis]
+    os_ok = await asyncio.to_thread(amont().capacite_plateforme) is not None
+    fin = utc(maintenant())
+    debut_fenetre = fin - timedelta(days=90)
+    incidents = await depot_incident.tous(ctx)
+    services = []
+    for nom, categorie in _SERVICES_PLATEFORME:
+        etat = "operationnel" if os_ok else "panne"
+        arret = timedelta()
+        for i in incidents:
+            if nom not in i.services or i.gravite == "mineur":
+                continue
+            d = max(utc(i.debut), debut_fenetre)
+            f = utc(i.fin) if i.fin else fin
+            arret += max(f - d, timedelta())
+            if i.statut != "resolu" and etat == "operationnel":
+                etat = "maintenance" if i.gravite == "maintenance" else "panne"
+        services.append(
+            {
+                "nom": nom,
+                "categorie": categorie,
+                "etats": {"ABJ": etat},
+                "uptime90j": round(100 * (1 - min(arret / timedelta(days=90), 1)), 2),
+            }
+        )
+    return services
+
+
 async def acces_refuses_24h(ctx: Contexte) -> int:
     """Actions RBAC refusées sur les dernières 24 h, journalisées par `journaliser()`
     comme n'importe quelle autre entrée d'audit — utilisé par `/admin/sante` et
@@ -217,12 +259,33 @@ async def acces_refuses_24h(ctx: Contexte) -> int:
     return int((await ctx.session.execute(q)).scalar_one())
 
 
+def sla_restant_min(donnees: dict[str, Any]) -> int | None:
+    """Minutes restantes avant l'engagement en cours d'un ticket, calculées à la lecture.
+
+    La valeur stockée à la création ne bouge jamais : un ticket ouvert depuis trois jours
+    afficherait toujours son délai initial et aucun engagement ne passerait jamais « en
+    risque ». Avant la première réponse de Synelia l'engagement est la première réponse,
+    ensuite c'est la résolution. Horloge suspendue en attente client, absente une fois
+    résolu ou fermé (None). Négatif = engagement dépassé.
+    """
+    if donnees.get("statut") in ("resolu", "ferme", "attente_client"):
+        return None
+    cible = donnees.get("slaCible") or {}
+    repondu = any(msg.get("role") == "synelia" for msg in donnees.get("messages") or [])
+    minutes = cible.get("resolutionMin" if repondu else "premiereReponseMin")
+    cree = donnees.get("createdAt")
+    if minutes is None or not cree:
+        return donnees.get("slaRestantMin")
+    ecoule = (maintenant() - depuis_iso(str(cree))).total_seconds() // 60
+    return int(minutes - ecoule)
+
+
 async def tickets_sla_risque(ctx: Contexte) -> int:
     """Tickets plateforme dont le SLA restant tombe sous 30 min — même seuil que le
     filtre `slaRisque` de `GET /admin/tickets`."""
     n = 0
     for r in await lignes_type(ctx, "ticket"):
-        sla = (r.donnees or {}).get("slaRestantMin")
+        sla = sla_restant_min(r.donnees or {})
         if sla is not None and sla <= 30:
             n += 1
     return n
