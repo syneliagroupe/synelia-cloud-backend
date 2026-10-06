@@ -71,6 +71,7 @@ async def se_connecter(ctx: CtxPublic, corps: m.DemandeConnexion) -> Any:
             await journaliser(
                 ctx,
                 action="auth.connexion_refusee_organisation_suspendue",
+                acteur=(u.id, u.email),
                 cible_type="utilisateur",
                 cible_id=u.id,
                 cible=u.email,
@@ -87,6 +88,7 @@ async def se_connecter(ctx: CtxPublic, corps: m.DemandeConnexion) -> Any:
             await journaliser(
                 ctx,
                 action="auth.connexion_refusee_ip",
+                acteur=(u.id, u.email),
                 cible_type="utilisateur",
                 cible_id=u.id,
                 cible=u.email,
@@ -109,6 +111,7 @@ async def se_connecter(ctx: CtxPublic, corps: m.DemandeConnexion) -> Any:
     await journaliser(
         ctx,
         action="auth.connexion",
+        acteur=(u.id, u.email),
         cible_type="utilisateur",
         cible_id=u.id,
         cible=u.email,
@@ -215,6 +218,7 @@ async def rafraichir_session(ctx: CtxPublic, corps: m.AuthRafraichirPostRequest)
     await journaliser(
         ctx,
         action="auth.rafraichissement",
+        acteur=(u.id, u.email),
         cible_type="utilisateur",
         cible_id=u.id,
         cible=u.email,
@@ -290,6 +294,7 @@ async def s_inscrire(ctx: CtxPublic, corps: m.Inscription) -> Any:
     await journaliser(
         ctx,
         action="auth.inscription",
+        acteur=(u.id, u.email),
         cible_type="utilisateur",
         cible_id=u.id,
         cible=u.email,
@@ -416,6 +421,7 @@ async def verifier_email(ctx: CtxPublic, corps: m.VerificationEmailConfirmation)
     await journaliser(
         ctx,
         action="auth.email_verifie",
+        acteur=(u.id, u.email),
         cible_type="utilisateur",
         cible_id=u.id,
         cible=u.email,
@@ -598,7 +604,12 @@ async def reinitialiser_mot_de_passe(
         ctx.session, u, ip=ctx.ip, user_agent=ctx.entete("user-agent")
     )
     await journaliser(
-        ctx, action="auth.reinitialisation", cible_type="utilisateur", cible_id=u.id, cible=u.email
+        ctx,
+        action="auth.reinitialisation",
+        cible_type="utilisateur",
+        cible_id=u.id,
+        cible=u.email,
+        acteur=(u.id, u.email),
     )
     return rep
 

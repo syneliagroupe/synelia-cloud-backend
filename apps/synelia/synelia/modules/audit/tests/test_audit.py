@@ -95,3 +95,14 @@ async def test_integrite_audit(client):
     assert corps["intacte"] is True
     assert corps["entreesVerifiees"] >= 1
     assert corps["ruptureId"] is None
+
+
+async def test_connexion_attribuee_a_l_utilisateur(client):
+    r = await client.post(
+        "/v1/auth/connexion", json={"email": "admin@synelia.cloud", "motDePasse": "Synelia!2026"}
+    )
+    assert r.status_code == 200, r.text
+    r = await client.get("/v1/audit", params={"action": "auth.connexion"})
+    assert r.status_code == 200
+    ev = r.json()["donnees"][0]
+    assert ev["actor"]["type"] == "user" and ev["actor"]["email"] == "admin@synelia.cloud"

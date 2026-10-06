@@ -51,6 +51,7 @@ async def journaliser(
     resultat: str = "succes",
     details: dict[str, Any] | None = None,
     org_id: str | None = None,
+    acteur: tuple[str, str] | None = None,
 ) -> Audit:
     p = ctx.principal
     org = org_id or (p.org_id if p else None)
@@ -62,8 +63,8 @@ async def journaliser(
     ligne = Audit(
         org_id=org,
         date=maintenant(),
-        acteur_id=p.utilisateur_id if p else None,
-        acteur=p.email if p else "systeme",
+        acteur_id=p.utilisateur_id if p else (acteur[0] if acteur else None),
+        acteur=p.email if p else (acteur[1] if acteur else "systeme"),
         action=action,
         cible_type=cible_type,
         cible_id=cible_id,
