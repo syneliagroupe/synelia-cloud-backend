@@ -418,6 +418,7 @@ def test_compose_markeplace_images():
     assert "linuxserver/grav" in compose
     compose, routage, _ = construire_site_stack("moodle", "learn.demo.com", "8.3", "s3cret", sid)
     assert "johanruizb/moodle-alpine:4.5" in compose
+    assert "MOODLE_HOST=learn.demo.com" in compose and "MOODLE_SSLPROXY=yes" in compose
     assert "8080" in routage
     compose_bs, routage_bs, _ = construire_site_stack(
         "bookstack", "wiki.demo.com", "8.3", "s3cret", sid
