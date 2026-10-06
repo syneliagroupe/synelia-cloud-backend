@@ -12,11 +12,12 @@ from synelia_db.modeles import Organisation, SessionAuth, Utilisateur
 from synelia_kernel import erreurs
 from synelia_kernel.chiffrement import chiffrer
 from synelia_kernel.dates import maintenant
-from synelia_kernel.ids import jeton_opaque
+from synelia_kernel.ids import jeton_opaque, nouvel_id
 
 from synelia.audit import journaliser
 from synelia.deps import Ctx
 from synelia.modules.auth import service as auth
+from synelia.modules.compte import cles_ssh
 from synelia.securite import (
     hacher_mot_de_passe,
     nouveau_secret_totp,
@@ -169,6 +170,62 @@ async def desactiver_mon_mfa(ctx: Ctx) -> Response:
     u.mfa_active = False
     u.mfa_secret_chiffre = None
     await journaliser(ctx, action="compte.mfa_desactivee", cible_type="utilisateur", cible_id=u.id)
+    return Response(status_code=204)
+
+
+@router.get("/cles-ssh", response_model=list[m.CleSshCompte], response_model_exclude_none=True)
+async def lister_mes_cles_ssh(ctx: Ctx) -> Any:
+    return cles_ssh.lister((await _moi(ctx)).preferences)
+
+
+@router.post(
+    "/cles-ssh",
+    response_model=m.CleSshCompte,
+    status_code=status.HTTP_201_CREATED,
+    response_model_exclude_none=True,
+)
+async def ajouter_une_cle_ssh(ctx: Ctx, corps: m.MoiClesSshPostRequest) -> Any:
+    u = await _moi(ctx)
+    try:
+        ligne, type_, empreinte = cles_ssh.analyser(corps.publique)
+    except ValueError as e:
+        raise erreurs.validation(str(e), {"publique": str(e)}) from e
+    cles = cles_ssh.lister(u.preferences)
+    if any(c["empreinte"] == empreinte for c in cles):
+        raise erreurs.conflit("Cette clé est déjà enregistrée.", code="cle_ssh_existante")
+    cle = {
+        "id": nouvel_id(),
+        "nom": corps.nom.strip(),
+        "publique": ligne,
+        "empreinte": empreinte,
+        "type": type_,
+        "ajouteeLe": maintenant().isoformat(),
+    }
+    u.preferences = {**(u.preferences or {}), "cles_ssh": [*cles, cle]}
+    await journaliser(
+        ctx,
+        action="compte.cle_ssh_ajoutee",
+        cible_type="utilisateur",
+        cible_id=u.id,
+        details={"empreinte": empreinte},
+    )
+    return cle
+
+
+@router.delete("/cles-ssh/{cleId}", status_code=status.HTTP_204_NO_CONTENT)
+async def retirer_une_cle_ssh(ctx: Ctx, cleId: str) -> Response:
+    u = await _moi(ctx)
+    cles = cles_ssh.lister(u.preferences)
+    if not any(c["id"] == cleId for c in cles):
+        raise erreurs.introuvable("Clé SSH", cleId)
+    u.preferences = {**(u.preferences or {}), "cles_ssh": [c for c in cles if c["id"] != cleId]}
+    await journaliser(
+        ctx,
+        action="compte.cle_ssh_retiree",
+        cible_type="utilisateur",
+        cible_id=u.id,
+        details={"cleId": cleId},
+    )
     return Response(status_code=204)
 
 

@@ -4030,6 +4030,26 @@ class Vm(BaseModel):
     flavor: str | None = None
 
 
+class CleSshCompte(BaseModel):
+    """
+    Clé SSH publique du compte, injectée dans le cloud-init des nouvelles machines.
+    """
+
+    id: str
+    nom: str
+    publique: Annotated[str, Field(description="Clé publique OpenSSH, une ligne.")]
+    empreinte: Annotated[
+        str, Field(description="Empreinte SHA256, comme l’affiche `ssh-keygen -lf`.")
+    ]
+    type: str | None = None
+    ajouteeLe: AwareDatetime | None = None
+
+
+class MoiClesSshPostRequest(BaseModel):
+    nom: str
+    publique: str
+
+
 class VmCreation(BaseModel):
     espaceId: str
     nom: str
@@ -4045,9 +4065,18 @@ class VmCreation(BaseModel):
     ipPubliqueDemandee: bool | None = None
     groupesSecurite: list[str] | None = None
     cleSsh: str | None = None
-    cloudInit: Annotated[str | None, Field(description="Script d’amorçage, encodé en clair.")] = (
-        None
-    )
+    cloudInit: Annotated[
+        str | None,
+        Field(
+            description="Script d’amorçage de l’utilisateur, encodé en clair, vide par défaut. Fusionné après celui de la plateforme."
+        ),
+    ] = None
+    injecterClesCompte: Annotated[
+        bool | None,
+        Field(
+            description="Injecte les clés SSH du compte dans le cloud-init de la plateforme. Vrai par défaut."
+        ),
+    ] = None
     hardware: MateielVirtuel | None = None
     backupPlanId: str | None = None
     tags: list[str] | None = None
@@ -4087,7 +4116,16 @@ class VmLotCreation(BaseModel):
     ]
     cleSsh: str | None = None
     cloudInit: Annotated[
-        str | None, Field(description="Script d’amorçage, encodé en clair, commun au lot.")
+        str | None,
+        Field(
+            description="Script d’amorçage de l’utilisateur, encodé en clair, commun au lot, vide par défaut."
+        ),
+    ] = None
+    injecterClesCompte: Annotated[
+        bool | None,
+        Field(
+            description="Injecte les clés SSH du compte dans le cloud-init de la plateforme. Vrai par défaut."
+        ),
     ] = None
     antiAffinite: Annotated[
         bool | None, Field(description="Répartit les machines du lot sur des hôtes distincts.")

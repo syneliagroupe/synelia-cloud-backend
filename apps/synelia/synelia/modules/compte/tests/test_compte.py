@@ -35,3 +35,25 @@ async def test_organisation_active_inexistante_rejetee(client):
     org = (await client.get("/v1/moi")).json()["organisationActive"]
     r = await client.put("/v1/moi/organisation-active", json={"orgId": org, "memoriser": False})
     assert r.status_code == 200, r.text
+
+
+CLE = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"
+
+
+async def test_cles_ssh_du_compte(client):
+    assert (await client.get("/v1/moi/cles-ssh")).json() == []
+    r = await client.post(
+        "/v1/moi/cles-ssh", json={"nom": "portable", "publique": CLE + " jean@pc"}
+    )
+    assert r.status_code == 201, r.text
+    cle = r.json()
+    assert cle["empreinte"].startswith("SHA256:") and cle["publique"] == CLE
+    assert (
+        await client.post("/v1/moi/cles-ssh", json={"nom": "bis", "publique": CLE})
+    ).status_code == 409
+    assert (
+        await client.post("/v1/moi/cles-ssh", json={"nom": "x", "publique": "pas une clé"})
+    ).status_code == 422
+    assert [c["id"] for c in (await client.get("/v1/moi/cles-ssh")).json()] == [cle["id"]]
+    assert (await client.delete(f"/v1/moi/cles-ssh/{cle['id']}")).status_code == 204
+    assert (await client.delete(f"/v1/moi/cles-ssh/{cle['id']}")).status_code == 404

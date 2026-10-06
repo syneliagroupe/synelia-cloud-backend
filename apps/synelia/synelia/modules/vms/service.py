@@ -15,6 +15,7 @@ from synelia.audit import journaliser
 from synelia.demo import peupleur
 from synelia.depot import Depot
 from synelia.deps.contexte import Contexte
+from synelia.modules.vms import cloudinit
 from synelia.travaux import Executeur, demarrer_travail, executeur
 
 depot = Depot("vm", m.Vm, champs_recherche=("nom", "os"))
@@ -310,7 +311,9 @@ class ExecuteurVmCreate(Executeur):
                 org_id=ctx.org_id_ou_none,
                 espace_id=vm.espaceId,
                 cle_ssh=entre.get("cleSsh"),
-                cloud_init=entre.get("cloudInit"),
+                cloud_init=cloudinit.construire(
+                    entre.get("clesSshPubliques"), entre.get("cloudInit")
+                ),
                 groupes_securite=groupes_neutron,
             )
             c = dict(travail.contexte)
@@ -371,7 +374,9 @@ class ExecuteurVmCompose(Executeur):
                         org_id=ctx.org_id_ou_none,
                         espace_id=espace_id,
                         cle_ssh=entre.get("cleSsh"),
-                        cloud_init=entre.get("cloudInit"),
+                        cloud_init=cloudinit.construire(
+                            entre.get("clesSshPubliques"), entre.get("cloudInit")
+                        ),
                         groupes_securite=groupes_neutron,
                     )
                     serveurs.append(
@@ -398,12 +403,13 @@ class ExecuteurVmCompose(Executeur):
         entre = travail.entree or {}
         espace_id = entre.get("espaceId")
         site = entre.get("site") or "ABJ"
+        noms_images = {i["id"]: i["nom"] for i in await asyncio.to_thread(amont().images)}
         for srv in travail.contexte.get("serveurs") or []:
             vm = m.Vm(
                 id=nouvel_id(),
                 espaceId=espace_id,
                 nom=srv["nom"],
-                os=srv["image_id"],
+                os=noms_images.get(srv["image_id"], srv["image_id"]),
                 vcpu=srv["vcpu"],
                 ramGo=srv["ramGo"],
                 diskGo=srv["diskGo"],

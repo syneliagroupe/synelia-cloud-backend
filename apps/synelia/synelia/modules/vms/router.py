@@ -6,12 +6,14 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Response, status
 from synelia_contract import modeles as m
+from synelia_db.modeles import Utilisateur
 from synelia_kernel import erreurs
 from synelia_kernel.dates import maintenant
 from synelia_kernel.ids import nouvel_id
 
 from synelia.audit import journaliser
 from synelia.deps import Contexte, Page, exige, exiger_confirmation
+from synelia.modules.compte import cles_ssh
 from synelia.modules.espaces.service import verifier_quota
 from synelia.modules.vms import service
 from synelia.modules.vms.service import amont, depot, instantane_depot, reconcilier_statut
@@ -78,6 +80,15 @@ async def _image_par_id(image_id: str) -> dict[str, Any]:
     return img
 
 
+async def _cles_ssh_compte(ctx: Contexte, injecter: bool | None) -> list[str]:
+    """Clés publiques du compte créateur, sauf refus explicite (`injecterClesCompte: false`)."""
+    uid = ctx.principal.utilisateur_id if ctx.principal else None
+    if injecter is False or not uid:
+        return []
+    u = await ctx.session.get(Utilisateur, uid)
+    return [c["publique"] for c in cles_ssh.lister(u.preferences if u else None)]
+
+
 async def _vm(ctx: Contexte, vm_id: str) -> m.Vm:
     return await depot.obtenir(ctx, vm_id)
 
@@ -128,7 +139,7 @@ async def creer_vm(corps: m.VmCreation, ctx: Contexte = Depends(exige("vm.create
         id=nouvel_id(),
         espaceId=corps.espaceId,
         nom=corps.nom,
-        os=image["id"],
+        os=image["nom"],
         vcpu=vcpu,
         ramGo=ram_go,
         diskGo=disk_go,
@@ -148,7 +159,10 @@ async def creer_vm(corps: m.VmCreation, ctx: Contexte = Depends(exige("vm.create
         vm.nom,
         cible_type="vm",
         cible_id=vm.id,
-        entree=corps.model_dump(mode="json"),
+        entree={
+            **corps.model_dump(mode="json"),
+            "clesSshPubliques": await _cles_ssh_compte(ctx, corps.injecterClesCompte),
+        },
     )
 
 
@@ -470,6 +484,7 @@ async def creer_vms_en_lot(
     await journaliser(ctx, action="vm.compose", cible_type="espace", cible_id=corps.espaceId)
     entree = corps.model_dump(mode="json")
     entree["gabarits"] = gabarits
+    entree["clesSshPubliques"] = await _cles_ssh_compte(ctx, corps.injecterClesCompte)
     return await demarrer_travail(
         ctx,
         "vm.compose",

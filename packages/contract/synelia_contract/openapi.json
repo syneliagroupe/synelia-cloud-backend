@@ -39491,6 +39491,174 @@
           }
         }
       }
+    },
+    "/moi/cles-ssh": {
+      "get": {
+        "tags": [
+          "Compte & organisation active"
+        ],
+        "operationId": "listerMesClesSsh",
+        "summary": "Lister ses clés SSH",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Organisation"
+          },
+          {
+            "$ref": "#/components/parameters/Langue"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Succès.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CleSshCompte"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Invalide"
+          },
+          "401": {
+            "$ref": "#/components/responses/NonAuthentifie"
+          },
+          "403": {
+            "$ref": "#/components/responses/Interdit"
+          },
+          "429": {
+            "$ref": "#/components/responses/TropDeRequetes"
+          },
+          "500": {
+            "$ref": "#/components/responses/Serveur"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Compte & organisation active"
+        ],
+        "operationId": "ajouterUneCleSsh",
+        "summary": "Ajouter une clé SSH publique au compte",
+        "description": "Refusé (422) si la ligne n’est pas une clé publique OpenSSH, ou (409) si elle est déjà enregistrée.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Organisation"
+          },
+          {
+            "$ref": "#/components/parameters/Langue"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "nom": {
+                    "type": "string"
+                  },
+                  "publique": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "nom",
+                  "publique"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Succès.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CleSshCompte"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Invalide"
+          },
+          "401": {
+            "$ref": "#/components/responses/NonAuthentifie"
+          },
+          "403": {
+            "$ref": "#/components/responses/Interdit"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflit"
+          },
+          "422": {
+            "$ref": "#/components/responses/Invalidee"
+          },
+          "429": {
+            "$ref": "#/components/responses/TropDeRequetes"
+          },
+          "500": {
+            "$ref": "#/components/responses/Serveur"
+          }
+        }
+      }
+    },
+    "/moi/cles-ssh/{cleId}": {
+      "delete": {
+        "tags": [
+          "Compte & organisation active"
+        ],
+        "operationId": "retirerUneCleSsh",
+        "summary": "Retirer une clé SSH du compte",
+        "description": "Les machines déjà créées gardent la clé : elle est dans leur cloud-init, pas dans le compte.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Organisation"
+          },
+          {
+            "$ref": "#/components/parameters/Langue"
+          },
+          {
+            "name": "cleId",
+            "in": "path",
+            "required": true,
+            "description": "Identifiant de la clé SSH.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Supprimé. Aucun corps."
+          },
+          "400": {
+            "$ref": "#/components/responses/Invalide"
+          },
+          "401": {
+            "$ref": "#/components/responses/NonAuthentifie"
+          },
+          "403": {
+            "$ref": "#/components/responses/Interdit"
+          },
+          "404": {
+            "$ref": "#/components/responses/Introuvable"
+          },
+          "429": {
+            "$ref": "#/components/responses/TropDeRequetes"
+          },
+          "500": {
+            "$ref": "#/components/responses/Serveur"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -53960,7 +54128,11 @@
           },
           "cloudInit": {
             "type": "string",
-            "description": "Script d’amorçage, encodé en clair."
+            "description": "Script d’amorçage de l’utilisateur, encodé en clair, vide par défaut. Fusionné après celui de la plateforme."
+          },
+          "injecterClesCompte": {
+            "type": "boolean",
+            "description": "Injecte les clés SSH du compte dans le cloud-init de la plateforme. Vrai par défaut."
           },
           "hardware": {
             "$ref": "#/components/schemas/MateielVirtuel"
@@ -54080,7 +54252,11 @@
           },
           "cloudInit": {
             "type": "string",
-            "description": "Script d’amorçage, encodé en clair, commun au lot."
+            "description": "Script d’amorçage de l’utilisateur, encodé en clair, commun au lot, vide par défaut."
+          },
+          "injecterClesCompte": {
+            "type": "boolean",
+            "description": "Injecte les clés SSH du compte dans le cloud-init de la plateforme. Vrai par défaut."
           },
           "antiAffinite": {
             "type": "boolean",
@@ -54427,6 +54603,39 @@
           "dnssec",
           "ns",
           "enregistrements"
+        ]
+      },
+      "CleSshCompte": {
+        "type": "object",
+        "description": "Clé SSH publique du compte, injectée dans le cloud-init des nouvelles machines.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "nom": {
+            "type": "string"
+          },
+          "publique": {
+            "type": "string",
+            "description": "Clé publique OpenSSH, une ligne."
+          },
+          "empreinte": {
+            "type": "string",
+            "description": "Empreinte SHA256, comme l’affiche `ssh-keygen -lf`."
+          },
+          "type": {
+            "type": "string"
+          },
+          "ajouteeLe": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "nom",
+          "publique",
+          "empreinte"
         ]
       }
     }
