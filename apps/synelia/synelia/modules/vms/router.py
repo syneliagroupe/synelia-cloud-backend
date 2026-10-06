@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from datetime import timedelta
 from typing import Any
 
@@ -89,6 +90,20 @@ async def _cles_ssh_compte(ctx: Contexte, injecter: bool | None) -> list[str]:
     return [c["publique"] for c in cles_ssh.lister(u.preferences if u else None)]
 
 
+_UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
+async def _os_lisible(vms: list[m.Vm]) -> list[m.Vm]:
+    """Les VM créées avant le correctif portent l'UUID Glance dans `os` : on le traduit en nom."""
+    if not any(_UUID.match(v.os or "") for v in vms):
+        return vms
+    try:
+        noms = {i["id"]: i["nom"] for i in await asyncio.to_thread(amont().images)}
+    except Exception:  # noqa: BLE001 — cosmétique : on garde l'UUID plutôt que de casser la lecture
+        return vms
+    return [v.model_copy(update={"os": noms[v.os]}) if v.os in noms else v for v in vms]
+
+
 async def _vm(ctx: Contexte, vm_id: str) -> m.Vm:
     return await depot.obtenir(ctx, vm_id)
 
@@ -118,7 +133,9 @@ async def lister_vms(  # noqa: PLR0917
     # Reconcile-on-read : sans ça une VM resterait affichée `running` dans la liste même après
     # la disparition de son serveur Nova (supprimé hors bande, ex. nettoyage du lab — cf.
     # `reconcilier_statut`).
-    resultat["donnees"] = [await reconcilier_statut(ctx, v) for v in resultat["donnees"]]
+    resultat["donnees"] = await _os_lisible(
+        [await reconcilier_statut(ctx, v) for v in resultat["donnees"]]
+    )
     return resultat
 
 
@@ -170,7 +187,8 @@ async def creer_vm(corps: m.VmCreation, ctx: Contexte = Depends(exige("vm.create
 async def obtenir_vm(
     vmId: str, ctx: Contexte = Depends(exige("org.dashboard.view", lecture=True))
 ) -> Any:  # noqa: N803
-    return await reconcilier_statut(ctx, await _vm(ctx, vmId))
+    vm = await reconcilier_statut(ctx, await _vm(ctx, vmId))
+    return (await _os_lisible([vm]))[0]
 
 
 @router.patch("/{vmId}", response_model=m.Vm, response_model_exclude_none=True)
