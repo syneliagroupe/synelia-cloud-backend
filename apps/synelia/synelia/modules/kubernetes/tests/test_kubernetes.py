@@ -454,3 +454,17 @@ async def test_pools_depot_unique(client):
     r = await client.get(f"/v1/kubernetes/{cid}/pools")
     assert len(r.json()) == 1
     assert all(p["nom"] != "workers" for p in r.json())
+
+
+async def test_attendre_issue_ignore_un_inconnu_trop_tot(monkeypatch):
+    from synelia.modules.kubernetes import service as k8s_service
+
+    lus = iter(["DELETE_COMPLETE", "CREATE_COMPLETE"])
+
+    class Amont:
+        def cluster_statut(self, _mid):
+            return next(lus)
+
+    monkeypatch.setattr(k8s_service, "amont", lambda: Amont())
+    monkeypatch.setattr(k8s_service, "_DELAI_CREATION_SONDE_S", 0.01)
+    assert await k8s_service._attendre_issue_creation("x") == "CREATE_COMPLETE"

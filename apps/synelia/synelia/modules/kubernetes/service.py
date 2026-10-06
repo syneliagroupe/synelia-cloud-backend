@@ -152,6 +152,7 @@ def _mapper_statut_magnum(statut_amont: str) -> str | None:
 # donc attendre la vraie issue — au-delà de 20 min seulement, il se met en pause.
 _DELAI_CREATION_MAX_S = 1200.0
 _DELAI_CREATION_SONDE_S = 10.0
+_GRACE_INCONNU_S = 60.0
 
 
 async def _attendre_issue_creation(mid: str) -> str:
@@ -168,7 +169,11 @@ async def _attendre_issue_creation(mid: str) -> str:
         except Exception as exc:  # noqa: BLE001 — lecture best effort, on ressonde
             logger.debug("sondage Magnum %s impossible : %s", mid, exc)
         else:
-            if _mapper_statut_magnum(statut) in ("running", "degraded"):
+            # Magnum peut ignorer un cluster à l'instant où on vient de le créer (constaté :
+            # `DELETE_COMPLETE` à la milliseconde, cluster bien présent ensuite) : pas terminal
+            # pendant la minute de grâce.
+            inconnu_trop_tot = statut == "DELETE_COMPLETE" and delai < _GRACE_INCONNU_S
+            if not inconnu_trop_tot and _mapper_statut_magnum(statut) in ("running", "degraded"):
                 return statut
         await asyncio.sleep(_DELAI_CREATION_SONDE_S)
         delai += _DELAI_CREATION_SONDE_S
