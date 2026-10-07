@@ -7,8 +7,8 @@ name: synelia-backend-dev01
 # identifiants — une ancre évite une copie divergente entre les deux services.
 x-env-backend: &env-backend
   SYNELIA_ENV: production
-  SYNELIA_URL_PUBLIQUE: https://api.synelia.dev01.ovh.smile.ci
-  SYNELIA_URL_FRONTEND: https://app.synelia.dev01.ovh.smile.ci
+  SYNELIA_URL_PUBLIQUE: https://api.cloud.dev01.ovh.smile.ci
+  SYNELIA_URL_FRONTEND: https://app.cloud.dev01.ovh.smile.ci
   # Rôle applicatif restreint (LOGIN, NOSUPERUSER, NOBYPASSRLS) — voir packages/db/synelia_db/
   # rls.py. `synelia` (POSTGRES_PASSWORD) reste superutilisateur Postgres mais n'est plus
   # utilisé que hors-ligne (docker exec psql) : un superutilisateur contourne toujours la
