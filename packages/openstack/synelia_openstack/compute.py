@@ -186,7 +186,9 @@ class ComputeSimule:
     def statut_serveur(self, serveur_id: str, identifiants: dict[str, Any] | None = None) -> str:
         return "ACTIVE"
 
-    def ip_privee_serveur(self, serveur_id: str, identifiants: dict[str, Any] | None = None) -> str | None:
+    def ip_privee_serveur(
+        self, serveur_id: str, identifiants: dict[str, Any] | None = None
+    ) -> str | None:
         return f"10.0.0.{hash(serveur_id) % 250 + 2}"
 
     def console(self, serveur_id: str) -> str:
@@ -335,7 +337,7 @@ class ComputeOpenStack(ComputeSimule):
                 fault = getattr(failed, "fault", None) or {}
                 if isinstance(fault, dict) and fault.get("message"):
                     detail = f"{detail} — {fault['message']}"
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001, S110 — détail de diagnostic best-effort, pas bloquant
                 pass
             try:
                 c.compute.delete_server(s.id, ignore_missing=True)
@@ -546,7 +548,9 @@ class ComputeOpenStack(ComputeSimule):
         srv = c.compute.find_server(serveur_id, ignore_missing=True)
         return str(srv.status) if srv else "absente"
 
-    def ip_privee_serveur(self, serveur_id: str, identifiants: dict[str, Any] | None = None) -> str | None:
+    def ip_privee_serveur(
+        self, serveur_id: str, identifiants: dict[str, Any] | None = None
+    ) -> str | None:
         c = self._connexion_pour(identifiants)
         srv = c.compute.find_server(serveur_id, ignore_missing=True)
         if not srv:

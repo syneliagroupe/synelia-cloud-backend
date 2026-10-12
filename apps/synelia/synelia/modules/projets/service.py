@@ -591,7 +591,7 @@ async def _supprimer_service_vm(ctx: Contexte, service: m.ServiceProjet, projet:
                 f"cd {racine} && docker compose down -v; rm -rf {racine} "
                 f"{RACINE_DOCKER_VM_PROJET}/traefik-dynamic/service-{service.id}.yml",
             )
-        except Exception:  # noqa: BLE001 — VM injoignable : on purge quand même la fiche service
+        except Exception:  # noqa: BLE001, S110 — VM injoignable : on purge quand même la fiche service
             pass
 
 

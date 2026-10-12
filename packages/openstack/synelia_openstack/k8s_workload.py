@@ -219,11 +219,11 @@ class K8sWorkloadReel(K8sWorkloadSimule):
             )
         except Exception as exc:  # noqa: BLE001 — repli CAPI ou `424`
             if stack_id:
-                from synelia_openstack.capi_kubeconfig import kubeconfig_depuis_capí
+                from synelia_openstack.capi_kubeconfig import kubeconfig_depuis_capi
 
                 try:
-                    return kubeconfig_depuis_capí(str(stack_id))
-                except Exception:
+                    return kubeconfig_depuis_capi(str(stack_id))
+                except Exception:  # noqa: S110 — repli CAPI best-effort, l'erreur Magnum d'origine prime
                     pass
             raise traduire(exc, "cluster PaaS") from None
         cle_pem = cle.private_bytes(
