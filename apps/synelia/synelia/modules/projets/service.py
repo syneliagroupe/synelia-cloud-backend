@@ -781,10 +781,16 @@ async def _appliquer_service_k8s(ctx: Contexte, service: m.ServiceProjet, projet
 
 
 async def _retirer_entrees(ctx: Contexte, filtre: Any) -> None:
-    """Retire du edge dev01 le vhost des domaines visés (no-op hors dev01)."""
+    """Retire du edge dev01 le vhost des domaines visés (no-op hors dev01) et supprime la
+    fiche `DomaineApplicatif` elle-même — sans ce deuxième volet, supprimer un service ou un
+    projet désactive bien le routage réel mais laisse le domaine comme fantôme permanent en
+    base (`GET /domaines-applicatifs` continue de l'afficher « vérifié », certificat « actif »,
+    pointant vers un `serviceId` qui n'existe plus) : trouvé en auditant l'univers PaaS, un
+    domaine du 2026-09-30 avait survécu à la suppression de son service de cette façon."""
     for d in await depot_domaine.tous(ctx):
         if filtre(d):
             await asyncio.to_thread(entree_dev01.retirer, d.hote)
+            await depot_domaine.supprimer(ctx, d.id, logique=True)
 
 
 @executeur("domaine_routage.appliquer")

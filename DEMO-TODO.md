@@ -44,7 +44,9 @@ item, cochée quand réellement vérifiée en direct (pas juste "typecheck passe
 > un `POST` qui crée un travail** (VM, hébergement, domaine, sauvegarde, cluster K8s,
 > etc.) — voir l'entrée `web_domaines` dans « Résolu » pour le diagnostic complet.
 
-Dernière mise à jour : 2026-10-12 (audit large front/API/backend, détail dans « Ouvert » ci-dessous — cinq vrais bugs trouvés et corrigés, un gap de CI découvert).
+Dernière mise à jour : 2026-10-12 (audit de l'univers PaaS/Applications en direct — domaines applicatifs fantômes après suppression d'un service/projet, corrigé ; détail dans « Ouvert » ci-dessous).
+
+Antérieur : 2026-10-12 (audit large front/API/backend, détail dans « Ouvert » ci-dessous — cinq vrais bugs trouvés et corrigés, un gap de CI découvert).
 
 Antérieur : 2026-09-15 (après 15h07, comp2 RabbitMQ stream queue cleanup).
 **Comp2 RabbitMQ stream queue bloat fix attempt (2026-09-15, ~15h00-15h07)** : Root cause of comp2 nova-compute downtime identified: eight RabbitMQ STREAM fanout queues with massive unconsumed message bloat (`q-agent-notifier-l2population-update_fanout: 21380 msg`, `cinder-scheduler_fanout: 20033 msg`, `neutron-vo-Port-1.10_fanout: 8695 msg`, plus 5 others totaling 50000+ messages). `rabbitmqctl purge_queue` fails on streams with `not_supported` error, but `rabbitmqctl delete_queue` DOES work on streams (counter-intuitive but verified). Deleted all 8 bloated queues on ctrl1 via rabbitmqctl; queues auto-recreate with 0 messages when services redeclare them. Restarted nova-compute and neutron-openvswitch-agent containers on comp2 (192.168.26.238). Verified: comp2 now shows 8+ RabbitMQ connections and queue declarations exist (`reply_comp2:nova-compute:1`, `compute.comp2`, etc.) with 0 consumers, indicating nova-compute reached RPC initialization phase but then crashed. nova_compute container subsequently exited (PID 7 still visible running briefly, then crash) — systemd service now fails on `docker start nova_compute: No such container` (container was removed during restart cycle). Stream queue cleanup is complete and working (`cinder-scheduler_fanout` down to 19 msg, others to 0-1 msg), but comp2 remains `state: down` due to nova-compute container needing recreation (next step: `kolla-ansible reconfigure` or manual container rebuild).
@@ -126,6 +128,35 @@ sur les vrais points de restauration et le vrai contrat `POST
 correspondantes situées après la ligne 894 de ce fichier, non re-répétées ici.)
 
 ## Ouvert — à faire ou à décider
+
+- [x] **Univers PaaS/Applications (`modules/projets`) : un domaine applicatif survit à la
+      suppression de son service ou de son projet — trouvé et corrigé en direct
+      (2026-10-12).** `_retirer_entrees` (appelée par `ExecuteurServiceDelete` et
+      `ExecuteurProjetDelete`) ne faisait que retirer le vhost edge dev01
+      (`entree_dev01.retirer`) sans jamais supprimer la fiche `DomaineApplicatif`
+      elle-même — le routage réel est bien coupé, mais `GET /domaines-applicatifs`
+      continue d'afficher le domaine « vérifié », certificat « actif », pointant
+      vers un `serviceId` qui n'existe plus. Trouvé en auditant en direct
+      l'organisation « Synelia (démo) » : `nginx.demo-0619db8a.com` (créé
+      2026-09-30) survivait ainsi, faussant le compteur « Domaines & routage » du
+      tableau de bord Applications. Corrigé : `_retirer_entrees` appelle
+      maintenant aussi `depot_domaine.supprimer(ctx, d.id, logique=True)`. L'orphelin
+      existant nettoyé manuellement (`DELETE /domaines-applicatifs/{id}`, déjà
+      correct pour un appel direct). **Test du cycle complet en direct ce tour** :
+      projet `cible: k8s` créé → service déployé → vérifié indépendamment via
+      l'API Kubernetes réelle (Deployment 1/1 ready, Pod `Running`, Service
+      ClusterIP, tous réels, pas seulement `statut: running` côté application) →
+      supprimé → namespace confirmé disparu. Projet `cible: vm` testé aussi :
+      échec reproductible « No valid host was found » (capacité Nova réelle du
+      lab, déjà documentée ailleurs dans ce fichier) — mais `creer_serveur`
+      (`compute.py`) a bien nettoyé tout seul le serveur Nova parti en `ERROR`
+      avant de relayer l'erreur, aucun orphelin Nova laissé. Fausse alerte évitée
+      en cours de route : un namespace `projet-01a0f917-…` semblait orphelin (0
+      projet dans les deux organisations déjà connues) jusqu'à découvrir, via
+      `GET /organisations` (admin plateforme), deux organisations démo
+      supplémentaires (« Atelier Kouassi », « JVK ») — le namespace appartenait en
+      fait à un projet bien réel et actif de la première. Tests `modules/projets`
+      et suite complète (353 passed, 4 skipped) verts avant et après.
 
 - [x] **Moodle (`demo-28d14e3a.com`) : le site restait injoignable (502 puis 500) après
       chaque réinstallation — deux bugs distincts, corrigés (2026-10-12).** Bug 1,
