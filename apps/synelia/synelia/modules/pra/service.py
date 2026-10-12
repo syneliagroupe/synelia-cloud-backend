@@ -76,7 +76,12 @@ class ExecuteurBasculeTest(Executeur):
             dureeMin=24,
             rtoConstateMin=int((travail.duree_s or 0) // 60) + 6,
             succes=True,
-            rapportUrl=f"https://rapports.synelia.cloud/pra/{pra_id}/exercices/{travail.id}",
+            # Pas de générateur de rapport réel sur ce socle : un domaine qui ne
+            # résout même pas en DNS était pire qu'une absence de lien (trouvé en
+            # auditant la fiche PRA — lien « Télécharger » mort par construction).
+            # Chaîne vide plutôt qu'un contrat rendu optionnel : le front n'affiche
+            # le lien que si `rapportUrl` est non vide.
+            rapportUrl="",
             incidents=None,
         )
         await exercices.creer(ctx, exercice, parent_id=pra_id)

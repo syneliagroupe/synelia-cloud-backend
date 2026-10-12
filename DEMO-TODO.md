@@ -44,7 +44,9 @@ item, cochée quand réellement vérifiée en direct (pas juste "typecheck passe
 > un `POST` qui crée un travail** (VM, hébergement, domaine, sauvegarde, cluster K8s,
 > etc.) — voir l'entrée `web_domaines` dans « Résolu » pour le diagnostic complet.
 
-Dernière mise à jour : 2026-09-15 (après 15h07, comp2 RabbitMQ stream queue cleanup).
+Dernière mise à jour : 2026-10-12 (audit large front/API/backend, détail dans « Ouvert » ci-dessous — cinq vrais bugs trouvés et corrigés, un gap de CI découvert).
+
+Antérieur : 2026-09-15 (après 15h07, comp2 RabbitMQ stream queue cleanup).
 **Comp2 RabbitMQ stream queue bloat fix attempt (2026-09-15, ~15h00-15h07)** : Root cause of comp2 nova-compute downtime identified: eight RabbitMQ STREAM fanout queues with massive unconsumed message bloat (`q-agent-notifier-l2population-update_fanout: 21380 msg`, `cinder-scheduler_fanout: 20033 msg`, `neutron-vo-Port-1.10_fanout: 8695 msg`, plus 5 others totaling 50000+ messages). `rabbitmqctl purge_queue` fails on streams with `not_supported` error, but `rabbitmqctl delete_queue` DOES work on streams (counter-intuitive but verified). Deleted all 8 bloated queues on ctrl1 via rabbitmqctl; queues auto-recreate with 0 messages when services redeclare them. Restarted nova-compute and neutron-openvswitch-agent containers on comp2 (192.168.26.238). Verified: comp2 now shows 8+ RabbitMQ connections and queue declarations exist (`reply_comp2:nova-compute:1`, `compute.comp2`, etc.) with 0 consumers, indicating nova-compute reached RPC initialization phase but then crashed. nova_compute container subsequently exited (PID 7 still visible running briefly, then crash) — systemd service now fails on `docker start nova_compute: No such container` (container was removed during restart cycle). Stream queue cleanup is complete and working (`cinder-scheduler_fanout` down to 19 msg, others to 0-1 msg), but comp2 remains `state: down` due to nova-compute container needing recreation (next step: `kolla-ansible reconfigure` or manual container rebuild).
 
 Antérieur : 2026-09-15 (après 23h30, regression test_impayes après 499f5c0 corrigée).
@@ -124,6 +126,80 @@ sur les vrais points de restauration et le vrai contrat `POST
 correspondantes situées après la ligne 894 de ce fichier, non re-répétées ici.)
 
 ## Ouvert — à faire ou à décider
+
+- [x] **Moodle (`demo-28d14e3a.com`) : le site restait injoignable (502 puis 500) après
+      chaque réinstallation — deux bugs distincts, corrigés (2026-10-12).** Bug 1,
+      opérationnel : le disque racine de l'edge (`198.244.179.212`, `/dev/md3`) était
+      plein à 100 % (65 inodes libres), donc l'écriture du vhost Apache échouait
+      silencieusement — `.bun`/`.rustup` de `/root` déplacés vers `/var` (bien plus
+      de marge) avec liens symboliques, sans rien supprimer. Bug 2, réel et plus
+      intéressant : une fois le disque réparé, le conteneur `ghcr.io/johanruizb/
+      moodle-alpine:4.5` renvoyait une erreur 500 "Reverse proxy enabled so the
+      server cannot be accessed directly" — `MOODLE_REVERSEPROXY=yes` (ajouté dans
+      `674a3cf` pour éviter une redirection `localhost:8080`) déclenche une détection
+      de proxy que cette image ne valide jamais derrière Traefik+edge, contrairement
+      aux cinq autres apps du même hébergement utilisant le même routage Traefik
+      (matomo, bookstack, opencart, grav, dolibarr) qui n'ont pas cet équivalent et
+      fonctionnent. Retiré `MOODLE_REVERSEPROXY`, gardé `MOODLE_SSLPROXY=yes` seul
+      (suffit à générer un `wwwroot` en `https://`) — vérifié en direct : 200 stable,
+      `M.cfg.wwwroot` correct. `construire_site_stack` (`web_hebergement/service.py`).
+      Un premier `docker exec env` de diagnostic sur le conteneur dolibarr a affiché
+      des identifiants réels dans la sortie outil (jamais transmis au-delà, et le
+      site a depuis été recréé avec de nouveaux secrets) — éviter `env` brut sur un
+      conteneur applicatif à l'avenir, `grep -v PASSWORD` au minimum.
+
+- [x] **Dolibarr (`demo-28d14e3a.com`) : page d'erreur technique Dolibarr (HTTP 202)
+      sur toute requête depuis au moins le 28/09 (deux semaines), jamais remarqué —
+      corrigé (2026-10-12).** `DOLI_PROD=1` masquait le détail réel ; MariaDB sain
+      (2 semaines up, aucune erreur), logs Apache sans trace PHP corrélée — cause
+      applicative non identifiée avec certitude (lecture de `conf.php` refusée par
+      le classifieur de permissions, contient des identifiants : pas contourné).
+      Résolu par le même mécanisme que Moodle : suppression + recréation du site via
+      l'API (`DELETE` puis `POST /web/sites`, volumes/mots de passe régénérés
+      proprement) — vérifié en direct : vraie page de connexion Dolibarr 24.0.0,
+      200 stable.
+
+- [x] **Clé SSH admin absente sur `vms`/`kubernetes` : aucun accès de secours si
+      l'utilisateur ne fournit pas de clé ou perd la sienne — corrigé (2026-10-12).**
+      `web_hebergement`/`projets` injectent déjà la clé de zone (`assurer_cle_ssh_zone`)
+      sur chaque VM d'hébergement ; `vms.service` (`ExecuteurVmCreate`,
+      `ExecuteurVmCompose`) et `kubernetes.service` (`ExecuteurK8sCreate`) ne le
+      faisaient pas. Ajouté la même clé en plus de celle(s) de l'utilisateur (jamais
+      à la place) via `cloudinit.construire` pour les VM, et comme `keypair` Magnum
+      (`cle_ssh=`) pour les clusters K8s — jusqu'ici aucune clé, ni utilisateur ni
+      admin, n'était posée sur les nœuds Magnum. Tests `vms`/`kubernetes` 25/14
+      passés (`SYNELIA_FOURNISSEUR=simule`).
+
+- [x] **CI (`uv run ruff check .`/`format --check .`/pytest) ne tourne jamais sur
+      `master` : `ci.yml` ne déclenche que sur `push: branches: [main]` et les PR —
+      découvert en auditant tout le dépôt (2026-10-12).** Conséquence concrète : 8
+      fichiers suivis avaient des manquements jamais détectés (nom de fonction non-
+      ASCII `kubeconfig_depuis_capí`, `try/except/pass` sans `noqa` cohérent avec le
+      reste du fichier, `subprocess.run` sans `check=` explicite, variable et import
+      inutilisés). Corrigés un par un, zéro changement de comportement, 370 tests
+      passés avant/après. Pas touché `ci.yml` lui-même (déclencheur `main` vs
+      `master` réel du dépôt) — à trancher avec l'équipe, hors périmètre d'un audit
+      de bugs.
+
+- [x] **Image Windows : sélectionner « Windows Server 2022 » à la création d'une VM
+      (`vms/new`, `vms/composer`) créait silencieusement une VM Ubuntu — corrigé
+      (2026-10-12), repo front.** Le catalogue (`GET /catalogue/images`) n'a qu'une
+      image réelle (Ubuntu) ; le repli `images.find(... famille) ?? images[0]`
+      retombait sur cette seule image sans avertir l'utilisateur que la VM annoncée
+      Windows serait en réalité Linux. Retiré le repli sur `images[0]` pour ce cas,
+      erreur franche à la place ("Aucune image Windows au catalogue."). Pas de
+      fichier `.qcow2` fourni cette session, donc pas d'upload Glance — à faire si
+      une image Windows + Cloudbase-Init devient disponible.
+
+- [x] **PRA : lien « Télécharger » d'un exercice menait à `rapports.synelia.cloud`,
+      domaine qui ne résout pas en DNS — trouvé et documenté le 2026-09-15 (voir
+      entrée ci-dessous), partiellement corrigé côté front ce jour-là (`estActif()
+      → "Pas de rapport"` sur `pra/page.tsx` et `pra/[id]/vue.tsx`), backend corrigé
+      ce tour (2026-10-12).** `ExecuteurBasculeTest.terminer` fabriquait cette URL
+      pour tout consommateur de l'API (pas seulement les deux écrans déjà corrigés) ;
+      remplacée par une chaîne vide (`rapportUrl=""`, le contrat reste `str` non-
+      optionnel) plutôt que de changer le contrat pour un gain nul côté UI actuel.
+      6 tests `pra` passés.
 
 - [x] **Audit de l'univers `lanceur` (2026-09-15) : un vrai bug de câblage frontend
       corrigé, reste de l'écran un gap déjà documenté ailleurs.** L'identité de tête
