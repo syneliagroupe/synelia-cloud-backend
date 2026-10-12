@@ -227,8 +227,14 @@ class ExecuteurK8sCreate(Executeur):
             cluster = await depot_cluster.obtenir(ctx, travail.cible_id or "")
             entree = travail.entree or {}
             from synelia.modules.espaces.service import depot as depot_espaces
+            from synelia.modules.web_hebergement.service import assurer_cle_ssh_zone
 
             secrets_espace = await depot_espaces.secrets(ctx, cluster.espaceId)
+            # Même clé de zone que `vms`/`web_hebergement`/`projets` : sans `keypair` Magnum
+            # déploie les nœuds sans aucun accès SSH, ni pour l'utilisateur ni pour nous — un
+            # cluster dégradé ne pouvait alors être diagnostiqué que via l'API Kubernetes elle-
+            # même, inutilisable si c'est justement elle qui est en cause.
+            cle_admin = await assurer_cle_ssh_zone(ctx)
             # `amont().creer_cluster` (openstacksdk Magnum, synchrone) est déchargé via
             # `asyncio.to_thread` : même garde que `vms.service`, sans quoi un appel amont lent
             # gèlerait la boucle asyncio — donc l'API entière, tous tenants confondus.
@@ -238,6 +244,7 @@ class ExecuteurK8sCreate(Executeur):
                 pools=entree.get("pools") or [],
                 master_count=cluster.controlPlane.nodes,
                 reseau_id=secrets_espace.get("reseau_id"),
+                cle_ssh=cle_admin.get("ssh_cle_nom"),
             )
             await depot_cluster.definir_secrets(ctx, cluster.id, {"magnum_cluster_id": cl["id"]})
             c = dict(travail.contexte)
