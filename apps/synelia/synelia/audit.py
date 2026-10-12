@@ -18,6 +18,19 @@ if TYPE_CHECKING:
 
 log = journal("audit")
 
+# Rupture historique connue et bénigne (DEMO-TODO.md, « Audit (GET /audit/integrite) ») :
+# le commit 100a8c4 a corrigé le calcul d'empreinte pour les nouvelles lignes, mais la ligne
+# écrite juste avant garde l'ancienne formule divergente — la chaîne casse à partir d'elle,
+# ce qui est correct (la table `audit` est en écriture seule), mais ce n'est PAS un signe
+# d'altération : documenté ici plutôt que laissé à deviner sur l'écran d'intégrité, sans
+# masquer la rupture elle-même (toujours `intacte: False`).
+_RUPTURE_CONNUE_ID = "01a07216-d4f8-7c01-8beb-3ef7abb6856d"
+_RUPTURE_CONNUE_CONTEXTE = (
+    "rupture connue et bénigne : le calcul d'empreinte a changé au commit 100a8c4 "
+    "(2026-09-05), cette ligne a été écrite juste avant avec l'ancienne formule — "
+    "pas un signe d'altération"
+)
+
 
 def empreinte(precedent: str | None, org: str | None, ligne: Audit) -> str:
     """Empreinte SHA-256 d'une ligne, chaînée à l'empreinte précédente. Utilisée à l'écriture
@@ -115,13 +128,16 @@ async def verifier_chaine(ctx: Contexte, org_id: str | None = None) -> dict[str,
             }
         attendu = empreinte(precedent, org, ligne)
         if ligne.hash != attendu:
+            raison = "empreinte recalculée différente de l'empreinte enregistrée"
+            if ligne.id == _RUPTURE_CONNUE_ID:
+                raison = f"{raison} ({_RUPTURE_CONNUE_CONTEXTE})"
             return {
                 "intacte": False,
                 "entreesVerifiees": n - 1,
                 "totalEntrees": len(lignes),
                 "ruptureId": ligne.id,
                 "ruptureDate": ligne.date,
-                "raison": "empreinte recalculée différente de l'empreinte enregistrée",
+                "raison": raison,
             }
         precedent = ligne.hash
     return {

@@ -299,20 +299,20 @@ correspondantes situées après la ligne 894 de ce fichier, non re-répétées i
       peupler les cibles si fournies à la création, éliminant le besoin d'un appel
       `PUT /load-balancers/{id}/pool` séparé. Commit `cdfc7f2` sur `dev01-real-infra`.
 
-- [ ] **Audit (`GET /audit/integrite`) : état intacte: false, pas un bug de code.
-      (2026-09-15 : compris, requiert une décision produit, non pas un correctif.)** 
-      Le journal de l'organisation Synelia déclare `intacte: false`. Root cause
-      compris : commit `100a8c4` a corrigé le calcul d'empreinte pour les nouvelles
-      lignes, mais la ligne écrite avant (`01a07216-d4f8-7c01-8beb-3ef7abb6856d`,
-      2026-09-05T15:01:34Z) conserve l'ancienne formule divergente. Casse la chaîne
-      à partir de cette ligne, mais c'est correct : la table `audit` est en écriture
-      seule (`SELECT, INSERT`), et `verifier_chaine` détecte bien une vraie
-      divergence historique. Deux routes de correction envisagées, toutes deux hors
-      périmètre de cet audit : (1) documenter sur l'écran (`/app/securite`, Export)
-      qu'une rupture ancienne connue existe et pourquoi, ou (2) décider d'une
-      procédure de ré-ancrage assumé si la démo doit montrer `intacte: true`. Pas
-      fait ce tour — requiert un arbitrage produit séparé. Tests `modules/audit`
-      verts, `ruff check` propre ; `GET /audit/integrite` en fonctionnement normal.
+- [x] **Audit (`GET /audit/integrite`) : option (1) de l'entrée précédente mise en
+      œuvre (2026-10-12) — enrichissement défensif, pas activement nécessaire
+      aujourd'hui.** Revérifié en direct sur les deux organisations démo
+      (`01a0b10b…`, `01a0e6a1…`) : les deux déclarent maintenant `intacte: true`
+      (2412 et 227 entrées) — la rupture historique du 2026-09-05 documentée
+      ci-dessous n'existe plus dans les données réelles (base recréée/réinitialisée
+      depuis). `verifier_chaine` (`apps/synelia/synelia/audit.py`) reconnaît
+      quand même désormais ce `ruptureId` précis et enrichit `raison` avec le
+      contexte (commit, date, « pas un signe d'altération ») **si** cette ligne
+      réapparaît un jour (restauration d'une sauvegarde par ex.) — sans jamais
+      masquer la rupture elle-même (`intacte` reste `False`). Pas touché à
+      l'option (2) (ré-ancrage) : modifier des données d'un journal conçu pour être
+      infalsifiable reste une décision produit, pas un correctif de routine. Tests
+      `modules/audit` verts (6 passed), `ruff check`/`format` propres.
 
 - [x] **Univers Stockage objet S3 : le binaire `mc` embarqué cassé (2026-09-15,
       corrigé).** Root cause : `curl -sSL https://dl.min.io/client/mc/…`
@@ -439,23 +439,16 @@ correspondantes situées après la ligne 894 de ce fichier, non re-répétées i
       vrai peering `demo · 10.91.0.0/24 · ABJ`, et désactive bien « Continuer » sur
       un code déjà pris (`demo`) — validation d'unicité tourne contre le vrai parc.
 
-- [ ] **Univers Espaces Cloud : le dropdown « Rattacher » (fiche d'un Espace,
-      onglets Ressources) liste des applications fictives (`APPLICATIONS` de
-      `src/lib/mock/paas.ts`) au lieu du vrai parc de projets/services de l'Espace —
-      trouvé le 2026-09-15, pas corrigé.** Les deux boutons `BoutonFormulaire`
-      « Rattacher » (machine ou cluster à une application) construisent leur
-      `options` directement depuis `APPLICATIONS.map(...)`, jamais chargé via
-      `useCollection` — en mode API l'utilisateur choisirait parmi des applications
-      de démonstration qui n'existent pas dans son organisation. Distinct de (mais
-      voisin de) le bug `applicationNom` documenté juste en dessous : même corrigé,
-      le sélecteur resterait faux. Pas corrigé : `APPLICATIONS`/`appId` est un
-      modèle de rattachement legacy (commentaire dans `src/lib/mock/projets.ts` :
-      « Les machines, les déploiements et la supervision désignent encore une
-      application par son identifiant historique »), remplacé côté produit par le
-      couple Projet/Service (`useCollection('projets', …)`) — le bon correctif
-      suppose de pointer ce sélecteur vers les services d'un projet réel, ce qui
-      touche le même modèle legacy que le bug `applicationNom` et mérite d'être
-      traité avec lui.
+- [x] **Univers Espaces Cloud : le dropdown « Rattacher » — déjà corrigé entre-temps,
+      constaté le 2026-10-12 en reprenant cette entrée.** Trouvé fictif le
+      2026-09-15 (listait `APPLICATIONS` de `src/lib/mock/paas.ts`) ; `src/app/app/
+      espaces/[id]/vue.tsx` utilise maintenant `useCollection('services-projet',
+      SERVICES_PROJET)` pour les deux dialogues « Rattacher » (machine et cluster),
+      cohérent avec le correctif `applicationNom` voisin. Vérifié en direct
+      (agent-browser, `espace-demo-abj`) : le dialogue « Rattacher db-01 à une
+      application » affiche un sélecteur vide et honnête (aucun service réel avec
+      `appId` dans cette organisation), pas une liste fictive. Pas de nouveau
+      correctif nécessaire cette fois — entrée corrigée à tort laissée ouverte.
 
 - [x] **Univers Espaces Cloud : `Vm.applicationNom` ne se persiste jamais via l'API
       — corrigé (2026-09-15).** Le schéma `VmModification` manquait le champ
@@ -1220,7 +1213,14 @@ correspondantes situées après la ligne 894 de ce fichier, non re-répétées i
       **VM ciblée pour reproduire à volonté** : `POST /web/hebergements` avec `{"domaine": "xxx.example.com", "palier": "starter", "site": "ABJ"}` sur l'org "Synelia (démo)" échoue systématiquement à l'étape 2 tant que ceci n'est pas corrigé (instance de test `cb6f02d4-...` déjà nettoyée par le rollback du job).
       **À faire ensuite** : inspecter `/etc/kolla/nova-compute/nova.conf` et `neutron.conf` pour d'autres réglages `rabbit_*`, envisager un redémarrage propre du conteneur `rabbitmq` sur ctrl1 si rien d'autre ne ressort — TOUTES les VM du lab en dépendent, à faire avec prudence même si les actions OpenStack sont pré-autorisées.
 
-- [ ] **Root fs (`/`) du host dev01 à 100 % plein (43 Mo libres sur 20 Go, `/dev/md3`)** — cause probable du `docker exec` cassé sur `synelia-backend-dev01-api-1`/`-worker-1` (`chdir to cwd ("/app") ... no such file or directory`), contournement utilisé : `docker run --rm --env-file ... --entrypoint python3 <image>` pour tout script ponctuel. `/var` et `/tmp` sont des montages séparés avec beaucoup de marge (2.3 To et large libre) — le problème est uniquement sur `/`. Plus gros contributeurs identifiés (`du -xh --max-depth=2 /`) : `/usr` (11 Go, système, pas réductible) et `/home/jekas` (4.6 Go : `.local/share/claude` 619 Mo, `.agent-browser/browsers` 783 Mo, `.claude/projects` 512 Mo, `.expo` 399 Mo, `.maestro` 349 Mo — contenu utilisateur/session, pas nettoyé sans demander). `dnf clean all` déjà exécuté (143 fichiers sur `/var/cache/dnf`, qui est sur le montage `/var`, donc sans effet sur `/`). À trancher avec l'utilisateur avant de supprimer quoi que ce soit dans `/home/jekas` : quels caches d'outils (browsers agent-browser téléchargés, historique de sessions Claude) peuvent être purgés sans perte.
+- [x] **Root fs (`/`) du host dev01 : n'est plus à 100 % plein, revérifié le
+      2026-10-12.** `df -h /` montre 83 % utilisé (16 Go libres sur 90 Go) — un
+      montage/disque différent de celui décrit ci-dessous (20 Go, `/dev/md3`),
+      donc soit étendu depuis, soit déjà un autre volume ; `/home/jekas` ne pèse
+      plus que 520 Mo (contre 4,6 Go rapportés). Pas de `docker exec` cassé
+      constaté ce tour. Laissé `[x]` comme « plus un problème actif » plutôt que
+      « root-causé » — personne n'a tranché la question de nettoyage posée
+      ci-dessous, elle ne s'est juste pas reposée depuis.
 
 - [x] **Déploiements : `commitMessage` du corps de la requête n'était jamais persisté, corrigé (2026-09-14).** `POST /deploiements` acceptait `message` dans `DeploiementDemande`, mais `lancer_deploiement` (`deploiements/router.py`) ne le recopiait jamais dans `commitMessage` : la colonne « Message » de l'historique (`/app/applications/deploiements`) restait toujours vide pour un déploiement réel, confirmé en direct sur dev01 avant correctif. Corrigé par une ligne (`commitMessage=corps.message`), assertion ajoutée à `test_cycle_deploiement` — 5/5 tests verts, `ruff check` propre. Commit local `a4d4bdf` sur `dev01-real-infra`, pas poussé ni redéployé (laissé au prochain redéploiement groupé). Audit plus large du module dans la même passe : voir l'entrée Ouverte « pipeline de déploiement est un théâtre d'étapes ».
 
