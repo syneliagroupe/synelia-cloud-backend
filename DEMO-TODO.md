@@ -44,7 +44,9 @@ item, cochée quand réellement vérifiée en direct (pas juste "typecheck passe
 > un `POST` qui crée un travail** (VM, hébergement, domaine, sauvegarde, cluster K8s,
 > etc.) — voir l'entrée `web_domaines` dans « Résolu » pour le diagnostic complet.
 
-Dernière mise à jour : 2026-10-12 (audit de l'univers PaaS/Applications en direct — domaines applicatifs fantômes après suppression d'un service/projet, corrigé ; détail dans « Ouvert » ci-dessous).
+Dernière mise à jour : 2026-10-13 (audit de l'univers IA & Agents en direct — catalogue de modèles menteur et agent de démo semé avec un modèle bloqué, corrigés ; détail dans « Ouvert » ci-dessous).
+
+Antérieur : 2026-10-12 (audit de l'univers PaaS/Applications en direct — domaines applicatifs fantômes après suppression d'un service/projet, corrigé ; détail dans « Ouvert » ci-dessous).
 
 Antérieur : 2026-10-12 (audit large front/API/backend, détail dans « Ouvert » ci-dessous — cinq vrais bugs trouvés et corrigés, un gap de CI découvert).
 
@@ -128,6 +130,28 @@ sur les vrais points de restauration et le vrai contrat `POST
 correspondantes situées après la ligne 894 de ce fichier, non re-répétées ici.)
 
 ## Ouvert — à faire ou à décider
+
+- [x] **Univers IA & Agents (`modules/ia_agents`) : catalogue de modèles menteur et agent de
+      démo semé avec un modèle bloqué — trouvé et corrigé en direct (2026-10-13).**
+      `litellm/config.yaml` documentait déjà (commentaire du 2026-09-07) que le
+      garde-fou du compte OpenRouter partagé ne laisse passer que
+      `deepseek/deepseek-v4-flash` et `z-ai/glm-5.3-flash` — les 8 autres modèles
+      texte du catalogue (`llama-3.3-70b`, `mistral-small-3.2`, `qwen3-32b`,
+      `codestral-2508`, `gpt-5.1`, `claude-sonnet-4.5`, `mistral-large-2407`,
+      `gemini-2.5-pro`) restaient pourtant marqués `invocable=True` côté backend.
+      **Vérifié en direct** : agent de test sur `claude-sonnet-4.5` → `424`
+      immédiat (« 0 endpoints out of 5 requested are available matching your
+      guardrail restrictions »). Plus grave : l'agent semé par défaut
+      (`agent-demo-support`, `@peupleur` de `ia_agents/service.py`) utilisait lui-même
+      `meta-llama/llama-3.3-70b-instruct` — l'assistant support de la démo aurait
+      échoué dès le premier vrai message. Corrigé : les 8 modèles passés à
+      `invocable=False` (description mise à jour pour expliquer pourquoi), l'agent de
+      démo reseedé sur `z-ai/glm-5.3-flash` (le modèle par défaut déjà documenté comme
+      confirmé). **Revérifié en direct après déploiement** : agent de test réel créé
+      sur `glm-5.3-flash`, invoqué pour de vrai (200, `"OK"`, 24+42 jetons,
+      0,0023 FCFA, 775 ms), supprimé. Tests mis à jour en conséquence
+      (`test_liste_modeles_ia`, `test_flux_branchement_reel` référençaient encore
+      `llama-3.3-70b`) ; suite complète 353 passed, 4 skipped, 0 failed avant et après.
 
 - [x] **Univers PaaS/Applications (`modules/projets`) : un domaine applicatif survit à la
       suppression de son service ou de son projet — trouvé et corrigé en direct

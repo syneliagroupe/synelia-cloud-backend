@@ -56,8 +56,13 @@ SEMENCES: list[m.ModeleIA] = [
         unite="jeton",
         statut="disponible",
         usages=["Rédaction", "Synthèse de documents", "Support de niveau 1"],
-        description="Modèle généraliste, appelé réellement via LiteLLM/OpenRouter.",
-        invocable=True,
+        description=(
+            "Modèle généraliste, configuré sur LiteLLM/OpenRouter mais bloqué par le "
+            "garde-fou restrictif du compte partagé (depuis 2026-09-07, confirmé en "
+            "direct : 0 endpoint autorisé) — invocation garantie en échec tant que ce "
+            "garde-fou n'est pas corrigé."
+        ),
+        invocable=False,
     ),
     m.ModeleIA(
         id="m-deepseek-flash",
@@ -121,8 +126,12 @@ SEMENCES: list[m.ModeleIA] = [
         unite="jeton",
         statut="disponible",
         usages=["Classification", "Réponses courtes", "Volume élevé"],
-        description="Bon défaut pour le gros du trafic, appelé réellement via LiteLLM/OpenRouter.",
-        invocable=True,
+        description=(
+            "Bon défaut pour le gros du trafic sur le papier, mais bloqué par le même "
+            "garde-fou OpenRouter restrictif que les autres modèles hors liste "
+            "autorisée (depuis 2026-09-07) — invocation garantie en échec en l'état."
+        ),
+        invocable=False,
     ),
     m.ModeleIA(
         id="m-qwen-32b",
@@ -139,8 +148,12 @@ SEMENCES: list[m.ModeleIA] = [
         unite="jeton",
         statut="disponible",
         usages=["Raisonnement pas à pas", "Mathématiques", "Traduction"],
-        description="Raisonne explicitement avant de répondre, appelé réellement via LiteLLM/OpenRouter.",
-        invocable=True,
+        description=(
+            "Raisonne explicitement avant de répondre, mais bloqué par le garde-fou "
+            "OpenRouter restrictif du compte partagé (depuis 2026-09-07) — invocation "
+            "garantie en échec en l'état."
+        ),
+        invocable=False,
     ),
     m.ModeleIA(
         id="m-codestral",
@@ -157,8 +170,11 @@ SEMENCES: list[m.ModeleIA] = [
         unite="jeton",
         statut="disponible",
         usages=["Complétion de code", "Revue de diff", "Migration de scripts"],
-        description="Spécialisé code, appelé réellement via LiteLLM/OpenRouter.",
-        invocable=True,
+        description=(
+            "Spécialisé code, mais bloqué par le garde-fou OpenRouter restrictif du "
+            "compte partagé (depuis 2026-09-07) — invocation garantie en échec en l'état."
+        ),
+        invocable=False,
     ),
     m.ModeleIA(
         id="m-gpt",
@@ -175,8 +191,12 @@ SEMENCES: list[m.ModeleIA] = [
         unite="jeton",
         statut="disponible",
         usages=["Tâches longues", "Raisonnement complexe"],
-        description="Appelé réellement via LiteLLM/OpenRouter. Le contenu quitte le territoire.",
-        invocable=True,
+        description=(
+            "Le contenu quitterait le territoire si c'était invocable — mais bloqué "
+            "par le garde-fou OpenRouter restrictif du compte partagé (depuis "
+            "2026-09-07) : invocation garantie en échec en l'état."
+        ),
+        invocable=False,
     ),
     m.ModeleIA(
         id="m-claude",
@@ -193,8 +213,12 @@ SEMENCES: list[m.ModeleIA] = [
         unite="jeton",
         statut="disponible",
         usages=["Analyse de contrats", "Assistance au code"],
-        description="Appelé réellement via LiteLLM/OpenRouter.",
-        invocable=True,
+        description=(
+            "Bloqué par le garde-fou OpenRouter restrictif du compte partagé (depuis "
+            "2026-09-07, confirmé en direct : 0 endpoint autorisé) — invocation "
+            "garantie en échec tant que ce garde-fou n'est pas corrigé."
+        ),
+        invocable=False,
     ),
     m.ModeleIA(
         id="m-mistral-large",
@@ -212,10 +236,12 @@ SEMENCES: list[m.ModeleIA] = [
         statut="disponible",
         usages=["Français soutenu", "Documents administratifs"],
         description=(
-            "Équivalent réel le plus proche de « Mistral Large 3 » du catalogue marketing : "
-            "appelé via LiteLLM/OpenRouter sous le slug `mistralai/mistral-large-2407`."
+            "Équivalent réel le plus proche de « Mistral Large 3 » du catalogue marketing "
+            "(slug `mistralai/mistral-large-2407`), mais bloqué par le garde-fou "
+            "OpenRouter restrictif du compte partagé (depuis 2026-09-07) — invocation "
+            "garantie en échec en l'état."
         ),
-        invocable=True,
+        invocable=False,
     ),
     m.ModeleIA(
         id="m-gemini",
@@ -232,8 +258,12 @@ SEMENCES: list[m.ModeleIA] = [
         unite="jeton",
         statut="disponible",
         usages=["Très longs contextes", "Analyse de corpus"],
-        description="Appelé réellement via LiteLLM/OpenRouter.",
-        invocable=True,
+        description=(
+            "Bloqué par le garde-fou OpenRouter restrictif du compte partagé (depuis "
+            "2026-09-07, confirmé en direct : 0 endpoint autorisé) — invocation "
+            "garantie en échec tant que ce garde-fou n'est pas corrigé."
+        ),
+        invocable=False,
     ),
     m.ModeleIA(
         id="m-embed",
@@ -433,7 +463,11 @@ async def demo(session, org: Organisation, admin: Utilisateur) -> None:
             "brièvement, et ne demande jamais de mot de passe."
         ),
         espaceId="espace-demo-abj",
-        modele="meta-llama/llama-3.3-70b-instruct",
+        # `meta-llama/llama-3.3-70b-instruct` est bloqué par le garde-fou OpenRouter
+        # restrictif du compte partagé (depuis 2026-09-07) — l'agent de démo semé ici
+        # serait sinon injoignable dès le premier `invoquer` réel. `glm-5.3-flash` est
+        # le modèle par défaut confirmé réellement autorisé pour la démo (2026-09-09).
+        modele="z-ai/glm-5.3-flash",
         temperature=0.7,
         topP=1,
         jetonsMax=512,

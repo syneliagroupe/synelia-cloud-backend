@@ -12,7 +12,8 @@ async def test_liste_modeles_ia(client):
     assert r.status_code == 200
     corps = r.json()
     par_slug = {d["slug"]: d for d in corps["donnees"]}
-    assert par_slug["meta-llama/llama-3.3-70b-instruct"]["invocable"] is True
+    assert par_slug["z-ai/glm-5.3-flash"]["invocable"] is True
+    assert par_slug["meta-llama/llama-3.3-70b-instruct"]["invocable"] is False
     assert par_slug["synelia/bge-m3"]["invocable"] is False
 
 

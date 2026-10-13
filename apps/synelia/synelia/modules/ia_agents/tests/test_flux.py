@@ -32,7 +32,7 @@ async def _creer_agent(client) -> str:
         json={
             "nom": "Agent de test flux",
             "consigne": "Réponds uniquement par le mot « positif » ou « negatif ».",
-            "modele": "meta-llama/llama-3.3-70b-instruct",
+            "modele": "z-ai/glm-5.3-flash",
         },
     )
     assert r.status_code == 201, r.text
