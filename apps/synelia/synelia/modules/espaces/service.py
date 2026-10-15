@@ -645,8 +645,8 @@ async def _provisionner_zone_vps(session: AsyncSession, espace_id: str, org_id: 
     try:
         zone = await depot_plateforme.secrets(_ctx_amorcage_plateforme(session), espace_id)
         await asyncio.to_thread(_epurer_vm_projet_zone_vps, zone.get("projet_id"))
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001 — épuration best-effort, pas bloquant pour l'Espace
+        log.debug("zone_vps.epuration_vm_projet_echouee", espace_id=espace_id, erreur=str(exc))
     if not reglages().vps_zone_lb_id:
         log.warning("zone_vps.lb_id_non_provisionne", espace_id=espace_id)
 
