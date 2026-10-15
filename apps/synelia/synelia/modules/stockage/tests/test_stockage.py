@@ -136,6 +136,55 @@ async def test_cycle_volume(client_org):
     _affirmer_volume_cinder_absent("data-01", avant)
 
 
+async def test_volume_create_avec_attacherA_attache_reellement(client_org, monkeypatch):
+    """`attacherA` (bouton « Attacher un volume » de l'onglet Stockage d'une VM, création +
+    attachement en un temps) doit réellement appeler l'amont Cinder/Nova, pas seulement poser
+    `attachedTo` sur la ligne Volume : avant correctif, aucun attachement réel n'avait jamais
+    lieu (le volume restait `available` côté Cinder) alors que l'API affichait déjà « attaché »
+    — un détachement immédiat réussissait quand même (`ignore_missing=True` côté Nova masquant
+    qu'il n'y avait rien à détacher)."""
+    from synelia.modules.stockage import service as stockage_service
+
+    espace_id = await _espace(client_org)
+    vm_id = await _creer_vm(client_org, espace_id, "vm-volume-attacherA")
+
+    appels: list[tuple] = []
+
+    class _CinderEspion:
+        def creer_volume(self, **kw):
+            return {"id": "vol-espion-1", "statut": "available", "taille_go": kw["taille_go"]}
+
+        def attacher(self, volume_id, vm_id, montage=None, identifiants=None):
+            appels.append((volume_id, vm_id, montage))
+
+        def statut_volume(self, volume_id, identifiants=None):
+            return "in-use"
+
+    monkeypatch.setattr(stockage_service, "amont_cinder", lambda: _CinderEspion())
+
+    corps = {
+        "espaceId": espace_id,
+        "nom": "data-attache-direct",
+        "tailleGo": 20,
+        "classe": "ssd",
+        "chiffre": False,
+        "attacherA": vm_id,
+        "montage": "/srv/direct",
+    }
+    r = await client_org.post("/v1/volumes", json=corps)
+    assert r.status_code == 202, r.text
+    assert r.json()["statut"] == "done"
+
+    assert len(appels) == 1, "l'amont Cinder/Nova n'a jamais été appelé pour attacher le volume"
+    vid, _sid, montage = appels[0]
+    assert vid == "vol-espion-1"
+    assert montage == "/srv/direct"
+
+    vols = (await client_org.get("/v1/volumes")).json()["donnees"]
+    vol = next(v for v in vols if v["nom"] == "data-attache-direct")
+    assert vol["attachedTo"] == vm_id and vol["statut"] == "disponible"
+
+
 async def test_volume_create_echoue_ne_laisse_pas_de_fantome(client_org, monkeypatch):
     """Un `volume.create` qui échoue côté Cinder ne doit pas laisser un volume qui a
     l'air sain dans l'API : `statut` doit refléter l'échec (`erreur`) et le volume ne
