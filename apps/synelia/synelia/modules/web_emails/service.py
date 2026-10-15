@@ -27,8 +27,6 @@ PALIERS = {
     "business": {"boites": 100, "prixSiege": 700},
 }
 
-DMARC = "v=DMARC1; p=none; rua=mailto:dmarc@synelia.cloud"
-
 ETAPES_SUPPRESSION = [
     {"nom": "Suppression des boîtes aux lettres", "dureeS": 10},
     {"nom": "Suppression du domaine (Zimbra)", "dureeS": 8},
@@ -52,12 +50,22 @@ class ExecuteurMessagerieActivate(Executeur):
         # même garde que `vms.service`, sans quoi un appel amont lent gèlerait la boucle asyncio
         # — donc l'API entière, tous tenants confondus.
         await asyncio.to_thread(amont().creer_domaine, mess.domaine)
+        # Ne jamais affirmer SPF/DKIM/DMARC « valide » en dur : `ZimbraReel` ne les
+        # configure pas automatiquement à la création du domaine (nécessite une
+        # publication DNS manuelle, cf. `verifier_authentification`), seul `ZimbraSimule`
+        # peut répondre « valide » sans rien avoir à faire. Interroger l'amont lui-même
+        # pour que la fiche stockée corresponde toujours à l'état réel, simulé ou non.
+        resultat = await asyncio.to_thread(amont().verifier_authentification, mess.domaine)
         await depot.modifier(
             ctx,
             mess.id,
             {
                 "actif": True,
-                "authentification": {"spf": "valide", "dkim": "valide", "dmarc": DMARC},
+                "authentification": {
+                    "spf": resultat.get("spf", "absent"),
+                    "dkim": resultat.get("dkim", "absent"),
+                    "dmarc": resultat.get("dmarc", ""),
+                },
             },
         )
 
