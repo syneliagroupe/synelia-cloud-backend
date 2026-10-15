@@ -44,7 +44,10 @@ item, cochée quand réellement vérifiée en direct (pas juste "typecheck passe
 > un `POST` qui crée un travail** (VM, hébergement, domaine, sauvegarde, cluster K8s,
 > etc.) — voir l'entrée `web_domaines` dans « Résolu » pour le diagnostic complet.
 
-Dernière mise à jour : 2026-09-15 (après 15h07, comp2 RabbitMQ stream queue cleanup).
+Dernière mise à jour : 2026-10-15 (audit de l'univers Organisations/Membres/Compte en direct —
+bug de doublon de portée sur `POST`/`PATCH /membres` corrigé ; détail dans « Ouvert » ci-dessous).
+
+Antérieur : 2026-09-15 (après 15h07, comp2 RabbitMQ stream queue cleanup).
 **Comp2 RabbitMQ stream queue bloat fix attempt (2026-09-15, ~15h00-15h07)** : Root cause of comp2 nova-compute downtime identified: eight RabbitMQ STREAM fanout queues with massive unconsumed message bloat (`q-agent-notifier-l2population-update_fanout: 21380 msg`, `cinder-scheduler_fanout: 20033 msg`, `neutron-vo-Port-1.10_fanout: 8695 msg`, plus 5 others totaling 50000+ messages). `rabbitmqctl purge_queue` fails on streams with `not_supported` error, but `rabbitmqctl delete_queue` DOES work on streams (counter-intuitive but verified). Deleted all 8 bloated queues on ctrl1 via rabbitmqctl; queues auto-recreate with 0 messages when services redeclare them. Restarted nova-compute and neutron-openvswitch-agent containers on comp2 (192.168.26.238). Verified: comp2 now shows 8+ RabbitMQ connections and queue declarations exist (`reply_comp2:nova-compute:1`, `compute.comp2`, etc.) with 0 consumers, indicating nova-compute reached RPC initialization phase but then crashed. nova_compute container subsequently exited (PID 7 still visible running briefly, then crash) — systemd service now fails on `docker start nova_compute: No such container` (container was removed during restart cycle). Stream queue cleanup is complete and working (`cinder-scheduler_fanout` down to 19 msg, others to 0-1 msg), but comp2 remains `state: down` due to nova-compute container needing recreation (next step: `kolla-ansible reconfigure` or manual container rebuild).
 
 Antérieur : 2026-09-15 (après 23h30, regression test_impayes après 499f5c0 corrigée).
@@ -124,6 +127,41 @@ sur les vrais points de restauration et le vrai contrat `POST
 correspondantes situées après la ligne 894 de ce fichier, non re-répétées ici.)
 
 ## Ouvert — à faire ou à décider
+
+- [x] **Audit de l'univers Organisations/Membres/Compte (`modules/organisations`,
+      `modules/membres`, `modules/compte`) : un vrai bug backend trouvé et corrigé en
+      direct (2026-10-15), reste du périmètre déjà solide.** `POST /membres`
+      (`ajouter_appartenance`, `membres/router.py`) refusait de rattacher un membre déjà
+      existant à une **nouvelle** portée `espace` (`scopeType`/`scopeId`) dès qu'il avait
+      déjà une adhésion `espace` sur un *autre* `scopeId` — la vérification de doublon ne
+      comparait que `scopeType`, jamais `scopeId`, alors que la contrainte d'unicité réelle
+      en base (`uq_membership`) porte sur le quadruplet `(utilisateur_id, org_id,
+      scope_type, scope_id)`. Conséquence concrète : le bouton « Attribuer » de
+      `/app/membres` (donner à un membre existant un rôle restreint à un second espace)
+      échouait systématiquement en `409 membre_existant` après la première attribution.
+      **Reproduit en direct sur l'organisation « Synelia (démo) »**
+      (`01a0b10b-8f4d-7633-bd9a-75379da461a3`) : `POST /membres` avec `scopeId=A` → `201`,
+      puis `scopeId=B` (différent) pour le même utilisateur → `409` à tort ; nettoyé après
+      coup (`DELETE`), aucune donnée réelle de l'organisation laissée modifiée. Corrigé en
+      ajoutant `scope_id` à la clause de doublon. Second bug de robustesse trouvé par
+      construction en écrivant le test de régression : `PATCH /membres/{id}` qui déplace un
+      membre vers une portée déjà occupée par une autre de ses adhésions ne contrôlait rien
+      avant `flush()` — la violation de `uq_membership` remontait en `500` brut
+      (`IntegrityError` non rattrapée), même patron que le bug déjà corrigé sur
+      `PUT /moi/organisation-active` (2026-09-14, voir plus bas). Corrigé par la même garde,
+      calculée *avant* toute mutation de l'objet ORM (sinon l'auto-flush du `SELECT` de
+      contrôle déclenche lui-même la violation). Deux tests de régression ajoutés
+      (`test_ajout_membre_scopes_distincts_non_bloque`,
+      `test_patch_membre_vers_scope_deja_occupe_refuse_proprement`,
+      `modules/membres/tests/test_membres.py`). Vérifié en direct sur les 4 organisations
+      réelles de la plateforme : compteurs « utilisateurs » de `GET /organisations`
+      cohérents avec `GET /membres` (1 membre chacune actuellement, aucun écart constaté).
+      Reste du périmètre déjà audité à plusieurs reprises (voir entrées `membres`,
+      `Audit du module backend compte`, « Paramètres — Organisation » plus bas) : invitations,
+      retrait/rétrogradation du dernier admin, clés SSH du compte, MFA, changement de mot de
+      passe, tous confirmés réels et bien câblés, aucun autre bug trouvé ce tour.
+      `pytest` (`organisations`/`membres`/`compte`) : 11 passed avant, 13 passed après ;
+      `ruff check`/`format` propres.
 
 - [x] **Audit de l'univers `lanceur` (2026-09-15) : un vrai bug de câblage frontend
       corrigé, reste de l'écran un gap déjà documenté ailleurs.** L'identité de tête
