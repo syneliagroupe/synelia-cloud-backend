@@ -346,3 +346,44 @@ async def test_cle_api_authentifie_une_requete_reelle(client):
     r = await client.get("/v1/audit", headers={"Authorization": "", "X-Api-Key": secret})
     assert r.status_code == 403
     assert r.json()["erreur"]["code"] == "interdit"
+
+
+async def test_cle_api_ips_autorisees_refuse_hors_liste(client):
+    """`ipsAutorisees` sur une clé d'API doit réellement restreindre son usage, pas rester
+    une étiquette jamais vérifiée : une clé restreinte à une IP qui n'est pas celle de
+    l'appelant (le client de test appelle depuis `127.0.0.1`) doit être refusée."""
+    r = await client.post(
+        "/v1/securite/cles-api",
+        json={
+            "nom": "ci-cd-restreinte",
+            "portee": ["sso.configure"],
+            "ipsAutorisees": ["203.0.113.5"],
+        },
+    )
+    assert r.status_code == 201, r.text
+    secret = r.json()["secret"]
+
+    r = await client.get(
+        "/v1/securite/cles-api", headers={"Authorization": "", "X-Api-Key": secret}
+    )
+    assert r.status_code == 403
+    assert r.json()["erreur"]["code"] == "ip_non_autorisee"
+
+
+async def test_cle_api_ips_autorisees_autorise_dans_la_liste(client):
+    """Une clé d'API restreinte à une plage couvrant l'IP réelle de l'appelant fonctionne."""
+    r = await client.post(
+        "/v1/securite/cles-api",
+        json={
+            "nom": "ci-cd-ok",
+            "portee": ["sso.configure"],
+            "ipsAutorisees": ["127.0.0.1/32"],
+        },
+    )
+    assert r.status_code == 201, r.text
+    secret = r.json()["secret"]
+
+    r = await client.get(
+        "/v1/securite/cles-api", headers={"Authorization": "", "X-Api-Key": secret}
+    )
+    assert r.status_code == 200
