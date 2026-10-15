@@ -200,7 +200,15 @@ async def repondre_ticket(ticketId: str, corps: m.MessageTicket, ctx: Ctx) -> An
         pieces=list(corps.pieces or []),
     )
     messages = [*t.messages, msg]
-    statut = "resolu" if corps.cloture else t.statut
+    # Une réponse client lève l'attente : l'engagement SLA (cf. sla_restant_min)
+    # ne reprend que si le statut quitte "attente_client" - sinon le ticket y
+    # reste indéfiniment et l'horloge ne redémarre jamais, même après réponse.
+    if corps.cloture:
+        statut = "resolu"
+    elif t.statut == "attente_client":
+        statut = "en_cours"
+    else:
+        statut = t.statut
     updated = t.model_copy(update={"messages": messages, "statut": statut})
     await detenteur_tickets.remplacer(ctx, ticketId, updated)
     await journaliser(
