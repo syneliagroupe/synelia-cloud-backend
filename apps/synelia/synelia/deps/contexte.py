@@ -23,6 +23,7 @@ from synelia_kernel.journal import org_id_courant, utilisateur_id_courant
 
 from synelia.deps import limitation
 from synelia.securite import (
+    cle_api_ip_autorisee,
     hacher_jeton,
     ip_autorisee,
     lire_acces,
@@ -200,7 +201,7 @@ async def _principal_depuis_jeton(session: AsyncSession, jeton: str) -> Principa
     )
 
 
-async def _principal_depuis_cle(session: AsyncSession, cle: str) -> Principal:
+async def _principal_depuis_cle(session: AsyncSession, cle: str, ip: str | None) -> Principal:
     ligne = (
         await session.execute(
             select(CleApi).where(
@@ -210,6 +211,14 @@ async def _principal_depuis_cle(session: AsyncSession, cle: str) -> Principal:
     ).scalar_one_or_none()
     if ligne is None or (ligne.expire_le and ligne.expire_le < maintenant()):
         raise erreurs.non_authentifie("Clé d'API inconnue, révoquée ou expirée.")
+    if ligne.ips_autorisees and not cle_api_ip_autorisee(ip, ligne.ips_autorisees):
+        # `ipsAutorisees` est affiché et modifiable via `/securite/cles-api` comme une
+        # restriction réelle : sans ce contrôle, une clé déclarée restreinte à une liste
+        # d'IP continuait de fonctionner depuis n'importe où.
+        raise erreurs.interdit(
+            "Cette clé d'API n'est pas autorisée depuis cette adresse IP.",
+            code="ip_non_autorisee",
+        )
     ligne.derniere_utilisation_le = maintenant()
     ligne.utilisations = (ligne.utilisations or 0) + 1
     if ligne.org_id is None:
@@ -270,7 +279,8 @@ async def contexte(
     if authorization and authorization.lower().startswith("bearer "):
         principal = await _principal_depuis_jeton(session, authorization[7:].strip())
     elif x_api_key:
-        principal = await _principal_depuis_cle(session, x_api_key)
+        ip = request.client.host if request.client else None
+        principal = await _principal_depuis_cle(session, x_api_key, ip)
     else:
         raise erreurs.non_authentifie()
 
