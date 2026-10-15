@@ -130,6 +130,77 @@ async def test_role_change_effet_immediat_sans_relogin(client):
     assert r.json()["erreur"]["code"] == "interdit"
 
 
+async def test_ajout_membre_scopes_distincts_non_bloque(client):
+    """Deux attributions de rôle au même utilisateur, sur deux portées `espace` distinctes,
+    doivent toutes les deux réussir — seul un doublon exact (même `scopeType` + `scopeId`,
+    tel que contraint par `uq_membership` en base) doit être refusé. Régression : la
+    vérification de doublon ne comparait que `scopeType`, bloquant à tort toute deuxième
+    attribution sur un espace différent dès qu'une première existait."""
+    oid, _ = await _creer_org(client)
+    session = await inscrire_et_verifier(
+        client, "multi-scope@membre.ci", "Multi Scope", "Scope!2026"
+    )
+    user_id = session["utilisateur"]["id"]
+
+    r = await client.post(
+        "/v1/membres",
+        json={"userId": user_id, "role": "read_only", "scopeType": "espace", "scopeId": "esp-a"},
+        headers=_headers(oid),
+    )
+    assert r.status_code == 201, r.text
+
+    # Même utilisateur, même scopeType, mais un `scopeId` différent : doit passer.
+    r = await client.post(
+        "/v1/membres",
+        json={"userId": user_id, "role": "read_only", "scopeType": "espace", "scopeId": "esp-b"},
+        headers=_headers(oid),
+    )
+    assert r.status_code == 201, r.text
+
+    # Même utilisateur, même scopeType, même scopeId : doublon exact, refusé.
+    r = await client.post(
+        "/v1/membres",
+        json={"userId": user_id, "role": "read_only", "scopeType": "espace", "scopeId": "esp-a"},
+        headers=_headers(oid),
+    )
+    assert r.status_code == 409 and r.json()["erreur"]["code"] == "membre_existant"
+
+
+async def test_patch_membre_vers_scope_deja_occupe_refuse_proprement(client):
+    """`PATCH /membres/{id}` qui déplacerait un membre vers une portée (scopeType, scopeId)
+    déjà occupée par une autre de ses adhésions doit renvoyer un 409 propre — sans cette garde,
+    la contrainte d'unicité `uq_membership` lève une `IntegrityError` non rattrapée (500 brut)
+    au lieu d'une erreur applicative."""
+    oid, _ = await _creer_org(client)
+    session = await inscrire_et_verifier(
+        client, "patch-scope@membre.ci", "Patch Scope", "Scope!2026"
+    )
+    user_id = session["utilisateur"]["id"]
+
+    r = await client.post(
+        "/v1/membres",
+        json={"userId": user_id, "role": "read_only", "scopeType": "espace", "scopeId": "esp-a"},
+        headers=_headers(oid),
+    )
+    assert r.status_code == 201, r.text
+
+    r = await client.post(
+        "/v1/membres",
+        json={"userId": user_id, "role": "read_only", "scopeType": "espace", "scopeId": "esp-b"},
+        headers=_headers(oid),
+    )
+    assert r.status_code == 201, r.text
+    mem_b_id = r.json()["id"]
+
+    # Tenter de déplacer l'adhésion esp-b vers esp-a, déjà occupée par l'autre adhésion.
+    r = await client.patch(
+        f"/v1/membres/{mem_b_id}",
+        json={"scopeId": "esp-a"},
+        headers=_headers(oid),
+    )
+    assert r.status_code == 409 and r.json()["erreur"]["code"] == "membre_existant"
+
+
 async def test_cycle_invitation(client):
     oid, _ = await _creer_org(client)
 
