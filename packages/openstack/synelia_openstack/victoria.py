@@ -13,6 +13,7 @@ import os
 import time
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlencode
 
 import httpx
 
@@ -32,7 +33,12 @@ _FENETRES: dict[str, tuple[int, int]] = {
 class VictoriaSimule:
     def lien_logs(self, recherche: str | None = None) -> str:
         base = os.environ.get(ENV_LOGS_URL, "https://victorialogs.synelia.cloud")
-        q = f"?query={recherche}" if recherche else ""
+        # `recherche` est un texte libre côté utilisateur (peut contenir `&`, `#`, espaces…) :
+        # non échappé, il tronquait ou corrompait silencieusement le lien de sortie généré
+        # (vérifié en direct : `?recherche=error & disk#1 100%` produisait un lien
+        # `?query=error & disk#1 100%` — `#` coupe l'URL en fragment, `&` ajoute un faux
+        # paramètre, le reste de la recherche de l'utilisateur disparaît).
+        q = f"?{urlencode({'query': recherche})}" if recherche else ""
         return f"{base}/select/logsql/ui{q}"
 
     def lien_grafana(self) -> str | None:
