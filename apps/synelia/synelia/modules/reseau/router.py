@@ -50,6 +50,28 @@ router_vpn = APIRouter(prefix="/vpn", tags=["Réseau"])
 _rbac_lecture = "org.dashboard.view"
 
 
+async def _reconcilier_liste(
+    ctx: Contexte, depot: Depot, items: list[Any], reconcilier: Any
+) -> list[Any]:
+    """Reconcile-on-read sur une liste, pas seulement un GET détail (même motif que
+    `vms.lister_vms` / `reconcilier_statut`). Sans ça, une ressource supprimée hors bande côté
+    Neutron/Octavia (nettoyage manuel du lab, échec de compensation) continue d'apparaître dans
+    la liste alors que son GET détail renvoie déjà 404 — constaté en direct sur dev01 (une IP
+    publique dont la floating IP Neutron avait disparu restait listée « attachée » à une VM bien
+    réelle). `reconcilier_*` lève `introuvable` (404) pour un orphelin confirmé : plutôt que de
+    laisser cette unique ligne fantôme faire échouer tout l'affichage de la collection, on purge
+    la ligne en base et on l'omet du résultat, comme le ferait un GET détail individuel."""
+    sortantes = []
+    for item in items:
+        try:
+            sortantes.append(await reconcilier(ctx, item))
+        except erreurs.AppError as exc:
+            if exc.code != "introuvable":
+                raise
+            await depot.supprimer(ctx, item.id)
+    return sortantes
+
+
 # ── Réseaux ────────────────────────────────────────────────────────────────
 @router_reseaux.get("", response_model=m.ReseauxGetResponse, response_model_exclude_none=True)
 async def lister_reseaux(
@@ -57,9 +79,13 @@ async def lister_reseaux(
     espaceId: str | None = None,
     ctx: Contexte = Depends(exige(_rbac_lecture, lecture=True)),
 ) -> Any:  # noqa: N803
-    return await depot_reseau.lister(
+    resultat = await depot_reseau.lister(
         ctx, page, filtre=lambda r: not espaceId or r.espaceId == espaceId, tri_defaut="nom"
     )
+    resultat["donnees"] = await _reconcilier_liste(
+        ctx, depot_reseau, resultat["donnees"], reconcilier_reseau
+    )
+    return resultat
 
 
 @router_reseaux.post(
@@ -139,7 +165,7 @@ async def lister_ips(
     attachee: bool | None = None,
     ctx: Contexte = Depends(exige(_rbac_lecture, lecture=True)),
 ) -> Any:  # noqa: N803
-    return await depot_ip.lister(
+    resultat = await depot_ip.lister(
         ctx,
         page,
         filtre=lambda ip: (
@@ -148,6 +174,8 @@ async def lister_ips(
         ),
         tri_defaut="adresse",
     )
+    resultat["donnees"] = await _reconcilier_liste(ctx, depot_ip, resultat["donnees"], reconcilier_ip)
+    return resultat
 
 
 @router_ips.post(
@@ -279,9 +307,13 @@ async def lister_groupes_securite(
     espaceId: str | None = None,
     ctx: Contexte = Depends(exige(_rbac_lecture, lecture=True)),
 ) -> Any:  # noqa: N803
-    return await depot_groupe.lister(
+    resultat = await depot_groupe.lister(
         ctx, page, filtre=lambda g: not espaceId or g.espaceId == espaceId, tri_defaut="nom"
     )
+    resultat["donnees"] = await _reconcilier_liste(
+        ctx, depot_groupe, resultat["donnees"], reconcilier_groupe
+    )
+    return resultat
 
 
 @router_groupes.post(
@@ -504,7 +536,7 @@ async def lister_load_balancers(
     exposure: str | None = None,
     ctx: Contexte = Depends(exige(_rbac_lecture, lecture=True)),
 ) -> Any:  # noqa: N803
-    return await depot_lb.lister(
+    resultat = await depot_lb.lister(
         ctx,
         page,
         filtre=lambda lb: (
@@ -514,6 +546,8 @@ async def lister_load_balancers(
         ),
         tri_defaut="nom",
     )
+    resultat["donnees"] = await _reconcilier_liste(ctx, depot_lb, resultat["donnees"], reconcilier_lb)
+    return resultat
 
 
 def _exiger_amont_lb(corps: m.LoadBalancerCreation) -> None:
