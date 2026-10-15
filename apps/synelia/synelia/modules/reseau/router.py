@@ -174,7 +174,9 @@ async def lister_ips(
         ),
         tri_defaut="adresse",
     )
-    resultat["donnees"] = await _reconcilier_liste(ctx, depot_ip, resultat["donnees"], reconcilier_ip)
+    resultat["donnees"] = await _reconcilier_liste(
+        ctx, depot_ip, resultat["donnees"], reconcilier_ip
+    )
     return resultat
 
 
@@ -546,7 +548,9 @@ async def lister_load_balancers(
         ),
         tri_defaut="nom",
     )
-    resultat["donnees"] = await _reconcilier_liste(ctx, depot_lb, resultat["donnees"], reconcilier_lb)
+    resultat["donnees"] = await _reconcilier_liste(
+        ctx, depot_lb, resultat["donnees"], reconcilier_lb
+    )
     return resultat
 
 

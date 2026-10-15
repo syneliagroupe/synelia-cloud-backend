@@ -44,8 +44,10 @@ item, cochée quand réellement vérifiée en direct (pas juste "typecheck passe
 > un `POST` qui crée un travail** (VM, hébergement, domaine, sauvegarde, cluster K8s,
 > etc.) — voir l'entrée `web_domaines` dans « Résolu » pour le diagnostic complet.
 
-Dernière mise à jour : 2026-10-15 (audit de l'univers Organisations/Membres/Compte en direct —
-bug de doublon de portée sur `POST`/`PATCH /membres` corrigé ; détail dans « Ouvert » ci-dessous).
+Dernière mise à jour : 2026-10-15 (audit parallèle de 8 univers restants — Facturation, IAM &
+sécurité, Web Cloud emails/SSL/DNS, Observabilité, Support & SLA, Réseau (hors VPN), Stockage,
+Organisations/Membres/Compte — huit vrais bugs trouvés et corrigés, un par univers, chacun
+vérifié en direct sur dev01 ; détail dans « Ouvert » ci-dessous).
 
 Antérieur : 2026-09-15 (après 15h07, comp2 RabbitMQ stream queue cleanup).
 **Comp2 RabbitMQ stream queue bloat fix attempt (2026-09-15, ~15h00-15h07)** : Root cause of comp2 nova-compute downtime identified: eight RabbitMQ STREAM fanout queues with massive unconsumed message bloat (`q-agent-notifier-l2population-update_fanout: 21380 msg`, `cinder-scheduler_fanout: 20033 msg`, `neutron-vo-Port-1.10_fanout: 8695 msg`, plus 5 others totaling 50000+ messages). `rabbitmqctl purge_queue` fails on streams with `not_supported` error, but `rabbitmqctl delete_queue` DOES work on streams (counter-intuitive but verified). Deleted all 8 bloated queues on ctrl1 via rabbitmqctl; queues auto-recreate with 0 messages when services redeclare them. Restarted nova-compute and neutron-openvswitch-agent containers on comp2 (192.168.26.238). Verified: comp2 now shows 8+ RabbitMQ connections and queue declarations exist (`reply_comp2:nova-compute:1`, `compute.comp2`, etc.) with 0 consumers, indicating nova-compute reached RPC initialization phase but then crashed. nova_compute container subsequently exited (PID 7 still visible running briefly, then crash) — systemd service now fails on `docker start nova_compute: No such container` (container was removed during restart cycle). Stream queue cleanup is complete and working (`cinder-scheduler_fanout` down to 19 msg, others to 0-1 msg), but comp2 remains `state: down` due to nova-compute container needing recreation (next step: `kolla-ansible reconfigure` or manual container rebuild).
@@ -127,6 +129,133 @@ sur les vrais points de restauration et le vrai contrat `POST
 correspondantes situées après la ligne 894 de ce fichier, non re-répétées ici.)
 
 ## Ouvert — à faire ou à décider
+
+- [x] **Audit de l'univers IAM & sécurité (`modules/securite`) : restriction d'IP sur les clés
+      d'API n'était jamais appliquée — faille de sécurité réelle, corrigée (2026-10-15).**
+      `CleApi.ipsAutorisees` est exposé et modifiable via `/securite/cles-api` comme une
+      restriction réelle (« cette clé ne fonctionne que depuis ces IP/CIDR »), mais
+      `_principal_depuis_cle()` (`synelia/deps/contexte.py`) ne la vérifiait jamais.
+      **Vérifié en direct** sur « Synelia (démo) » : clé créée avec `ipsAutorisees:
+      ["203.0.113.5"]` (IP sans rapport avec l'égress réel), utilisée depuis la vraie IP de
+      la session → `200 OK` au lieu d'un refus — la restriction était purement décorative en
+      production. Corrigé : nouvelle fonction `cle_api_ip_autorisee()` (IP exacte ou CIDR,
+      même patron que `ip_autorisee()` déjà utilisé pour la restriction d'IP au niveau
+      organisation) appelée à chaque authentification par clé ; `403 ip_non_autorisee` si hors
+      liste. N'affaiblit rien : les clés existantes sans `ipsAutorisees` (le seul cas utilisé
+      aujourd'hui, le champ n'est pas encore exposé côté frontend) ne sont pas affectées. Deux
+      tests de régression ajoutés. `pytest securite`+`admin_jetons`+`membres`+`auth` : 30
+      passed (16 nouveaux). Suite complète : 352 passed, 4 skipped, 3 failed — les 3 échecs
+      sont dans `modules/web_domaines` (paramètres DNS), confirmés pré-existants et sans
+      rapport (rejoués à l'identique avec le correctif retiré).
+
+- [x] **Audit de l'univers Web Cloud — Emails/SSL/DNS (`modules/web_emails`,
+      `web_ssl`, `web_dns`, `web_smtp`) : authentification SPF/DKIM/DMARC affirmée « valide »
+      en dur à l'activation d'une messagerie, même en mode réel — corrigé (2026-10-15).**
+      `ExecuteurMessagerieActivate.terminer` posait `{spf: "valide", dkim: "valide", dmarc:
+      "..."}` sans jamais interroger l'amont, alors que `ZimbraReel.verifier_authentification`
+      documente déjà que Zimbra OSE ne configure jamais SPF/DKIM/DMARC automatiquement (seul
+      `ZimbraSimule` peut répondre « valide » sans rien faire). **Vérifié en direct** : la
+      vraie messagerie `demo-28d14e3a.com` (org « Demo Web Stack ») affichait `authentification:
+      valide` depuis son activation, alors que `POST .../authentification/verification`
+      renvoyait `absent` pour les trois — la fiche stockée mentait. Corrigé : l'exécuteur
+      interroge maintenant `amont().verifier_authentification()` à l'activation et stocke le
+      vrai résultat (identique en mode simulé, honnête en mode réel). Laissé
+      `demo-28d14e3a.com` à son état réel (« absent ») plutôt que de restaurer un mensonge
+      connu. Reproduit et nettoyé aussi sur un domaine jetable (`audit-webcloud-emails.ci`).
+      `web_ssl` (ré-audité, rien trouvé) et `web_dns`/`web_smtp` (gaps déjà documentés —
+      Designate/RabbitMQ cassé, DNSSEC potentiellement un no-op mais invérifiable tant que
+      Designate ne répond pas, authentification SMTP relais hardcodée mais sans preuve directe
+      d'un écart) : pas de correctif spéculatif, flaggés pour un passage dédié une fois
+      l'infra DNS réparée. `pytest web_emails/web_ssl/web_dns/web_smtp` : 15 passed, 1 skipped
+      (inchangé avant/après), `ruff check` propre.
+
+- [x] **Audit de l'univers Observabilité (`modules/observabilite`) : lien de sortie
+      « Ouvrir dans VictoriaLogs » cassé par une recherche non échappée — corrigé
+      (2026-10-15).** `VictoriaSimule.lien_logs` (`packages/openstack/synelia_openstack/
+      victoria.py`, héritée par `VictoriaReel`) interpolait le texte de recherche libre de
+      l'utilisateur directement dans l'URL sans encodage. **Vérifié en direct** :
+      `GET /observabilite/journaux?recherche=error%20%26%20disk%231%20100%25` renvoyait
+      `lienVictoriaLogs: "...?query=error & disk#1 100%"` — `#` tronque l'URL en fragment (le
+      reste de la recherche n'atteint jamais VictoriaLogs), `&` ajoute un faux paramètre.
+      Cassait silencieusement le lien dès qu'une recherche contenait un caractère réservé
+      d'URL (`&`, `#`, `+`…), ce qui est courant. Corrigé avec `urllib.parse.urlencode`.
+      Nouveau fichier de test `packages/openstack/tests/test_victoria.py` (n'existait pas).
+      Les deux correctifs déjà posés plus tôt cette session dans ce module (500 Magnum→424,
+      appels bloquants déchargés en thread, compteurs frontend) revérifiés toujours en place.
+      `VictoriaReel.extrait_logs()` ignore aussi les filtres `niveau`/`depuis` et utilise un
+      paramètre de nom de flux au lieu d'un filtre de valeur pour `ressourceId` — probablement
+      aussi cassé, mais VictoriaLogs n'est pas déployé sur ce lab : invérifiable, pas corrigé
+      sur une supposition. `pytest observabilite` : 5/5 inchangé ; `tests openstack` : 19
+      passed, 1 skipped (sans rapport).
+
+- [x] **Audit de l'univers Support & SLA (`modules/support`) : horloge SLA restait figée
+      indéfiniment après la réponse du client — corrigé (2026-10-15).** La règle documentée
+      (`sla_restant_min`, UI admin et client) est que l'engagement reprend dès que le client
+      répond, même partiellement, à un ticket en `attente_client`. Mais `POST
+      /support/tickets/{id}/messages` ne faisait jamais sortir le ticket de ce statut sauf
+      clôture explicite — une réponse client sans clôture laissait `statut: attente_client`
+      et `slaRestantMin` indéfiniment absent, donnant à l'équipe support un délai de grâce SLA
+      invisible et illimité sur tout ticket mis en attente. **Vérifié en direct** (ticket
+      `audit-support-sla-clock`) : créé → `slaRestantMin: 120` ; `PATCH attente_client` →
+      horloge en pause (correct) ; réponse client sans clôture → statut toujours
+      `attente_client`, horloge toujours en pause (le bug). Corrigé : une réponse client sans
+      clôture sur un ticket `attente_client` bascule désormais vers `en_cours`. Régression
+      ajoutée dans `test_cycle_ticket`. Flag annexe non corrigé : le drapeau `interne` d'une
+      réponse admin est journalisé mais absent du modèle `Message` (serait visible au client
+      comme une réponse normale) — actuellement mort, le frontend admin ne l'envoie jamais,
+      à surveiller pour qui construira les notes internes. `pytest support` : 6/6 inchangé.
+
+- [x] **Audit de l'univers Réseau (réseaux privés, IP publiques, groupes de sécurité, load
+      balancers — VPN explicitement exclu par consigne) : deux vrais bugs trouvés et
+      corrigés (2026-10-15).** (1) Les quatre endpoints de liste (`lister_reseaux/ips/
+      groupes_securite/load_balancers`) ne réconciliaient jamais une ressource disparue côté
+      Neutron/Octavia hors-bande — seul le `GET` détail le faisait (même motif que
+      `vms.lister_vms`). **Trouvé en direct** : une IP publique réelle listée « attachée » à
+      `vm-demo-db` alors que son `GET` détail renvoyait déjà 404 (floating IP Neutron disparue
+      hors-bande) — fantôme nettoyé après coup. Corrigé avec un nouveau `_reconcilier_liste()`
+      appliqué aux quatre listes, qui purge silencieusement un orphelin confirmé plutôt que de
+      faire échouer toute la collection. (2) `synelia_openstack/erreurs.py::traduire()`
+      vérifiait `ConflictException` avant le test de quota — un vrai dépassement de quota
+      Neutron/Nova (toujours levé en `ConflictException` par openstacksdk) était donc toujours
+      traduit en « nom déjà pris », trompeur. **Reproduit en direct** : règle de groupe de
+      sécurité au-delà du quota réel du projet → `409 nom_deja_pris` au lieu de
+      `quota_depasse`. Corrigé en inversant l'ordre des vérifications. VPN non touché. `pytest
+      reseau`+`vms` : 40 passed, 2 skipped, inchangé ; `ruff check` propre.
+
+- [x] **Audit de l'univers Stockage (volumes bloc + S3) : création + attachement en un temps
+      (`attacherA`) ne réalisait jamais l'attachement Cinder/Nova réel — corrigé
+      (2026-10-15).** Le bouton « Attacher un volume » de l'onglet Stockage d'une VM crée un
+      volume avec `attacherA` posé ; le routeur affichait aussitôt `attachedTo` sur la fiche,
+      mais `ExecuteurVolumeCreate` n'appelait jamais `amont_cinder().attacher(...)` — le
+      volume restait `available` côté Cinder pendant que l'API affichait « attaché ».
+      **Vérifié en direct** (`audit-stockage-attachtest`, nettoyé) : un détachement immédiat
+      réussissait quand même, car `BlockStorageOpenStack.detacher` utilise
+      `ignore_missing=True` côté Nova, masquant qu'il n'y avait rien à détacher. Corrigé :
+      l'étape de création réalise maintenant le même attachement réel que
+      `ExecuteurVolumeAttach` quand `attacherA` est fourni ; la compensation en cas d'échec
+      utilise `remplacer` (pas `definir_statut`, qui ignore les valeurs `None`) pour bien
+      vider `attachedTo`/`attachedLabel`/`montage`, évitant un volume en erreur qui garde
+      l'air attaché. Trouvé au passage (hors périmètre, non corrigé) : les deux VM de démo
+      seedées (`vm-demo-db`/`vm-demo-web`) n'ont pas de secret `serveur_id`, donc toute
+      opération Cinder/Nova réelle contre elles échoue en 404 — gap du module `vms`, signalé
+      pour qui le reprendra. `pytest stockage` : 5→6 passed ; `ruff check`/`format` propres.
+
+- [x] **Audit de l'univers Facturation (`modules/facturation`, `modules/admin_catalogue`) :
+      l'action « relancer les impayés » échouait silencieusement sur toute facture réelle —
+      corrigé (2026-10-15).** `POST /admin/facturation/impayes/relances`
+      (`lancer_relances`) accédait à `facture.relances`, un champ qui n'a **jamais existé**
+      sur le modèle `Facture` (seul `Impaye.relances`, une valeur d'affichage toujours à 0,
+      en porte un) — chaque appel levait une `AttributeError`, interceptée par un `except
+      Exception: continue` trop large. Résultat : l'action de relance renvoyait toujours
+      `envoyees: 0` quelle que soit la facture ciblée, jamais remarqué car le seul test
+      existant ne couvrait que le cas « facture inconnue ». **Reproduit en direct** sur
+      « Synelia (démo) » : `envoyees: 0, echecs: 1` sur une facture réelle et impayée. Corrigé
+      sans toucher au contrat partagé : compte une relance comme envoyée seulement si la
+      facture existe et est réellement impayée (`statut in (emise, impayee)`), sans écrire de
+      champ inexistant. Nouveau test couvrant facture impayée (envoyee) puis payée (non
+      renvoyée). `pytest facturation`+`admin_catalogue` : 26→27 passed ; `ruff check`/`format`
+      propres. Reste du module (Paystack, métrologie/tarification, SLA, export) déjà audité,
+      rien trouvé de nouveau.
 
 - [x] **Audit de l'univers Organisations/Membres/Compte (`modules/organisations`,
       `modules/membres`, `modules/compte`) : un vrai bug backend trouvé et corrigé en
