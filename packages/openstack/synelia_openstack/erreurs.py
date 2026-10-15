@@ -17,10 +17,16 @@ def traduire(exc: Exception, ressource: str = "Ressource") -> erreurs.AppError:
             "Pool d'IP flottantes épuisé sur le réseau externe : aucune adresse disponible.",
             code="fip_epuise",
         )
+    if "OverQuota" in message or "quota" in message.lower():
+        # Un dépassement de quota Neutron/Nova (ex. `security_group_rule`, `floatingip`) est
+        # systématiquement levé par openstacksdk sous forme de `ConflictException` (409) — sans
+        # ce contrôle avant celui du nom de type ci-dessous, un vrai quota dépassé était toujours
+        # traduit en « nom déjà pris » (constaté en direct : créer une règle de groupe de
+        # sécurité au-delà du quota du projet renvoyait `409 nom_deja_pris`, message trompeur
+        # qui pousse l'utilisateur à renommer une ressource alors qu'il faut libérer du quota).
+        return erreurs.quota_depasse(detail=message)
     if nom == "ConflictException":
         return erreurs.conflit(message or "Conflit côté OpenStack.", code="nom_deja_pris")
-    if "OverQuota" in message or "quota" in message.lower():
-        return erreurs.quota_depasse(detail=message)
     if nom in {"HttpException", "SDKException", "ResourceTimeout"}:
         return erreurs.amont_indisponible("openstack", message)
     return erreurs.amont_indisponible("openstack", message)
