@@ -132,6 +132,7 @@ async def ajouter_appartenance(
                 Membership.org_id == ctx.org_id,
                 Membership.utilisateur_id == corps.userId,
                 Membership.scope_type == (corps.scopeType or "org"),
+                Membership.scope_id == corps.scopeId,
             )
         )
     ).scalar_one_or_none()
@@ -184,6 +185,30 @@ async def modifier_membre(
                 "Impossible de rétrograder le dernier administrateur de l'organisation.",
             )
         mem.role = corps.role
+    if corps.scopeType is not None or corps.scopeId is not None:
+        # Même garde que la création (`ajouter_appartenance`) : sans elle, déplacer ce membre
+        # vers une portée (scopeType, scopeId) déjà occupée par une autre de ses adhésions
+        # viole `uq_membership` en base et remonte en 500 brut au lieu d'un 409 propre. La
+        # vérification doit précéder toute mutation de `mem` : la muter d'abord déclencherait
+        # un autoflush pendant ce `SELECT` et ferait échouer la requête elle-même avant même
+        # d'atteindre ce test.
+        scope_type_vise = corps.scopeType if corps.scopeType is not None else mem.scope_type
+        scope_id_vise = corps.scopeId if corps.scopeId is not None else mem.scope_id
+        doublon = (
+            await ctx.session.execute(
+                select(Membership).where(
+                    Membership.org_id == ctx.org_id,
+                    Membership.utilisateur_id == mem.utilisateur_id,
+                    Membership.scope_type == scope_type_vise,
+                    Membership.scope_id == scope_id_vise,
+                    Membership.id != mem.id,
+                )
+            )
+        ).scalar_one_or_none()
+        if doublon:
+            raise erreurs.conflit(
+                "Ce membre a déjà une adhésion sur cette portée.", code="membre_existant"
+            )
     if corps.scopeType is not None:
         mem.scope_type = corps.scopeType
     if corps.scopeId is not None:

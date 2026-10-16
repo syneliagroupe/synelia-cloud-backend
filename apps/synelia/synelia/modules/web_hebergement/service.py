@@ -2069,7 +2069,6 @@ def construire_site_stack(
       - MOODLE_SITE_NAME=Moodle
       - MOODLE_HOST={hote}
       - MOODLE_SSLPROXY=yes
-      - MOODLE_REVERSEPROXY=yes
     volumes:
       - {racine}/www:/bitnami/moodle
       - {racine}/moodledata:/bitnami/moodledata

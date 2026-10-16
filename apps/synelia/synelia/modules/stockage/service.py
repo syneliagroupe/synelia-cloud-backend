@@ -87,7 +87,37 @@ class ExecuteurVolumeCreate(Executeur):
                 identifiants=secrets_espace,
             )
             await depot_volume.definir_secrets(ctx, vol.id, {"volume_id": v["id"]})
-            return f"Volume Cinder {v['id']} créé"
+            message = f"Volume Cinder {v['id']} créé"
+            vm_id = travail.entree.get("attacherA")
+            if vm_id:
+                # Création + attachement en un temps (bouton « Attacher un volume » de
+                # l'onglet Stockage d'une VM) : le routeur pose déjà `attachedTo` sur la
+                # ligne Volume dès la création (avant même que ce travail ne s'exécute),
+                # mais jusqu'ici aucun attachement Cinder/Nova réel n'avait jamais lieu —
+                # le volume restait `available` côté Cinder alors que l'API affichait
+                # « attaché ». Constaté en direct sur dev01 (`audit-stockage-attachtest`,
+                # nettoyé ensuite) : un détachement immédiat réussissait quand même car
+                # `BlockStorageOpenStack.detacher` appelle Nova avec `ignore_missing=True`,
+                # masquant qu'il n'y avait rien à détacher. Même logique d'attachement que
+                # `ExecuteurVolumeAttach` ci-dessous.
+                from synelia.modules.vms.service import serveur_id
+
+                sid = await serveur_id(ctx, str(vm_id))
+                await asyncio.to_thread(
+                    amont_cinder().attacher,
+                    v["id"],
+                    sid,
+                    travail.entree.get("montage"),
+                    identifiants=secrets_espace,
+                )
+                statut = await _attendre_in_use(v["id"], secrets_espace)
+                message += f" et attaché au serveur {sid}"
+                if statut != "in-use":
+                    message += (
+                        f" (statut Cinder `{statut}` après {int(_DELAI_ATTACH_MAX_S)} s : "
+                        "pas encore `in-use`, un détachement immédiat peut être refusé)"
+                    )
+            return message
         return None
 
     async def terminer(self, ctx: Contexte, travail: Travail) -> None:
@@ -100,7 +130,23 @@ class ExecuteurVolumeCreate(Executeur):
         if vid:
             secrets_espace = await identifiants_espace(ctx, vol.espaceId)
             amont_cinder().supprimer(vid, identifiants=secrets_espace)
-        await depot_volume.definir_statut(ctx, travail.cible_id or "", "erreur")
+        # `remplacer` (pas `definir_statut`) : si l'attachement demandé à la création a
+        # échoué, le volume est supprimé côté Cinder ci-dessus mais `attachedTo`/`montage`
+        # posés par le routeur avant l'exécution du travail doivent être effacés aussi —
+        # `definir_statut`/`modifier` ignorent les valeurs `None` (fusion superficielle),
+        # ils ne peuvent donc pas servir à les vider.
+        await depot_volume.remplacer(
+            ctx,
+            travail.cible_id or "",
+            vol.model_copy(
+                update={
+                    "statut": "erreur",
+                    "attachedTo": None,
+                    "attachedLabel": None,
+                    "montage": None,
+                }
+            ),
+        )
 
 
 # Après un attachement Nova, Cinder propage le statut du volume `attaching` →

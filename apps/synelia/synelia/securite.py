@@ -168,3 +168,25 @@ def ip_autorisee(ip: str | None, plages: list[dict[str, Any]], portee_requise: s
         if adresse in reseau:
             return True
     return False
+
+
+def cle_api_ip_autorisee(ip: str | None, liste: list[str]) -> bool:
+    """`CleApi.ipsAutorisees` réel : vrai si `ip` correspond à une entrée de la liste (IP
+    exacte ou CIDR). Appelé à chaque authentification par clé d'API — sans quoi le champ
+    ne serait qu'une étiquette jamais vérifiée."""
+    if not ip:
+        return False
+    try:
+        adresse = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    for entree in liste:
+        try:
+            if "/" in entree:
+                if adresse in ipaddress.ip_network(entree, strict=False):
+                    return True
+            elif adresse == ipaddress.ip_address(entree):
+                return True
+        except ValueError:
+            continue
+    return False

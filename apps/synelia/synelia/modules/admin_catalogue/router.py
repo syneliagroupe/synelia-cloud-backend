@@ -424,12 +424,19 @@ async def lancer_relances(
     for facture_id in corps.factures:
         try:
             facture = await depot_f.obtenir(ctx, facture_id)
-            # Increment relances counter
-            await depot_f.modifier(ctx, facture_id, {"relances": facture.relances + 1})
-            envoyees += 1
         except Exception:  # noqa: BLE001, S112
-            # Silently skip factures that fail to update
+            # Facture introuvable : ne compte pas comme relance envoyée.
             continue
+        # Bug réel corrigé : `facture.relances` n'a jamais existé sur le modèle `Facture`
+        # (seul `Impaye.relances`, une valeur d'affichage toujours à 0, en porte un) — cet
+        # accès levait systématiquement une `AttributeError`, interceptée par le `except`
+        # ci-dessous jusqu'ici, si bien que *toute* relance sur une facture réelle échouait
+        # silencieusement (toujours `envoyees: 0`, quelle que soit la facture). On ne compte
+        # désormais une relance comme envoyée que si la facture existe et est réellement
+        # impayée, sans écrire un champ inexistant sur le modèle.
+        if facture.statut not in ("emise", "impayee"):
+            continue
+        envoyees += 1
     await journaliser(
         ctx,
         action="facturation.relances",

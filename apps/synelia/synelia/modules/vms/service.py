@@ -290,9 +290,14 @@ class ExecuteurVmCreate(Executeur):
             vm = await depot.obtenir(ctx, travail.cible_id or "")
             entre = travail.entree or {}
             from synelia.modules.espaces.service import depot as depot_espaces
+            from synelia.modules.web_hebergement.service import assurer_cle_ssh_zone
 
             secrets_espace = await depot_espaces.secrets(ctx, vm.espaceId)
             groupes_neutron = await _groupes_securite_neutron(ctx, entre.get("groupesSecurite"))
+            # Clé d'accès admin (même clé de zone que `web_hebergement`/`projets`) ajoutée à
+            # celle(s) de l'utilisateur, jamais à la place : sans ça une VM créée sans clé ou
+            # avec une clé perdue par l'utilisateur devient définitivement injoignable.
+            cle_admin = await assurer_cle_ssh_zone(ctx)
             # `creer_serveur` (comme les autres appels `amont()` de ce fichier) est un appel
             # openstacksdk synchrone/bloquant : exécuté tel quel dans la coroutine, il bloquerait
             # toute la boucle asyncio — donc toute l'API, pour tous les tenants — jusqu'à sa fin
@@ -312,7 +317,8 @@ class ExecuteurVmCreate(Executeur):
                 espace_id=vm.espaceId,
                 cle_ssh=entre.get("cleSsh"),
                 cloud_init=cloudinit.construire(
-                    entre.get("clesSshPubliques"), entre.get("cloudInit")
+                    [*(entre.get("clesSshPubliques") or []), cle_admin.get("ssh_publique")],
+                    entre.get("cloudInit"),
                 ),
                 groupes_securite=groupes_neutron,
             )
@@ -355,10 +361,12 @@ class ExecuteurVmCompose(Executeur):
             entre = travail.entree or {}
             espace_id = entre.get("espaceId")
             from synelia.modules.espaces.service import depot as depot_espaces
+            from synelia.modules.web_hebergement.service import assurer_cle_ssh_zone
 
             secrets_espace = await depot_espaces.secrets(ctx, espace_id) if espace_id else {}
             gabarits = entre.get("gabarits") or {}
             groupes_neutron = await _groupes_securite_neutron(ctx, entre.get("groupesSecurite"))
+            cle_admin = await assurer_cle_ssh_zone(ctx)
             serveurs = []
             for mac in entre.get("machines") or []:
                 quantite = mac.get("quantite") or 1
@@ -375,7 +383,8 @@ class ExecuteurVmCompose(Executeur):
                         espace_id=espace_id,
                         cle_ssh=entre.get("cleSsh"),
                         cloud_init=cloudinit.construire(
-                            entre.get("clesSshPubliques"), entre.get("cloudInit")
+                            [*(entre.get("clesSshPubliques") or []), cle_admin.get("ssh_publique")],
+                            entre.get("cloudInit"),
                         ),
                         groupes_securite=groupes_neutron,
                     )

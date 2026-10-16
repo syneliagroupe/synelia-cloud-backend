@@ -183,14 +183,42 @@ async def test_impayes(client):
     r = await client.get("/v1/admin/facturation/impayes")
     assert r.status_code == 200
 
-    # Test relances with non-existent facture: should return echecs=1, envoyees=0
-    # (the new behavior after commit 499f5c0 only counts factures that actually exist)
+    # Relance sur une facture inexistante : comptée en échec, pas en succès.
     r = await client.post(
         "/v1/admin/facturation/impayes/relances", json={"factures": ["x"], "niveau": "rappel"}
     )
     assert r.status_code == 200
     assert r.json()["envoyees"] == 0
     assert r.json()["echecs"] == 1
+
+
+async def test_relance_sur_facture_reelle(client):
+    """Régression : `facture.relances` n'a jamais existé sur le modèle `Facture` — accéder à
+    cet attribut levait une `AttributeError`, interceptée par un `except Exception` trop large,
+    si bien que relancer une facture réellement impayée échouait toujours silencieusement
+    (`envoyees` restait à 0 quelle que soit la facture ciblée)."""
+    r = await client.get("/v1/admin/facturation/factures")
+    assert r.status_code == 200, r.text
+    facture = next(f for f in r.json()["donnees"] if f["statut"] == "emise")
+
+    r = await client.post(
+        "/v1/admin/facturation/impayes/relances",
+        json={"factures": [facture["id"]], "niveau": "rappel"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json() == {"envoyees": 1, "echecs": 0}
+
+    # Une facture déjà payée n'est pas relancée.
+    r = await client.post(
+        f"/v1/facturation/factures/{facture['id']}/paiement", json={"moyenId": "moyen-x"}
+    )
+    assert r.status_code == 200, r.text
+    r = await client.post(
+        "/v1/admin/facturation/impayes/relances",
+        json={"factures": [facture["id"]], "niveau": "rappel"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json() == {"envoyees": 0, "echecs": 1}
 
 
 async def test_marges(client):

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import pytest
 from synelia_openstack.k8s_workload import K8sWorkloadReel
 
 
@@ -30,7 +29,7 @@ def test_construire_kubeconfig_repli_capí(monkeypatch):
     conn = SimpleNamespace(container_infrastructure_management=cim)
     monkeypatch.setattr("synelia_openstack.fabrique.connexion_magnum", lambda: conn)
     monkeypatch.setattr(
-        "synelia_openstack.capi_kubeconfig.kubeconfig_depuis_capí",
+        "synelia_openstack.capi_kubeconfig.kubeconfig_depuis_capi",
         lambda stack_id: kube if stack_id == "kube-abc" else (_ for _ in ()).throw(RuntimeError()),
     )
     monkeypatch.setattr("synelia_openstack.k8s_workload.time.sleep", lambda _: None)

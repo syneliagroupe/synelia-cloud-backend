@@ -332,7 +332,6 @@ async def allouer_domaine_demo(client, nom: str | None = None) -> str:
     r_dom = await client.get("/v1/web/domaines")
     r_heb = await client.get("/v1/web/hebergements")
     assert r_dom.status_code == 200 and r_heb.status_code == 200
-    deja_org = {d["nom"] for d in r_dom.json().get("donnees") or []}
     avec_heb = {h.get("domaine") for h in r_heb.json().get("donnees") or [] if h.get("domaine")}
     for candidat in DOMAINES_DEMO_OVH:
         if candidat not in avec_heb:

@@ -202,6 +202,7 @@ class MinioReel(MinioSimule):
                 text=True,
                 timeout=5,
                 env=self._env_cli(),
+                check=False,
             )
             out = (r.stdout or "") + (r.stderr or "")
             self._cli_rustfs = "Rust S3" in out or out.strip().startswith("rc ")

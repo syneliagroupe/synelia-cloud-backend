@@ -79,6 +79,11 @@ async def test_cycle_ticket(client_org):
     )
     assert r.status_code == 201, r.text
     assert len(r.json()["messages"]) == 2
+    # Une réponse client lève l'attente : l'horloge SLA doit reprendre (le statut ne
+    # doit pas rester bloqué sur "attente_client", sinon slaRestantMin resterait
+    # indéfiniment absent malgré la réponse du client).
+    assert r.json()["statut"] == "en_cours"
+    assert r.json()["slaRestantMin"] is not None
 
     r = await client_org.post(
         f"/v1/support/tickets/{tid}/escalade", json={"motif": "Impact production"}

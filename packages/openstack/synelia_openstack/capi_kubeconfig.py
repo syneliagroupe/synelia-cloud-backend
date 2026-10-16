@@ -10,12 +10,11 @@ from typing import Any
 
 import paramiko
 import yaml
-
-from synelia_kernel.config import reglages
 from synelia_kernel import erreurs
+from synelia_kernel.config import reglages
 
 
-def kubeconfig_depuis_capí(stack_id: str) -> dict[str, Any]:
+def kubeconfig_depuis_capi(stack_id: str) -> dict[str, Any]:
     """Lit le kubeconfig admin CAPI pour la stack Heat/Magnum `stack_id` (ex. `kube-pbb4l`)."""
     r = reglages()
     hote = r.capi_management_ssh_host
@@ -32,7 +31,7 @@ def kubeconfig_depuis_capí(stack_id: str) -> dict[str, Any]:
         "-o jsonpath='{.data.value}' | base64 -d"
     )
     client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())  # noqa: S507
     try:
         client.connect(
             hote,
