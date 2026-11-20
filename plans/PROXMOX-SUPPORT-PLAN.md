@@ -13,6 +13,55 @@ Copie locale : `/tmp/pveapi.json`. Chaque verdict ci-dessous cite les chemins co
 Objectif : faire cohabiter OpenStack et Proxmox VE comme deux amonts interchangeables, sans régression
 sur l'existant et **sans jamais servir de données simulées en se faisant passer pour du réel**.
 
+Prompt d'exécution associé : [`PROXMOX-AGENT-PROMPT.md`](PROXMOX-AGENT-PROMPT.md).
+
+---
+
+## 0. Périmètre et règle d'arbitrage *(décidé le 2026-11-20)*
+
+**La priorité est que la chaîne fonctionne de bout en bout sur Proxmox, quitte à réduire les
+fonctionnalités.** Ce n'est pas un repli temporaire : c'est la consigne qui tranche tous les
+arbitrages de ce chantier. On ne cherche **pas** la parité fonctionnelle avec OpenStack.
+
+Face à un choix, dans cet ordre :
+
+1. **Réduire** — déclarer la capacité `non_supporte` et avancer.
+2. **Mapper honnêtement** sur la notion Proxmox la plus proche, même imparfaite, en la documentant.
+3. **Émuler** — en dernier recours, et jamais si l'émulation produit une donnée que le client
+   croirait réelle (cf. §1.1).
+
+**Jalon de référence** : commander une offre VPS depuis le portail et obtenir une VM Proxmox
+réellement démarrée, joignable en SSH, avec son réseau privé et son pare-feu. Tout ce qui ne
+sert pas ce jalon est secondaire et peut être réduit.
+
+### 0.1 Hors périmètre — réduction assumée
+
+| Exclu | Raison |
+|---|---|
+| **SSO / OIDC** | Reporté explicitement. `securite.sso` reste `persiste` ; ne pas toucher au module `securite` ni à `/access/openid`, **même si Proxmox le permet** (§2.2). |
+| **Load balancer sur Proxmox** | Aucun équivalent API (§2.1 pt 1) → `non_supporte`. Pas de HAProxy maison dans ce lot. |
+| **Magnum / K8s managé sur Proxmox** | Aucun équivalent → `non_supporte`. |
+| **IP flottante sur Proxmox** | Pas de primitive (§2.1 pt 2). Arbitrage produit requis — voir §4.1. |
+| **LXC** | QEMU/KVM d'abord ; LXC est un lot ultérieur malgré la symétrie de l'API. |
+| **Migration OpenStack → Proxmox** | Hors sujet : les deux amonts coexistent (§3 phase 5). |
+
+### 0.2 Environnement de travail
+
+Le développement se fait **sur dev01**, dans `/var/synelia-cloud` (clones dédiés — pas dans
+`/opt/synelia/*`, qui sont des copies de travail humaines avec des `.env` pointant l'infra vivante).
+
+Cible de dev — VM déjà déployée : `jekas-proxmox.dev01.smile.lan`, API
+`https://192.168.1.10:8006/api2/json` (PVE **9.1.1**, nœud `pve`, 8 vCPU / 16 Go / 200 Go,
+virtualisation imbriquée active, certificat auto-signé). **Joignable uniquement depuis dev01**
+(bridge de lab `smile301`, non routé ailleurs).
+
+Jeton d'API dédié `root@pam!synelia-agent` ; le secret est **hors dépôt**, sur dev01 dans
+`/etc/synelia/proxmox-agent.env` (0640, `root:exploit`), déjà au format `SYNELIA_PVE_*`.
+
+> dev01 est partagée et sa **RAM est saturée** (~0 Go libre, swap 248 Go, ~25 VM dont le lab
+> OpenStack qui sert la démo). Vérifier `free -g` avant toute création ; privilégier les doubles
+> de test au lab réel.
+
 ---
 
 ## 1. État actuel — le point de couture
@@ -156,18 +205,17 @@ Mesurable : `uv run pytest -q` identique avant/après, `uv run tools/contrat_dif
 9. `NetworkProxmox` : SG sur `/cluster/firewall/groups` + `ipset` (correspondance directe),
    réseaux sur `/cluster/sdn/{zones,vnets,subnets}` avec `ipam`, `assurer_regle_ssh` /
    `assurer_regle_port` sur les règles firewall niveau VM.
-10. **IP flottante** : trancher §2.1 point 2 — NAT sur l'exit-node (hors API PVE, donc script
-    ou Ansible à maintenir), ou `non_supporte`.
-11. **Load balancer** : trancher §2.1 point 1. Si non supporté, `non_supporte` et erreur de
-    contrat propre.
+10. **Load balancer** : `non_supporte` (décidé, §0.1) — erreur de contrat propre, pas de
+    contournement.
+11. **IP flottante** : seul point encore ouvert de cette phase — voir §4.1.
 
-### Phase 4 — tenancy
+### Phase 4 — tenance
 
-11. `IdentiteProxmox` — voir §4, la décision de modèle précède le code.
+12. `IdentiteProxmox` — voir §4, la décision de modèle précède le code.
 
 ### Phase 5 — exposition catalogue
 
-12. Rattacher le fournisseur à la **zone** (`zone_vps`, `zone_lb`… — 90 occurrences de
+13. Rattacher le fournisseur à la **zone** (`zone_vps`, `zone_lb`… — 90 occurrences de
     `zone_vps`), pas au process : une offre pointe une zone, la zone porte son fournisseur.
     C'est ce qui permet OpenStack **et** Proxmox simultanément plutôt qu'un basculement global.
 
@@ -192,8 +240,24 @@ Trois modèles possibles, par isolation décroissante :
 3. **Mono-tenant** — Proxmox sert une zone interne (lab, préprod), pas des clients finaux.
 
 **(2) est le compromis réaliste**, mais il change la garantie d'isolation vendue. À arbitrer
-avec le métier, pas en implémentation. **C'est le seul point qui peut invalider le reste du plan**,
+avec le métier, pas en implémentation. **C'est le point qui peut invalider le reste du plan**,
 donc à trancher avant la phase 4 — et idéalement avant de chiffrer les phases 2-3.
+
+À noter : la règle du §0 (réduire plutôt qu'émuler) rend **(3) mono-tenant** nettement plus
+défendable qu'il n'y paraît. Proxmox servant d'abord des zones internes — lab, préprod, offres
+à isolation annoncée plus faible — permet d'atteindre le jalon §0 sans engager la garantie
+commerciale. C'est la voie qui réduit le plus le risque, et elle n'interdit pas (2) plus tard.
+
+### 4.1 Second arbitrage : l'IP flottante
+
+Sans primitive PVE (§2.1 pt 2), l'exposition publique d'un hébergement passe par du NAT sur
+l'exit-node, **hors API Proxmox** — donc un script ou un rôle Ansible à maintenir, avec son
+propre état à réconcilier. Options : (a) l'assumer, (b) `non_supporte` et les offres Proxmox
+ne proposent pas d'IP publique dédiée.
+
+Ce point est **plus urgent que la tenance** : il conditionne le jalon du §0. Une VM Proxmox
+sans exposition publique ne constitue pas un parcours VPS complet, donc (b) doit être validé
+explicitement comme acceptable — sinon (a) devient du périmètre obligatoire de la phase 3.
 
 ---
 
@@ -202,9 +266,10 @@ donc à trancher avant la phase 4 — et idéalement avant de chiffrer les phase
 | Risque | Portée | Parade |
 |---|---|---|
 | Faux réel par héritage `Simule` | **Élevé** — fausse donnée servie en 200 | Phase 0 point 2, non négociable |
-| Isolation plus faible qu'OpenStack | **Élevé** — contractuel | §4, arbitrage métier |
-| Pas d'IP flottante native | **Élevé** — casse le modèle d'exposition publique des hébergements | §2.1 pt 2, à trancher tôt |
-| Pas de LB, pas de Magnum | Moyen | Capacité `non_supporte` explicite |
+| Isolation plus faible qu'OpenStack | **Élevé** — contractuel | §4, arbitrage métier ; §0 rend (3) mono-tenant défendable |
+| Pas d'IP flottante native | **Élevé** — conditionne le jalon §0 | §4.1, à trancher **en premier** |
+| Pas de LB, pas de Magnum | Faible — **décidé** | `non_supporte` assumé (§0.1) |
+| Réduction de périmètre mal comprise | Moyen — « Proxmox est au rabais » | §0 : la réduction est la consigne, pas un échec. Matrice de capacités visible par zone (phase 5) |
 | Volume lié à une VM (`vmid` requis) | Moyen — le contrat expose des volumes détachables | §2.1 pt 3, mapper ou dégrader honnêtement |
 | Appels PVE synchrones bloquants | Moyen — déjà vécu sur keystoneauth1 | Timeout explicite dès le 1er appel |
 | Dérive du contrat `openapi.json` | Faible | `tools/contrat_diff.py` en CI |
@@ -213,9 +278,25 @@ donc à trancher avant la phase 4 — et idéalement avant de chiffrer les phase
 
 ## 6. Ordre recommandé
 
-Phase 0 est un prérequis strict et se tient seule : elle améliore le code existant même si
-Proxmox est abandonné ensuite. Phases 1-2 donnent le premier livrable démontrable (créer et
-piloter une VM Proxmox via l'API Synelia). §4 doit être arbitré avant la phase 4.
+**Phase 0 est un prérequis strict et séquentiel.** Elle se tient seule : elle améliore le code
+existant (§1.1, le faux réel par héritage) même si Proxmox est abandonné ensuite. Rien ne se
+parallélise avant son merge — forker avant, c'est voir cinq pistes réinventer chacune leur
+repli sur données simulées.
 
-Le VM `jekas-proxmox.dev01.smile.lan` (192.168.1.10:8006, PVE 9.1.1, virt. imbriquée active)
-sert de cible de développement.
+Ensuite, l'ordre est dicté par le jalon du §0 (commander un VPS → VM réelle joignable), pas par
+la difficulté :
+
+| Rang | Phase | Pourquoi là |
+|---|---|---|
+| 1 | **2 — compute + images cloud** | Le livrable démontrable. Sans lui, rien à montrer. |
+| 2 | **3 — réseau + pare-feu** | Complète le jalon (réseau privé + SSH). Plus forte valeur vs un panneau Proxmox nu. |
+| 3 | **5 — catalogue / zones** | Rend le multi-fournisseur *visible* au client : une offre pointe une zone, la zone porte son fournisseur. |
+| 4 | **2b — sauvegarde** | Gain net sur l'existant (`backup.plan` passe de `simule` à `reel`), mais hors jalon. |
+| 5 | **4 — tenance** | Bloquée par l'arbitrage §4 ; la dernière à engager du code. |
+
+Le fork en pistes parallèles et le découpage par fichiers disjoints sont détaillés dans
+[`PROXMOX-AGENT-PROMPT.md`](PROXMOX-AGENT-PROMPT.md) §4.
+
+**Deux décisions produit à prendre avant de chiffrer** : l'IP flottante (§4.1, la plus urgente
+— elle conditionne le jalon) et le modèle de tenance (§4). Les deux sont des choix commerciaux,
+pas techniques.
