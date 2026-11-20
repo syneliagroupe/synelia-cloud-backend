@@ -6,6 +6,70 @@
 
 ---
 
+## -1. Où travailler — à faire en tout premier
+
+Tu travailles **sur dev01** (`ssh dev01`, utilisateur `atlas`, sudo sans mot de passe),
+dans `/var/synelia-cloud`. C'est là que l'API Proxmox est joignable (§-0) ; depuis
+ailleurs elle ne l'est pas. `/var` a ~900 Go libres.
+
+```bash
+sudo mkdir -p /var/synelia-cloud && sudo chown "$USER" /var/synelia-cloud
+cd /var/synelia-cloud
+git clone https://github.com/syneliagroupe/synelia-cloud-backend.git
+git clone https://github.com/syneliagroupe/synelia-cloud.git            # portail Next.js
+git clone https://github.com/syneliagroupe/synelia-cloud-architecture.git plans
+cd synelia-cloud-backend && uv sync
+```
+
+Tout le travail se fait dans ces clones. **Ne travaille pas dans `/opt/synelia/*`** :
+ce sont les copies de travail d'un humain, avec des `.env` pointant l'infra vivante.
+
+> Si `git clone` demande une authentification : les remotes ne portent plus de jeton
+> en dur (il était expiré et a été retiré). Utilise ta propre credential GitHub.
+
+## -0. Accès à l'instance Proxmox
+
+Une VM Proxmox VE est déjà déployée **sur dev01** pour ce chantier.
+
+| | |
+|---|---|
+| Domaine libvirt | `jekas-proxmox.dev01.smile.lan` |
+| API | `https://192.168.1.10:8006/api2/json` (certificat auto-signé → `verify=False`) |
+| UI | `https://192.168.1.10:8006` |
+| Version | PVE **9.1.1**, nœud `pve` |
+| Ressources | 8 vCPU, 16 Go, disque 200 Go, virtualisation imbriquée **active** |
+| Réseau | `eth1` sur le bridge `smile301` (192.168.1.0/24) ; `vmbr0` = NAT vagrant-libvirt |
+
+**Joignable uniquement depuis dev01** (bridge de lab, pas routé ailleurs).
+Vérification : `curl -sk https://192.168.1.10:8006/api2/json/version` → `{"data":{...}}`.
+
+**Identifiants** : un jeton d'API dédié existe déjà, `root@pam!synelia-agent`
+(privsep désactivé). Le secret n'est **pas** dans le dépôt — il est sur dev01 :
+
+```bash
+sudo cat /etc/synelia/proxmox-agent.env     # root:exploit, 0640
+```
+
+Ce fichier porte directement les réglages attendus (`SYNELIA_PVE_*`). Le charger dans
+le `.env` local du clone, jamais le committer (I4). Pour en créer un autre :
+`sudo pveum user token add root@pam <nom> --privsep 0`.
+
+Accès shell à la VM si besoin :
+```bash
+ssh dev01
+cd /var/lib/vagrant/project/jekas-proxmox && sudo -E vagrant ssh
+```
+
+Le schéma d'API complet est sur la VM (`/usr/share/pve-docs/api-viewer/apidoc.js`,
+3,9 Mo) — c'est la source de vérité des formes de réponse, à extraire en JSON pour
+écrire les doubles de test.
+
+> **dev01 est une machine partagée et sa RAM est saturée** (~0 Go libre, swap 248 Go,
+> ~25 VM dont le lab OpenStack de la démo). Vérifie `free -g` avant de créer quoi que
+> ce soit, et ne crée pas de VM de test sans nécessité : préfère les doubles de test.
+
+---
+
 ## 0. Mission
 
 Faire de Synelia Cloud un portail **multi-fournisseurs** où Proxmox VE est un amont de
@@ -23,10 +87,29 @@ trois axes précis, et c'est **cela** qui définit « way better » :
 3. **Multi-tenance réelle** adossée au modèle Espace Cloud existant (orgs, RBAC 38
    actions × 10 rôles, quotas, facturation FCFA), pas des ACL Proxmox à nu.
 
-**La priorité est la compatibilité Proxmox, pas la parité OpenStack.** Quand une
-notion OpenStack n'a pas de sens chez Proxmox, on ne l'émule pas à grands frais : on
-la déclare non supportée et on avance. Lis bien §2.1 du plan — les trois lacunes
-(load balancer, IP flottante, volume indépendant) sont **vérifiées**, pas supposées.
+### La règle d'arbitrage, à appliquer sans hésiter
+
+**La priorité absolue est que la chaîne complète fonctionne sur Proxmox — quitte à
+réduire les fonctionnalités.** Ce n'est pas une concession temporaire à contrecœur,
+c'est la consigne. Un parcours client étroit mais réellement opérationnel de bout en
+bout sur Proxmox vaut mieux qu'une couverture large à moitié branchée.
+
+Donc, face à un arbitrage, dans cet ordre :
+
+1. **Réduire le périmètre** — déclarer la capacité `non_supporte` et avancer.
+2. **Mapper honnêtement** sur la notion Proxmox la plus proche, même imparfaite, en le
+   documentant.
+3. **Émuler** — en dernier recours seulement, et jamais si l'émulation produit une
+   donnée que le client croirait réelle (I1).
+
+Quand une notion OpenStack n'a pas de sens chez Proxmox, on ne l'émule pas à grands
+frais : on la déclare non supportée et on avance. Lis bien §2.1 du plan — les trois
+lacunes (load balancer, IP flottante, volume indépendant) sont **vérifiées**, pas
+supposées. Ne perds pas de temps à les contourner.
+
+**Le jalon qui compte** : commander une offre VPS depuis le portail, et obtenir une VM
+Proxmox réellement démarrée, jointe en SSH, avec son réseau privé et son pare-feu.
+Tout ce qui ne sert pas ce jalon est secondaire et peut être réduit.
 
 ---
 
@@ -189,6 +272,11 @@ Deux décisions ne sont pas techniques et peuvent invalider du code déjà écri
 
 ## 7. Première action attendue
 
-Lire `plans/PROXMOX-SUPPORT-PLAN.md`, puis produire **la Phase 0 seule**, en une PR,
-sans toucher à Proxmox. Annoncer explicitement le résultat de `pytest -q` et de
-`contrat_diff.py` avant/après. Le fork §4 ne démarre qu'après son merge.
+1. Cloner les dépôts dans `/var/synelia-cloud` sur dev01 (§-1) et faire `uv sync`.
+2. Vérifier l'accès Proxmox (§-0) :
+   `curl -sk https://192.168.1.10:8006/api2/json/version` doit rendre `9.1.1`.
+3. Lire `plans/PROXMOX-SUPPORT-PLAN.md` en entier.
+4. Produire **la Phase 0 seule**, en une PR, sans toucher à Proxmox. Annoncer
+   explicitement le résultat de `pytest -q` et de `contrat_diff.py` avant/après.
+
+Le fork §4 ne démarre qu'après le merge de la Phase 0.
