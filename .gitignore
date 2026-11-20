@@ -25,3 +25,6 @@ zimbra/zimbra-storage/
 graphify-out/
 .opencode/
 AGENTS.md
+.secrets/
+.cursor/
+*.sqlite3.bak-*
